@@ -1,0 +1,96 @@
+name: AW Robot — AI Task Agent (Gemini)
+
+# يشتغل تلقائياً عند فتح Issue جديد بليبل aw-robot-task (اللي لوحتك بتضيفه تلقائياً)
+on:
+  issues:
+    types: [labeled]
+
+# صلاحيات محدودة: قراءة/كتابة على الريبو وفتح PR فقط — لا صلاحيات إضافية
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  run-agent:
+    # يشتغل فقط لو الليبل المضاف هو aw-robot-task، وما يشتغلش على أي ليبل تاني
+    if: github.event.label.name == 'aw-robot-task'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create working branch
+        id: branch
+        run: |
+          BRANCH="ai-task/issue-${{ github.event.issue.number }}"
+          git checkout -b "$BRANCH"
+          echo "branch_name=$BRANCH" >> "$GITHUB_OUTPUT"
+          git config user.name "aw-robot-agent"
+          git config user.email "agent@aw-robot.local"
+
+      - name: Run Gemini CLI on the Issue task
+        id: agent_run
+        uses: google-github-actions/run-gemini-cli@v0
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          # نص المهمة يُمرَّر كما هو من الـ Issue (هو نفس البرومبت اللي اللوحة ولّدته)
+          prompt: |
+            ${{ github.event.issue.body }}
+
+            بعد تنفيذ التعديلات المطلوبة أعلاه، لا تعمل commit أو push بنفسك — الخطوة التالية في هذا الـ workflow ستتكفل بذلك.
+          settings: |
+            {
+              "tools": {
+                "core": ["run_shell_command", "read_file", "write_file", "replace", "list_directory", "glob", "search_file_content"]
+              }
+            }
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit changes
+        if: steps.changes.outputs.has_changes == 'true'
+        run: |
+          git add -A
+          git commit -m "AI Agent (Gemini): ${{ github.event.issue.title }}
+
+          Closes #${{ github.event.issue.number }}"
+          git push origin "${{ steps.branch.outputs.branch_name }}"
+
+      - name: Open Pull Request
+        if: steps.changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "AI Agent (Gemini): ${{ github.event.issue.title }}" \
+            --body "تم تنفيذ هذه المهمة تلقائياً بواسطة Gemini CLI بناءً على Issue #${{ github.event.issue.number }}.
+
+          **⚠️ يتطلب مراجعتك يدوياً قبل الدمج على main.**
+
+          راجع الملفات المعدّلة في تبويب Files changed، والسجل الكامل لخطوات التنفيذ في تبويب Actions لهذا الـ run.
+
+          ---
+          Closes #${{ github.event.issue.number }}" \
+            --base main \
+            --head "${{ steps.branch.outputs.branch_name }}" \
+            --label "ai-generated"
+
+      - name: Comment on Issue if no changes made
+        if: steps.changes.outputs.has_changes == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment ${{ github.event.issue.number }} \
+            --body "⚠️ الوكيل اشتغل على هذه المهمة لكن لم يُحدث أي تعديل على الملفات. راجع سجل التنفيذ الكامل في تبويب Actions لهذا الـ run."
