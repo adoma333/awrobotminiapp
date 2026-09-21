@@ -1,0 +1,162 @@
+"""
+AW Billing — الإعدادات العامة، الباقات، والإحالة.
+وحدة منفصلة لإبقاء main.py قابلاً للقراءة رغم اتساع النظام.
+"""
+import secrets
+import string
+import time
+
+DEFAULT_SETTINGS = {
+    "registration_policy": "both",  # both | real | demo
+    "leverage_min": 0,               # 0 = بلا حد أدنى
+    "leverage_max": 0,               # 0 = بلا حد أقصى
+    "referral_enabled": True,
+    "referral_days": 7,
+    "kill_switch": False,
+}
+
+_SETTINGS_DOC = ("config", "settings")
+
+
+def get_settings(db) -> dict:
+    ref = db.collection(_SETTINGS_DOC[0]).document(_SETTINGS_DOC[1])
+    snap = ref.get()
+    data = snap.to_dict() if snap.exists else {}
+    return {**DEFAULT_SETTINGS, **data}
+
+
+def update_settings(db, patch: dict) -> dict:
+    ref = db.collection(_SETTINGS_DOC[0]).document(_SETTINGS_DOC[1])
+    clean = {k: v for k, v in patch.items() if k in DEFAULT_SETTINGS}
+    ref.set(clean, merge=True)
+    return get_settings(db)
+
+
+def account_type_allowed(settings: dict, account_type: str) -> bool:
+    policy = settings.get("registration_policy", "both")
+    if policy == "both":
+        return True
+    return account_type == policy
+
+
+def leverage_allowed(settings: dict, leverage) -> bool:
+    lo = settings.get("leverage_min") or 0
+    hi = settings.get("leverage_max") or 0
+    if leverage is None:
+        return True
+    if lo and leverage < lo:
+        return False
+    if hi and leverage > hi:
+        return False
+    return True
+
+
+def list_packages(db, active_only=False):
+    docs = db.collection("packages").order_by("sort_order").stream()
+    rows = []
+    for d in docs:
+        row = d.to_dict() or {}
+        row["id"] = d.id
+        if active_only and not row.get("active", True):
+            continue
+        rows.append(row)
+    return rows
+
+
+def create_package(db, data: dict) -> str:
+    ref = db.collection("packages").document()
+    ref.set(
+        {
+            "name_ar": data["name_ar"],
+            "name_en": data["name_en"],
+            "price_usd": float(data["price_usd"]),
+            "duration_days": int(data["duration_days"]),
+            "active": bool(data.get("active", True)),
+            "sort_order": int(data.get("sort_order", 0)),
+            "price_stars": int(data["price_stars"]) if data.get("price_stars") else None,
+        }
+    )
+    return ref.id
+
+
+def update_package(db, pkg_id: str, patch: dict):
+    allowed = {"name_ar", "name_en", "price_usd", "price_stars", "duration_days", "active", "sort_order"}
+    clean = {k: v for k, v in patch.items() if k in allowed}
+    db.collection("packages").document(pkg_id).update(clean)
+
+
+def delete_package(db, pkg_id: str):
+    db.collection("packages").document(pkg_id).delete()
+
+
+_ALPHABET = string.ascii_uppercase + string.digits
+
+
+def gen_referral_code() -> str:
+    return "".join(secrets.choice(_ALPHABET) for _ in range(6))
+
+
+def ensure_referral_code(db, uid) -> str:
+    ref = db.collection("users").document(str(uid))
+    snap = ref.get()
+    data = snap.to_dict() or {}
+    code = data.get("referral_code")
+    if code:
+        return code
+    for _ in range(5):
+        code = gen_referral_code()
+        clash = db.collection("users").where("referral_code", "==", code).limit(1).get()
+        if not clash:
+            ref.set({"referral_code": code}, merge=True)
+            return code
+    return gen_referral_code()
+
+
+def find_by_referral_code(db, code: str):
+    if not code:
+        return None
+    docs = db.collection("users").where("referral_code", "==", code.strip().upper()).limit(1).get()
+    return docs[0].id if docs else None
+
+
+# ───────────────────────── الاشتراك ─────────────────────────
+def is_subscription_active(data: dict) -> bool:
+    sub = data.get("subscription") or {}
+    return (sub.get("expires_at") or 0) > time.time()
+
+
+def _add_days(db, uid, days):
+    ref = db.collection("users").document(str(uid))
+    snap = ref.get()
+    data = snap.to_dict() or {}
+    now = time.time()
+    current_expiry = (data.get("subscription") or {}).get("expires_at") or 0
+    base = current_expiry if current_expiry > now else now
+    new_expiry = base + days * 86400
+    ref.set({"subscription": {"expires_at": new_expiry, "status": "active"}}, merge=True)
+    return new_expiry
+
+
+def extend_subscription(db, uid, package: dict):
+    ref = db.collection("users").document(str(uid))
+    ref.set(
+        {"subscription": {"package_id": package["id"], "package_name_ar": package.get("name_ar"), "package_name_en": package.get("name_en")}},
+        merge=True,
+    )
+    return _add_days(db, uid, package["duration_days"])
+
+
+def grant_referral_bonus_if_eligible(db, uid, days):
+    """يمنح المُحيل والمُحال عليه أيامًا إضافية عند أول دفعة ناجحة للمُحال، مرة واحدة فقط."""
+    ref = db.collection("users").document(str(uid))
+    snap = ref.get()
+    data = snap.to_dict() or {}
+    if data.get("referral_reward_granted"):
+        return None
+    referrer_id = data.get("referred_by")
+    if not referrer_id:
+        return None
+    ref.set({"referral_reward_granted": True}, merge=True)
+    _add_days(db, uid, days)
+    _add_days(db, referrer_id, days)
+    return referrer_id

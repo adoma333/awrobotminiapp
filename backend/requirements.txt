@@ -1,0 +1,14 @@
+# إصدارات مثبّتة مطابقة لما يعمل على السيرفر الحالي (pip freeze)
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+httpx==0.28.1
+pydantic==2.13.5
+python-dotenv==1.2.3
+PyJWT==2.14.0
+firebase_admin==7.6.0
+google-cloud-firestore==2.31.0
+
+# مطلوبة لجسر MT5 (تُثبَّت هنا صراحةً لأن mt5linux يُثبَّت بلا اعتمادياته، انظر requirements-mt5.txt)
+rpyc==5.0.1
+plumbum==1.7.0
+numpy==2.5.3

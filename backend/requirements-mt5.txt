@@ -1,0 +1,4 @@
+# يُثبَّت دائمًا بـ:  pip install --no-deps -r requirements-mt5.txt
+# السبب: حزمة mt5linux 0.1.9 تفرض numpy==1.21.4 القديمة وهي لا تُثبَّت على بايثون الحديث.
+# اعتمادياتها الحقيقية (rpyc, plumbum, numpy) موجودة في requirements.txt.
+mt5linux==0.1.9
