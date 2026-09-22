@@ -1281,3 +1281,127 @@ html[lang='ar'] .btn.small {
     inset-inline-end: max(16px, calc(50% - 240px + 16px));
   }
 }
+
+/* ─────────── روابط داخل صفوف (الشروط/الخصوصية) ─────────── */
+.row-link {
+  width: 100%;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: start;
+}
+
+.row-link .chev {
+  color: var(--ash);
+}
+
+/* ─────────── الأسئلة الشائعة (FAQ) ─────────── */
+.faq-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+}
+
+.faq-tab {
+  flex: none;
+  padding: 9px 14px;
+  border: 1px solid var(--line-dim);
+  border-radius: 999px;
+  background: none;
+  color: var(--ash);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.faq-tab.on {
+  color: #140700;
+  background: var(--grad);
+  border-color: transparent;
+}
+
+.faq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.faq-item {
+  border: 1px solid var(--line-dim);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.faq-q {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 0;
+  background: var(--fill);
+  color: var(--bone);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: start;
+  cursor: pointer;
+}
+
+.faq-caret {
+  flex: none;
+  transition: transform 0.2s;
+}
+
+.faq-item.open .faq-caret {
+  transform: rotate(180deg);
+}
+
+.faq-a {
+  margin: 0;
+  padding: 4px 16px 16px;
+  color: var(--ash);
+  font-size: 14px;
+}
+
+/* ─────────── حاسبة الفائدة ─────────── */
+.calc-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.calc-result {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.calc-result > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--fill);
+  border: 1px solid var(--line-dim);
+  border-radius: 12px;
+}
+
+.calc-result strong {
+  font-size: 18px;
+}
+
+.calc-chart {
+  margin: 4px -4px 14px;
+}
+
+.calc-disclaimer {
+  margin: 0;
+}

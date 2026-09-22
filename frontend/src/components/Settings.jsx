@@ -17,7 +17,7 @@ const fmtDate = (epoch, lang) =>
       })
     : '—';
 
-export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUnlinked }) {
+export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUnlinked, onLegal, onFaq, onCalc }) {
   const sub = data.subscription;
   const cfg = data.settings || {};
   const code = data.referral_code;
@@ -142,6 +142,34 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
           )}
         </div>
       )}
+
+      <div className="section">
+        <h2>{t.faqTitle}</h2>
+        <div className="rows">
+          <button type="button" className="row row-link" onClick={onFaq}>
+            <span className="row-label">{t.faqLink}</span>
+            <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+          </button>
+          <button type="button" className="row row-link" onClick={onCalc}>
+            <span className="row-label">{t.calcLink}</span>
+            <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+          </button>
+        </div>
+      </div>
+
+      <div className="section">
+        <h2>{t.legalTitle}</h2>
+        <div className="rows">
+          <button type="button" className="row row-link" onClick={() => onLegal('terms')}>
+            <span className="row-label">{t.termsLink}</span>
+            <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+          </button>
+          <button type="button" className="row row-link" onClick={() => onLegal('privacy')}>
+            <span className="row-label">{t.privacyLink}</span>
+            <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+          </button>
+        </div>
+      </div>
 
       <div className="section danger-zone">
         <h2>{t.unlinkTitle}</h2>

@@ -175,6 +175,27 @@ export const messages = {
     feedbackSend: 'Send',
     feedbackSent: 'Thanks for your feedback!',
     feedbackErr: "Couldn't send feedback. Try again.",
+
+    // القانونية
+    legalTitle: 'Legal',
+    termsLink: 'Terms & Conditions',
+    privacyLink: 'Privacy Policy',
+
+    // الأسئلة الشائعة
+    faqTitle: 'FAQ',
+    faqLink: 'Help & FAQ',
+
+    // حاسبة الفائدة
+    calcLink: 'Growth calculator',
+    calcTitle: 'Growth calculator',
+    calcSub: 'A simulation of compound growth at 2% per day.',
+    calcCapital: 'Starting capital',
+    calcDays: 'Duration (days)',
+    calcFinal: 'Projected balance',
+    calcProfit: 'Projected profit',
+    calcDay: 'Day',
+    calcBalance: 'Balance',
+    calcDisclaimer: 'This is a simulation only, not a guarantee of returns. Actual trading results vary and can result in losses.',
   },
 
   ar: {
@@ -352,6 +373,27 @@ export const messages = {
     feedbackSend: 'إرسال',
     feedbackSent: 'شكرًا لملاحظتك!',
     feedbackErr: 'تعذّر إرسال الملاحظة. حاول مرة أخرى.',
+
+    // القانونية
+    legalTitle: 'قانوني',
+    termsLink: 'الشروط والأحكام',
+    privacyLink: 'سياسة الخصوصية',
+
+    // الأسئلة الشائعة
+    faqTitle: 'الأسئلة الشائعة',
+    faqLink: 'المساعدة والأسئلة الشائعة',
+
+    // حاسبة الفائدة
+    calcLink: 'حاسبة النمو',
+    calcTitle: 'حاسبة النمو',
+    calcSub: 'محاكاة لنمو مركّب بمعدل 2% يوميًا.',
+    calcCapital: 'رأس المال',
+    calcDays: 'المدة (بالأيام)',
+    calcFinal: 'الرصيد المتوقع',
+    calcProfit: 'الربح المتوقع',
+    calcDay: 'اليوم',
+    calcBalance: 'الرصيد',
+    calcDisclaimer: 'هذه محاكاة تقديرية فقط وليست ضمانًا للعوائد. نتائج التداول الفعلية تختلف وقد تشمل خسائر.',
   },
 };
 

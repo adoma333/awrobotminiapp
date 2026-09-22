@@ -11,6 +11,9 @@ import MT5FormStep from './components/MT5FormStep';
 import StatusScreen from './components/StatusScreen';
 import Dashboard from './components/Dashboard';
 import Settings from './components/Settings';
+import LegalPage from './components/LegalPage';
+import FAQ from './components/FAQ';
+import InterestCalculator from './components/InterestCalculator';
 import Onboarding from './components/Onboarding';
 import BottomNav from './components/BottomNav';
 import FeedbackButton from './components/FeedbackButton';
@@ -26,7 +29,7 @@ export default function App() {
   const [phase, setPhase] = useState('loading'); // loading | flow | dashboard | status
   const [step, setStep] = useState('lang'); // lang | profile | plan | mt5
   const [needsPlan, setNeedsPlan] = useState(true);
-  const [view, setView] = useState('main'); // داخل اللوحة: main | plans | settings
+  const [view, setView] = useState('main'); // داخل اللوحة: main | plans | settings | terms | privacy | faq | calc
   const [profile, setProfile] = useState({ nickname: '', avatar: 'boy' });
   const [mt5, setMt5] = useState(EMPTY_MT5);
   const [info, setInfo] = useState({ status: 'none' }); // آخر رد من /api/status
@@ -242,7 +245,13 @@ export default function App() {
       {phase === 'dashboard' && (
         <div className="stage has-bottom-nav">
           {view === 'main' && <FeedbackButton t={t} />}
-          {view === 'settings' ? (
+          {view === 'terms' || view === 'privacy' ? (
+            <LegalPage t={t} lang={lang} page={view} onBack={() => setView('settings')} />
+          ) : view === 'faq' ? (
+            <FAQ t={t} lang={lang} onBack={() => setView('settings')} />
+          ) : view === 'calc' ? (
+            <InterestCalculator t={t} lang={lang} onBack={() => setView('settings')} />
+          ) : view === 'settings' ? (
             <Settings
               t={t}
               lang={lang}
@@ -251,6 +260,9 @@ export default function App() {
               onBack={() => setView('main')}
               onRenew={() => setView('plans')}
               onUnlinked={afterUnlink}
+              onLegal={(page) => setView(page)}
+              onFaq={() => setView('faq')}
+              onCalc={() => setView('calc')}
             />
           ) : view === 'plans' ? (
             <Plans
