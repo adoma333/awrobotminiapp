@@ -960,3 +960,324 @@ html[lang='ar'] .btn.small {
   padding-top: 8px;
   border-top: 1px solid var(--line-dim);
 }
+
+/* ─────────── الشبكة (Network status) ─────────── */
+.net-banner {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  backdrop-filter: blur(6px);
+  animation: net-in 0.25s ease-out both;
+}
+
+.net-offline {
+  background: rgba(255, 107, 94, 0.16);
+  border: 1px solid rgba(255, 107, 94, 0.4);
+  color: var(--danger);
+}
+
+.net-online {
+  background: rgba(61, 220, 151, 0.16);
+  border: 1px solid rgba(61, 220, 151, 0.4);
+  color: var(--ok);
+}
+
+.net-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+@keyframes net-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* ─────────── إشعارات مخصّصة (Toast) ─────────── */
+.toast-stack {
+  position: fixed;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100% - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--bone);
+  background: rgba(20, 18, 16, 0.94);
+  border: 1px solid var(--line-dim);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  animation: toast-in 0.2s ease-out both;
+}
+
+.toast-success {
+  border-color: rgba(61, 220, 151, 0.4);
+}
+
+.toast-error {
+  border-color: rgba(255, 107, 94, 0.4);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ─────────── شاشات هيكلية (Skeletons) ─────────── */
+.skel {
+  display: inline-block;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.06) 25%, rgba(255, 255, 255, 0.12) 37%, rgba(255, 255, 255, 0.06) 63%);
+  background-size: 400% 100%;
+  animation: skel-shine 1.4s ease-in-out infinite;
+}
+
+@keyframes skel-shine {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+
+.app-skel {
+  margin-top: 40px;
+  padding: 0 4px;
+}
+
+.sync-note {
+  text-align: center;
+  color: var(--ash);
+  font-size: 13px;
+  margin: 0 0 14px;
+}
+
+/* ─────────── البدء (Onboarding) ─────────── */
+.onboarding {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 14px;
+  min-height: 60dvh;
+}
+
+.ob-icon {
+  font-size: 52px;
+  line-height: 1;
+  margin-bottom: 6px;
+}
+
+.ob-dots {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0 4px;
+}
+
+.ob-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-dim);
+  transition: background 0.2s;
+}
+
+.ob-dot.on {
+  background: var(--ember);
+}
+
+.ob-actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* ─────────── شريط التنقل السفلي ─────────── */
+.app:has(.bottom-nav) {
+  padding-bottom: 0;
+}
+
+.stage.has-bottom-nav {
+  padding-bottom: calc(78px + env(safe-area-inset-bottom));
+}
+
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  background: rgba(10, 9, 8, 0.92);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid var(--line-dim);
+}
+
+.bn-item {
+  flex: 1;
+  max-width: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 4px;
+  border: 0;
+  background: none;
+  color: var(--ash);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.bn-item.on {
+  color: var(--ember);
+  background: var(--fill);
+}
+
+.bn-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.bn-label {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* ─────────── زر التقييم العائم ─────────── */
+.fab-feedback {
+  position: fixed;
+  inset-inline-end: 16px;
+  bottom: calc(90px + env(safe-area-inset-bottom));
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(20, 18, 16, 0.92);
+  color: var(--bone);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  animation: toast-in 0.15s ease-out both;
+}
+
+.modal-sheet {
+  width: 100%;
+  max-width: 440px;
+  background: #100e0c;
+  border: 1px solid var(--line-dim);
+  border-radius: 20px 20px 0 0;
+  padding: 22px 22px max(22px, env(safe-area-inset-bottom));
+}
+
+.modal-sheet h2 {
+  margin: 0 0 4px;
+}
+
+.star-row {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.star {
+  border: 0;
+  background: none;
+  font-size: 30px;
+  line-height: 1;
+  color: var(--line-dim);
+  cursor: pointer;
+  padding: 0;
+}
+
+.star.on {
+  color: var(--ember);
+}
+
+.feedback-text {
+  width: 100%;
+  resize: vertical;
+  background: var(--fill);
+  border: 1px solid var(--line-dim);
+  border-radius: 12px;
+  padding: 12px;
+  color: var(--bone);
+  font-family: inherit;
+  font-size: 14px;
+}
+
+.feedback-text:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 2px;
+}
+
+/* ─────────── تصميم متجاوب لشاشات أكبر ─────────── */
+@media (min-width: 560px) {
+  .app {
+    max-width: 480px;
+    margin-top: 24px;
+    border-radius: 24px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+  }
+
+  .bottom-nav,
+  .toast-stack {
+    max-width: 480px;
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+  }
+
+  .fab-feedback {
+    inset-inline-end: max(16px, calc(50% - 240px + 16px));
+  }
+}

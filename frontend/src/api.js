@@ -117,3 +117,11 @@ export async function updateProfile(patch) {
   if (DEV_MOCK) return { ok: true };
   return request('POST', '/api/profile', { init_data: initData, ...patch });
 }
+
+export async function sendFeedback(rating, message) {
+  if (DEV_MOCK) {
+    await sleep(400);
+    return { ok: true };
+  }
+  return request('POST', '/api/feedback', { init_data: initData, rating, message });
+}

@@ -1156,3 +1156,24 @@ def update_profile(body: ProfileUpdate):
     if patch:
         ref.set(patch, merge=True)
     return {"ok": True}
+
+
+class FeedbackRequest(BaseModel):
+    init_data: str
+    rating: int = Field(ge=1, le=5)
+    message: str = Field(default="", max_length=1000)
+
+
+@app.post("/api/feedback")
+def submit_feedback(body: FeedbackRequest):
+    """يستقبل تقييم/ملاحظة من المستخدم ويرسلها لقناة الأدمن."""
+    user = verify_init_data(body.init_data)
+    ref = user_ref(user["id"])
+    snap = ref.get()
+    nickname = (snap.to_dict() or {}).get("nickname") if snap.exists else None
+    stars = "⭐" * body.rating + "☆" * (5 - body.rating)
+    text = f"📝 <b>تقييم جديد</b>\n{stars}\nمن: {escape(nickname or user.get('first_name', ''))} (<code>{user['id']}</code>)"
+    if body.message.strip():
+        text += f"\n\n{escape(body.message.strip())}"
+    tg("sendMessage", chat_id=CHANNEL_ID, parse_mode="HTML", text=text, disable_notification=True)
+    return {"ok": True}

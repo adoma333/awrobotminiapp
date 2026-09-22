@@ -1,6 +1,7 @@
 import React from 'react';
 import Avatar from './Avatar';
 import { fill } from '../i18n';
+import { DashboardSkeleton } from './Skeleton';
 
 // الأرقام لاتينية دائمًا (كما في MT5) حتى في الواجهة العربية
 const fmt = (n, d = 2, sign = false) =>
@@ -61,11 +62,10 @@ export default function Dashboard({ t, lang, data, onRenew, onSettings }) {
 
   if (!live) {
     return (
-      <section className="step status" aria-live="polite">
-        <div className="loader" role="status" aria-label={t.loading} />
-        <h1>{t.firstSync}</h1>
-        <p className="sub">{t.firstSyncSub}</p>
-      </section>
+      <>
+        <p className="sync-note" role="status">{t.firstSync} — {t.firstSyncSub}</p>
+        <DashboardSkeleton />
+      </>
     );
   }
 

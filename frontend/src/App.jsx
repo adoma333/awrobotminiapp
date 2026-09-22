@@ -11,7 +11,13 @@ import MT5FormStep from './components/MT5FormStep';
 import StatusScreen from './components/StatusScreen';
 import Dashboard from './components/Dashboard';
 import Settings from './components/Settings';
+import Onboarding from './components/Onboarding';
+import BottomNav from './components/BottomNav';
+import FeedbackButton from './components/FeedbackButton';
+import NetworkBanner from './components/NetworkBanner';
+import { AppSkeleton } from './components/Skeleton';
 
+const ONBOARD_KEY = 'aw_onboarded';
 const EMPTY_MT5 = { login: '', password: '', server: '' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -26,6 +32,7 @@ export default function App() {
   const [info, setInfo] = useState({ status: 'none' }); // آخر رد من /api/status
   const [submitting, setSubmitting] = useState(false);
   const [errorCode, setErrorCode] = useState('');
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const t = messages[lang];
   const steps = useMemo(
@@ -58,7 +65,11 @@ export default function App() {
         setNeedsPlan(!s.subscription?.active);
         if (s.status === 'approved') setPhase('dashboard');
         else if (s.status === 'rejected' || s.status === 'pending') setPhase('status');
-        else setPhase('flow'); // none / unlinked: يبدأ رحلة الربط (يتجاوز الدفع إن كان اشتراكه فعّالًا)
+        else {
+          // none / unlinked: يبدأ رحلة الربط (يتجاوز الدفع إن كان اشتراكه فعّالًا)
+          if (!localStorage.getItem(ONBOARD_KEY)) setShowOnboarding(true);
+          setPhase('flow');
+        }
       })
       .catch(() => setPhase('flow'));
   }, []);
@@ -169,13 +180,26 @@ export default function App() {
 
   return (
     <main className="app" dir={t.dir}>
+      <NetworkBanner t={t} />
       <header className={`brand ${isHero ? 'is-hero' : ''}`}>
         <img src={logo} alt="AW" />
       </header>
 
-      {phase === 'loading' && <div className="loader" role="status" aria-label={t.loading} />}
+      {phase === 'loading' && <AppSkeleton />}
 
-      {phase === 'flow' && (
+      {phase === 'flow' && showOnboarding && (
+        <div className="stage">
+          <Onboarding
+            t={t}
+            onDone={() => {
+              localStorage.setItem(ONBOARD_KEY, '1');
+              setShowOnboarding(false);
+            }}
+          />
+        </div>
+      )}
+
+      {phase === 'flow' && !showOnboarding && (
         <>
           <Stepper step={idx + 1} total={steps.length} />
           <div key={step} className="stage">
@@ -216,7 +240,8 @@ export default function App() {
       )}
 
       {phase === 'dashboard' && (
-        <div className="stage">
+        <div className="stage has-bottom-nav">
+          {view === 'main' && <FeedbackButton t={t} />}
           {view === 'settings' ? (
             <Settings
               t={t}
@@ -242,6 +267,8 @@ export default function App() {
           )}
         </div>
       )}
+
+      {phase === 'dashboard' && <BottomNav t={t} view={view} onSelect={setView} />}
     </main>
   );
 }

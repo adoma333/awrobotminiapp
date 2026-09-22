@@ -146,6 +146,35 @@ export const messages = {
     unlinkNo: 'Keep it',
     unlinkCooldown: 'You can unlink again in about {n} hours.',
     unlinkErr: "Couldn't unlink. Please try again.",
+
+    // البدء (Onboarding)
+    ob1Title: 'Track your account live',
+    ob1Body: 'See your balance, growth and trade stats update automatically.',
+    ob2Title: 'Bank-level safety',
+    ob2Body: 'We only read your MT5 data. We never place trades or move funds.',
+    ob3Title: 'Support in your language',
+    ob3Body: 'Full Arabic and English support, with a team ready to help.',
+    obSkip: 'Skip',
+    obNext: 'Next',
+    obStart: 'Get started',
+
+    // الشبكة
+    offline: 'No internet connection',
+    backOnline: 'Back online',
+
+    // التنقل السفلي
+    navHome: 'Home',
+    navPlans: 'Plans',
+    navSettings: 'Settings',
+
+    // التقييم والملاحظات
+    feedbackBtn: 'Feedback',
+    feedbackTitle: 'Rate the app',
+    feedbackSub: 'Your feedback helps us improve AW Robot.',
+    feedbackPh: 'Tell us what you think (optional)',
+    feedbackSend: 'Send',
+    feedbackSent: 'Thanks for your feedback!',
+    feedbackErr: "Couldn't send feedback. Try again.",
   },
 
   ar: {
@@ -294,6 +323,35 @@ export const messages = {
     unlinkNo: 'إبقاء الحساب',
     unlinkCooldown: 'يمكنك فكّ الربط مرة أخرى بعد نحو {n} ساعة.',
     unlinkErr: 'تعذّر فكّ الربط. حاول مرة أخرى.',
+
+    // البدء (Onboarding)
+    ob1Title: 'تابع حسابك لحظة بلحظة',
+    ob1Body: 'شاهد رصيدك ونموّك وإحصاءات صفقاتك تتحدّث تلقائيًا.',
+    ob2Title: 'أمان بمستوى البنوك',
+    ob2Body: 'نقرأ بيانات حساب MT5 فقط. لا ننفّذ أي صفقة ولا نحرّك أي أموال.',
+    ob3Title: 'دعم بلغتك',
+    ob3Body: 'دعم كامل بالعربية والإنجليزية، وفريق جاهز لمساعدتك.',
+    obSkip: 'تخطّي',
+    obNext: 'التالي',
+    obStart: 'ابدأ الآن',
+
+    // الشبكة
+    offline: 'لا يوجد اتصال بالإنترنت',
+    backOnline: 'عاد الاتصال',
+
+    // التنقل السفلي
+    navHome: 'الرئيسية',
+    navPlans: 'الباقات',
+    navSettings: 'الإعدادات',
+
+    // التقييم والملاحظات
+    feedbackBtn: 'رأيك يهمنا',
+    feedbackTitle: 'قيّم التطبيق',
+    feedbackSub: 'ملاحظاتك تساعدنا على تطوير AW Robot.',
+    feedbackPh: 'شاركنا رأيك (اختياري)',
+    feedbackSend: 'إرسال',
+    feedbackSent: 'شكرًا لملاحظتك!',
+    feedbackErr: 'تعذّر إرسال الملاحظة. حاول مرة أخرى.',
   },
 };
 
