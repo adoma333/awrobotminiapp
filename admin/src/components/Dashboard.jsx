@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import UserDetail from "./UserDetail";
+import SystemStatus from "./SystemStatus";
 import "../dashboard.css";
 
 const TABS = [
@@ -25,6 +26,7 @@ function timeAgo(epoch) {
 
 export default function Dashboard({ adminId, onLogout }) {
   const [stats, setStats] = useState(null);
+  const [page, setPage] = useState("users"); // users | system
   const [tab, setTab] = useState("pending");
   const [accountType, setAccountType] = useState("");
   const [levMin, setLevMin] = useState("");
@@ -73,17 +75,31 @@ export default function Dashboard({ adminId, onLogout }) {
           <span>لوحة التحكم</span>
         </div>
         {TABS.map((t) => (
-          <button key={t.key} className={`nav-item ${tab === t.key ? "active" : ""}`} onClick={() => setTab(t.key)}>
+          <button
+            key={t.key}
+            className={`nav-item ${page === "users" && tab === t.key ? "active" : ""}`}
+            onClick={() => {
+              setPage("users");
+              setTab(t.key);
+            }}
+          >
             {t.label}
             {stats && t.key && <span className="count mono">{stats[t.key] ?? ""}</span>}
           </button>
         ))}
+        <button className={`nav-item ${page === "system" ? "active" : ""}`} onClick={() => setPage("system")}>
+          حالة النظام
+        </button>
         <div className="nav-footer">
           <button onClick={onLogout}>تسجيل الخروج</button>
         </div>
       </nav>
 
       <main className="main">
+        {page === "system" ? (
+          <SystemStatus />
+        ) : (
+          <>
         <div className="topbar">
           <h1>{TABS.find((t) => t.key === tab)?.label || "كل الطلبات"}</h1>
         </div>
@@ -168,14 +184,26 @@ export default function Dashboard({ adminId, onLogout }) {
             </div>
           </>
         )}
+          </>
+        )}
       </main>
 
       <div className="mobile-nav">
         {TABS.map((t) => (
-          <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => setTab(t.key)}>
+          <button
+            key={t.key}
+            className={page === "users" && tab === t.key ? "active" : ""}
+            onClick={() => {
+              setPage("users");
+              setTab(t.key);
+            }}
+          >
             {t.label}
           </button>
         ))}
+        <button className={page === "system" ? "active" : ""} onClick={() => setPage("system")}>
+          النظام
+        </button>
       </div>
 
       {openId && (
