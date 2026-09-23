@@ -196,6 +196,18 @@ export const messages = {
     calcDay: 'Day',
     calcBalance: 'Balance',
     calcDisclaimer: 'This is a simulation only, not a guarantee of returns. Actual trading results vary and can result in losses.',
+
+    // سجل الفواتير
+    billLink: 'Billing history',
+    billTitle: 'Billing history',
+    billDate: 'Date',
+    billPlan: 'Plan',
+    billAmount: 'Amount',
+    billStatus: 'Status',
+    billTx: 'Transaction ID',
+    billDownload: 'Receipt',
+    billEmpty: 'No payments yet.',
+    billError: "Couldn't load your billing history.",
   },
 
   ar: {
@@ -394,6 +406,18 @@ export const messages = {
     calcDay: 'اليوم',
     calcBalance: 'الرصيد',
     calcDisclaimer: 'هذه محاكاة تقديرية فقط وليست ضمانًا للعوائد. نتائج التداول الفعلية تختلف وقد تشمل خسائر.',
+
+    // سجل الفواتير
+    billLink: 'سجل الفواتير',
+    billTitle: 'سجل الفواتير',
+    billDate: 'التاريخ',
+    billPlan: 'الخطة',
+    billAmount: 'المبلغ',
+    billStatus: 'الحالة',
+    billTx: 'معرّف المعاملة',
+    billDownload: 'الإيصال',
+    billEmpty: 'لا توجد مدفوعات بعد.',
+    billError: 'تعذّر تحميل سجل الفواتير.',
   },
 };
 

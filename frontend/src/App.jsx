@@ -14,6 +14,7 @@ import Settings from './components/Settings';
 import LegalPage from './components/LegalPage';
 import FAQ from './components/FAQ';
 import InterestCalculator from './components/InterestCalculator';
+import BillingHistory from './components/BillingHistory';
 import Onboarding from './components/Onboarding';
 import BottomNav from './components/BottomNav';
 import FeedbackButton from './components/FeedbackButton';
@@ -29,7 +30,7 @@ export default function App() {
   const [phase, setPhase] = useState('loading'); // loading | flow | dashboard | status
   const [step, setStep] = useState('lang'); // lang | profile | plan | mt5
   const [needsPlan, setNeedsPlan] = useState(true);
-  const [view, setView] = useState('main'); // داخل اللوحة: main | plans | settings | terms | privacy | faq | calc
+  const [view, setView] = useState('main'); // داخل اللوحة: main | plans | settings | terms | privacy | faq | calc | billing
   const [profile, setProfile] = useState({ nickname: '', avatar: 'boy' });
   const [mt5, setMt5] = useState(EMPTY_MT5);
   const [info, setInfo] = useState({ status: 'none' }); // آخر رد من /api/status
@@ -251,6 +252,8 @@ export default function App() {
             <FAQ t={t} lang={lang} onBack={() => setView('settings')} />
           ) : view === 'calc' ? (
             <InterestCalculator t={t} lang={lang} onBack={() => setView('settings')} />
+          ) : view === 'billing' ? (
+            <BillingHistory t={t} lang={lang} onBack={() => setView('settings')} />
           ) : view === 'settings' ? (
             <Settings
               t={t}
@@ -263,6 +266,7 @@ export default function App() {
               onLegal={(page) => setView(page)}
               onFaq={() => setView('faq')}
               onCalc={() => setView('calc')}
+              onBilling={() => setView('billing')}
             />
           ) : view === 'plans' ? (
             <Plans

@@ -118,6 +118,19 @@ export async function updateProfile(patch) {
   return request('POST', '/api/profile', { init_data: initData, ...patch });
 }
 
+export async function getBillingHistory() {
+  if (DEV_MOCK) {
+    await sleep(300);
+    return {
+      payments: [
+        { order_id: 'demo-1', date: Date.now() / 1000 - 86400 * 3, amount: 49, currency: 'USD', plan_name_ar: 'شهري', plan_name_en: 'Monthly', status: 'finished', tx_id: 'demo-tx-1' },
+        { order_id: 'demo-2', date: Date.now() / 1000 - 86400 * 33, amount: 300, currency: 'XTR', plan_name_ar: 'شهري', plan_name_en: 'Monthly', status: 'finished', tx_id: 'demo-tx-2' },
+      ],
+    };
+  }
+  return request('GET', `/api/billing/history?init_data=${encodeURIComponent(initData)}`);
+}
+
 export async function sendFeedback(rating, message) {
   if (DEV_MOCK) {
     await sleep(400);
