@@ -14,6 +14,7 @@ import logging
 import math
 import os
 import re
+import socket
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -26,6 +27,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request, Response, Depends
 import billing
 import payments
+import digest
+from apscheduler.schedulers.background import BackgroundScheduler
 import secrets
 try:
     import jwt as pyjwt
@@ -97,10 +100,17 @@ def _watchdog():
         time.sleep(300)
 
 
+_scheduler = BackgroundScheduler(timezone="UTC")
+
+
 @asynccontextmanager
 async def lifespan(_app):
     threading.Thread(target=_watchdog, daemon=True, name="tg-watchdog").start()
+    _scheduler.add_job(lambda: digest.run_digest(db, tg, "weekly"), "cron", day_of_week="mon", hour=9, id="digest_weekly")
+    _scheduler.add_job(lambda: digest.run_digest(db, tg, "monthly"), "cron", day=1, hour=9, id="digest_monthly")
+    _scheduler.start()
     yield
+    _scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="AW Mini App API", lifespan=lifespan)
@@ -1177,3 +1187,65 @@ def submit_feedback(body: FeedbackRequest):
         text += f"\n\n{escape(body.message.strip())}"
     tg("sendMessage", chat_id=CHANNEL_ID, parse_mode="HTML", text=text, disable_notification=True)
     return {"ok": True}
+
+
+@app.get("/api/system/status")
+def system_status(admin_id: int = Depends(get_current_admin)):
+    """فحص صحة الخدمات الخلفية: Firestore، جسر MT5 (heartbeat)، وتكامل n8n إن وُجد."""
+    services = {}
+
+    # Firestore
+    t0 = time.time()
+    try:
+        db.collection("config").document("settings").get()
+        services["firestore"] = {"status": "up", "latency_ms": round((time.time() - t0) * 1000)}
+    except Exception as e:  # noqa: BLE001
+        services["firestore"] = {"status": "down", "error": str(e)[:200]}
+
+    # جسر MT5 عبر Wine (heartbeat على منفذ aw-sync، نفس BRIDGE_PORT الافتراضي 8002)
+    bridge_host = os.environ.get("BRIDGE_HOST", "127.0.0.1")
+    bridge_port = int(os.environ.get("BRIDGE_PORT", 8002))
+    t0 = time.time()
+    try:
+        with socket.create_connection((bridge_host, bridge_port), timeout=2) as _s:
+            services["mt5_bridge"] = {"status": "up", "latency_ms": round((time.time() - t0) * 1000)}
+    except OSError as e:
+        services["mt5_bridge"] = {"status": "down", "error": str(e)[:200]}
+
+    # تكامل n8n: غير موجود حاليًا في المشروع
+    services["n8n"] = {"status": "not_configured"}
+
+    order = {"up": 0, "degraded": 1, "not_configured": 2, "down": 3}
+    overall = max((s["status"] for s in services.values()), key=lambda s: order.get(s, 1))
+    return {"overall": overall, "services": services, "checked_at": time.time()}
+
+
+@app.get("/api/billing/history")
+def billing_history(init_data: str):
+    """سجل مدفوعات المستخدم (تاريخ، مبلغ، خطة، حالة، معرّف معاملة)."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    user = verify_init_data(init_data)
+    pkgs = {p["id"]: p for p in billing.list_packages(db)}
+    rows = []
+    query = db.collection("payments").where(filter=FieldFilter("uid", "==", user["id"])).order_by(
+        "created_at", direction="DESCENDING"
+    )
+    for doc in query.stream():
+        p = doc.to_dict() or {}
+        pkg = pkgs.get(p.get("package_id"), {})
+        if p.get("method") == "stars" or p.get("amount_stars"):
+            amount, currency = p.get("amount_stars"), "XTR"
+        else:
+            amount, currency = p.get("amount_usd"), "USD"
+        rows.append({
+            "order_id": doc.id,
+            "date": p.get("created_at"),
+            "amount": amount,
+            "currency": currency,
+            "plan_name_ar": pkg.get("name_ar"),
+            "plan_name_en": pkg.get("name_en"),
+            "status": p.get("status"),
+            "tx_id": p.get("telegram_payment_charge_id") or p.get("invoice_id") or doc.id,
+        })
+    return {"payments": rows}
