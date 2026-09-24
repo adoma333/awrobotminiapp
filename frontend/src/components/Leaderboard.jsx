@@ -5,8 +5,7 @@ import { TIERS } from '../tiers';
 import Avatar from './Avatar';
 import Icon from './Icon';
 
-const usd = (n) => `$${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Math.abs(n))}`;
-const signed = (n) => `${n < 0 ? '−' : '+'}${usd(n)}`;
+import { signedUsd as signed } from '../format';
 // علامة صغيرة للمنافس المحاكاة (مع سطر توضيحي أسفل القائمة)
 const SimMark = ({ t }) => (
   <span className="lb-sim" title={t.lbSimTitle} aria-label={t.lbSimTitle}><Icon name="bolt" size={11} /></span>
@@ -18,7 +17,7 @@ function Row({ t, r }) {
   return (
     <li className={`lb-row ${r.you ? 'is-you' : ''}`}>
       <span className="lb-rank" dir="ltr">{r.rank}</span>
-      <Avatar kind={r.avatar} size={34} />
+      <Avatar kind={r.avatar} src={r.photo} size={34} />
       <span className="lb-name">
         <bdi>{r.you ? t.lbYou : r.name}</bdi>
         {r.simulated && <SimMark t={t} />}
@@ -58,7 +57,7 @@ export default function Leaderboard({ t }) {
         {podium.map((r) => (
           <div key={r.id} className={`pod pod-${r.rank} ${r.you ? 'is-you' : ''}`}>
             <span className="pod-crown">{r.rank === 1 ? '👑' : r.rank}</span>
-            <Avatar kind={r.avatar} size={r.rank === 1 ? 64 : 52} />
+            <Avatar kind={r.avatar} src={r.photo} size={r.rank === 1 ? 64 : 52} />
             <b><bdi>{r.you ? t.lbYou : r.name.split(' ')[0]}</bdi></b>
             <span className="pod-pct" dir="ltr">{signed(r.usd)}</span>
             {r.simulated && <SimMark t={t} />}

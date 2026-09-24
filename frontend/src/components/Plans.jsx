@@ -10,16 +10,8 @@ import coinIcon from '../assets/icons/coin.webp';
 import { bestCheckoutReward, countdown, prizeLabel } from '../rewards';
 import CryptoPay from './CryptoPay';
 
-const fmtDate = (epoch, lang) =>
-  epoch
-    ? new Date(epoch * 1000).toLocaleDateString(lang === 'ar' ? 'ar-u-nu-latn' : 'en', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-      })
-    : '—';
+import { amount as price, fmtDate } from '../format';
 
-const price = (n) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n);
 const BackIcon = () => (
   <svg className="chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
 );
@@ -63,7 +55,8 @@ const REWARD_ERRORS = ['reward_expired', 'reward_used', 'reward_not_found', 'rew
  * الباقات كبطاقات بمزايا كاملة ← "اشترك" ← خطوة طرق الدفع (TON أولًا وموصى بها، العملات الرقمية ببوابتنا، النجوم).
  * mode = 'renew' : من لوحة الحساب (شراء أول باقة أو تجديدها)
  */
-export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, onBack, botUsername, autoTon, preferredReward }) {
+export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, onBack, botUsername, autoTon, preferredReward, settings = {} }) {
+  const allow = { ton: settings.pay_ton !== false, crypto: settings.pay_crypto !== false, stars: settings.pay_stars !== false };
   const [packages, setPackages] = useState(null);
   const [tonEnabled, setTonEnabled] = useState(false);
   const [coins, setCoins] = useState([]);
@@ -293,7 +286,7 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
 
         <h2 className="pay-heading">{t.payMethod}</h2>
         <div className="pay-methods">
-          {tonEnabled && p.price_ton ? (
+          {allow.ton && tonEnabled && p.price_ton ? (
             <button type="button" className="pay-method is-best" disabled={!!busy} onClick={() => payTon(p)}>
               <span className="best-badge">{t.tonBest}</span>
               <img src={walletIcon} alt="" className="pm-icon" />
@@ -305,6 +298,7 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
             </button>
           ) : null}
 
+          {allow.crypto && (
           <button type="button" className={`pay-method ${pickCoin ? 'is-open' : ''}`} disabled={!!busy && !busy.startsWith('crypto')} onClick={() => setPickCoin((v) => !v)}>
             <img src={coinIcon} alt="" className="pm-icon" />
             <span className="pm-body">
@@ -313,7 +307,8 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
             </span>
             <span className="pm-amount" dir="ltr">${price(usd)}</span>
           </button>
-          {pickCoin && (
+          )}
+          {allow.crypto && pickCoin && (
             <div className="coin-grid">
               {coins.map((c) => (
                 <button key={c.code} type="button" className="coin-chip" disabled={!!busy} onClick={() => payCrypto(p, c.code)}>
@@ -324,7 +319,7 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
             </div>
           )}
 
-          {p.price_stars ? (
+          {allow.stars && p.price_stars ? (
             <button type="button" className="pay-method" disabled={!!busy} onClick={() => payStars(p)}>
               <span className="pm-icon pm-star" aria-hidden="true">★</span>
               <span className="pm-body">

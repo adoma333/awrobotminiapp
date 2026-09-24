@@ -67,6 +67,7 @@ export default function Referral({ t, lang, data }) {
     dir: t.dir,
     nickname: data.nickname,
     avatar: data.avatar,
+    photo: data.photo_url,
     bigValue: growth == null ? `${linked}` : `${growth > 0 ? '+' : ''}${fmt(growth)}%`,
     bigLabel: growth == null ? t.refShort : t.storyGrowth,
     stats: [

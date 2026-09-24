@@ -42,13 +42,32 @@ function connect(ui) {
   });
 }
 
-/** يربط المحفظة إن لزم ثم يرسل معاملة الدفع كما أعدّها الخادم (العنوان والمبلغ والتعليق). */
+const IDLE_DISCONNECT_MS = 3 * 60 * 1000;
+let idleTimer = null;
+
+// فصل المحفظة بعد كل عملية (أو بعد 3 دقائق خمول) كي يختار المستخدم أي محفظة في المرة القادمة بلا تعارض
+async function release(ui) {
+  clearTimeout(idleTimer);
+  try {
+    if (ui.connected) await ui.disconnect();
+  } catch {
+    /* الجلسة انتهت أصلًا */
+  }
+}
+
+/** يربط المحفظة ثم يرسل معاملة الدفع كما أعدّها الخادم (العنوان والمبلغ والتعليق)، ثم يفصلها دائمًا. */
 export async function payWithTon(tx, botUsername) {
   const ui = await getUI(botUsername);
   await ui.connectionRestored;
   if (!ui.connected) await connect(ui);
-  return ui.sendTransaction({
-    validUntil: tx.valid_until,
-    messages: [{ address: tx.address, amount: tx.amount_nano, payload: tx.payload }],
-  });
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => release(ui), IDLE_DISCONNECT_MS);
+  try {
+    return await ui.sendTransaction({
+      validUntil: tx.valid_until,
+      messages: [{ address: tx.address, amount: tx.amount_nano, payload: tx.payload }],
+    });
+  } finally {
+    await release(ui);
+  }
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import light from '../assets/icons/light.webp';
+import mt5 from '../assets/icons/mt5.png';
 import telegram from '../assets/icons/telegram.svg';
 import wallet from '../assets/icons/wallet.webp';
 
@@ -53,7 +53,7 @@ const NODES = {
   bot: { x: 180, y: 128, label: 'AW Bot · API', glyph: 'bot' },
   db: { x: 62, y: 330, label: 'Firestore', glyph: 'db' },
   pay: { x: 298, y: 330, label: 'TON · Pay', img: wallet },
-  bridge: { x: 112, y: 420, label: 'MT5 · Wine', glyph: 'bridge' },
+  bridge: { x: 112, y: 420, label: 'MT5 · Wine', img: mt5 },
   broker: { x: 262, y: 420, label: 'Broker', glyph: 'broker' },
 };
 const ENGINE = { x: 180, y: 232 };
@@ -166,10 +166,7 @@ export default function N8nFlow({ t }) {
 
   return (
     <div className="section n8n">
-      <div className="section-head">
-        <h2>{t.anN8n}</h2>
-        <span className="tag">{t.anDemo}</span>
-      </div>
+      <h2>{t.anN8n}</h2>
       <p className="sub">{t.anN8nSub}</p>
 
       <svg className="flow" viewBox="0 0 360 450" role="img" aria-label={t.anN8n}>
@@ -201,8 +198,8 @@ export default function N8nFlow({ t }) {
         <g className={`engine ${live.length ? 'is-busy' : ''}`} transform={`translate(${ENGINE.x} ${ENGINE.y})`}>
           <circle r="78" fill="url(#eng-glow)" className="engine-glow" />
           <circle r="46" className="engine-ring" />
-          <image href={light} x="-44" y="-44" width="88" height="88" className="engine-orb" />
-          <text y="64" textAnchor="middle" className="engine-label">n8n Engine</text>
+          <image href={mt5} x="-34" y="-33" width="68" height="65" className="engine-mt5" />
+          <text y="64" textAnchor="middle" className="engine-label">n8n × MT5</text>
         </g>
 
         {Object.entries(NODES).map(([k, n]) => (

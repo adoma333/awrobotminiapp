@@ -188,6 +188,25 @@ export async function unlink() {
   return request('POST', '/api/unlink', { init_data: initData });
 }
 
+export async function searchServers(q) {
+  if (DEV_MOCK) {
+    const all = [
+      { id: 'exnessmt5trial16', name: 'Exness-MT5Trial16', type: 'demo', verified: true },
+      { id: 'exnessmt5real21', name: 'Exness-MT5Real21', type: 'real', verified: true },
+      { id: 'dukascopydemomt5', name: 'Dukascopy-Demo-MT5', type: 'demo', verified: false },
+      { id: 'metaquotesdemo', name: 'MetaQuotes-Demo', type: 'demo', verified: true },
+    ];
+    const k = q.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return { servers: all.filter((s) => s.id.includes(k.slice(0, 5))).map((s) => ({ ...s, exact: s.id === k })) };
+  }
+  return request('GET', `/api/servers?q=${encodeURIComponent(q)}`);
+}
+
+export async function updatePhoto(photoB64) {
+  if (DEV_MOCK) return { ok: true, photo_url: photoB64 ? `data:image/jpeg;base64,${photoB64}` : null };
+  return request('POST', '/api/profile/photo', { init_data: initData, photo: photoB64 });
+}
+
 export async function updateProfile(patch) {
   if (DEV_MOCK) return { ok: true };
   return request('POST', '/api/profile', { init_data: initData, ...patch });

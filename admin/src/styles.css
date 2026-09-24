@@ -1,25 +1,32 @@
+@import "@fontsource/ibm-plex-sans-arabic/400.css";
+@import "@fontsource/ibm-plex-sans-arabic/600.css";
+@import "@fontsource/ibm-plex-sans-arabic/700.css";
 @import "@fontsource/chakra-petch/400.css";
 @import "@fontsource/chakra-petch/500.css";
 @import "@fontsource/chakra-petch/600.css";
 @import "@fontsource/chakra-petch/700.css";
 
 :root {
-  --bg: #0f1115;
-  --surface: #171a21;
-  --surface-2: #1e222b;
-  --border: #2a2f3a;
-  --text: #edeff3;
-  --muted: #8b93a3;
-  --accent: #e8963c;
-  --accent-dim: #7a5424;
-  --ok: #3fbf7f;
-  --ok-dim: #1e3a2c;
-  --bad: #e5566b;
-  --bad-dim: #3a1f24;
-  --warn: #d9a441;
-  --warn-dim: #3a2f1a;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  --radius: 6px;
+  /* نفس هوية البوت: أسود + برتقالي الشعار */
+  --bg: #000000;
+  --surface: #0f0d0b;
+  --surface-2: #17130f;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 138, 0, 0.32);
+  --text: #f5efe8;
+  --muted: #8c8378;
+  --accent: #ff8a00;
+  --accent-2: #ff5a00;
+  --accent-dim: rgba(255, 138, 0, 0.12);
+  --grad: linear-gradient(135deg, #ff8a00, #ff5a00);
+  --ok: #3ddc97;
+  --ok-dim: rgba(61, 220, 151, 0.12);
+  --bad: #ff6b5e;
+  --bad-dim: rgba(255, 107, 94, 0.12);
+  --warn: #e5b84b;
+  --warn-dim: rgba(229, 184, 75, 0.12);
+  --mono: "Chakra Petch", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --radius: 8px;
   color-scheme: dark;
 }
 
@@ -31,7 +38,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: "Chakra Petch", system-ui, sans-serif;
+  font-family: "IBM Plex Sans Arabic", "Chakra Petch", system-ui, sans-serif;
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -64,12 +71,13 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 
 button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #1a1206;
-  font-weight: 600;
+  background: var(--grad);
+  border-color: transparent;
+  color: #1a0d00;
+  font-weight: 700;
+  box-shadow: 0 6px 18px rgba(255, 106, 0, 0.22);
 }
-button.primary:hover { background: #f0a352; }
+button.primary:hover { filter: brightness(1.08); }
 
 button.danger-ghost { color: var(--bad); }
 button.danger-ghost:hover { border-color: var(--bad); }

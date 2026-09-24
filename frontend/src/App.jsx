@@ -308,6 +308,7 @@ export default function App() {
               onCalc={() => setView('calc')}
               onBilling={() => setView('billing')}
               onRewards={() => setView('rewards')}
+              onProfileSaved={() => refreshStatus().catch(() => {})}
             />
           ) : view === 'analytics' ? (
             <Analytics t={t} lang={lang} data={info} onReferral={() => setView('referral')} />
@@ -331,6 +332,7 @@ export default function App() {
               sub={sub}
               botUsername={info.bot_username}
               autoTon={RENEW_TON}
+              settings={info.settings}
               preferredReward={preferredReward}
               refreshStatus={refreshStatus}
               onContinue={() => setView('main')}

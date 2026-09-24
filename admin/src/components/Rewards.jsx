@@ -168,7 +168,7 @@ export default function Rewards() {
       <div className="panel">
         <div className="topbar">
           <h2>البطاقات والكوبونات</h2>
-          <input className="mono narrow-wide" placeholder="تصفية بـ Telegram ID" value={uidFilter} onChange={(e) => setUidFilter(e.target.value.replace(/\D/g, ""))} />
+          <input className="narrow-wide" inputMode="numeric" placeholder="تصفية بـ Telegram ID" value={uidFilter} onChange={(e) => setUidFilter(e.target.value.replace(/\D/g, ""))} />
         </div>
         <div className="scrollx">
           <table className="list keep">
