@@ -13,6 +13,10 @@ DEFAULT_SETTINGS = {
     "referral_enabled": True,
     "referral_days": 7,
     "kill_switch": False,
+    # الفترة التجريبية المشروطة للتداول الآلي (أول ربط فقط): حساب سنت، أو لوت لا يتجاوز trial_max_lot
+    "trial_enabled": False,
+    "trial_days": 3,          # بين 3 و7
+    "trial_max_lot": 0.01,    # 0 = لا تجربة للحسابات العادية (سنت فقط)
 }
 
 _SETTINGS_DOC = ("config", "settings")
@@ -74,13 +78,14 @@ def create_package(db, data: dict) -> str:
             "active": bool(data.get("active", True)),
             "sort_order": int(data.get("sort_order", 0)),
             "price_stars": int(data["price_stars"]) if data.get("price_stars") else None,
+            "price_ton": float(data["price_ton"]) if data.get("price_ton") else None,
         }
     )
     return ref.id
 
 
 def update_package(db, pkg_id: str, patch: dict):
-    allowed = {"name_ar", "name_en", "price_usd", "price_stars", "duration_days", "active", "sort_order"}
+    allowed = {"name_ar", "name_en", "price_usd", "price_stars", "price_ton", "duration_days", "active", "sort_order"}
     clean = {k: v for k, v in patch.items() if k in allowed}
     db.collection("packages").document(pkg_id).update(clean)
 
@@ -160,3 +165,63 @@ def grant_referral_bonus_if_eligible(db, uid, days):
     _add_days(db, uid, days)
     _add_days(db, referrer_id, days)
     return referrer_id
+
+
+# ───────────────────────── الفترة التجريبية للتداول الآلي ─────────────────────────
+CENT_CURRENCIES = {"USC", "EUC", "USX"}
+TRIAL_MIN_DAYS, TRIAL_MAX_DAYS = 3, 7
+
+
+def is_cent_account(live: dict | None, server: str | None) -> bool:
+    currency = str((live or {}).get("currency") or "").upper()
+    return currency in CENT_CURRENCIES or "cent" in (server or "").lower()
+
+
+def trial_days(settings: dict) -> int:
+    try:
+        d = int(settings.get("trial_days") or TRIAL_MIN_DAYS)
+    except (TypeError, ValueError):
+        d = TRIAL_MIN_DAYS
+    return max(TRIAL_MIN_DAYS, min(TRIAL_MAX_DAYS, d))
+
+
+def trial_fields_on_first_link(settings: dict, previous: dict | None, live: dict, server: str, now: float) -> dict:
+    """حقول تُضاف لمستند المستخدم عند الربط. التجربة تُمنح عند أول ربط فقط (trial_checked يمنع التكرار)."""
+    if (previous or {}).get("trial_checked"):
+        return {}
+    fields = {"trial_checked": True}
+    if not settings.get("trial_enabled"):
+        return fields
+    cent = is_cent_account(live, server)
+    try:
+        max_lot = float(settings.get("trial_max_lot") or 0)
+    except (TypeError, ValueError):
+        max_lot = 0.0
+    if not cent and max_lot <= 0:
+        return fields  # حساب عادي ولا حد لوت مضبوط: لا تجربة
+    days = trial_days(settings)
+    fields["trial_expires_at"] = now + days * 86400
+    fields["trial"] = {"started_at": now, "days": days, "cent_account": cent, "max_lot": None if cent else max_lot}
+    return fields
+
+
+def auto_trade_allowed(data: dict, volume: float | None = None, now: float | None = None) -> tuple[bool, str]:
+    """يُستدعى قبل كل عملية تداول آلي. يرجع (مسموح؟، السبب).
+    الاشتراك الفعّال يسمح دائمًا؛ وإلا فالتجربة الفعّالة: حساب سنت بلا قيد، أو حجم لوت <= الحد."""
+    now = time.time() if now is None else now
+    if is_subscription_active(data):
+        return True, "subscription"
+    exp = data.get("trial_expires_at") or 0
+    if not exp:
+        return False, "no_subscription"
+    if exp <= now:
+        return False, "trial_expired"
+    trial = data.get("trial") or {}
+    if trial.get("cent_account"):
+        return True, "trial_cent"
+    max_lot = float(trial.get("max_lot") or 0)
+    if volume is None:
+        return False, "volume_required"
+    if max_lot > 0 and float(volume) <= max_lot:
+        return True, "trial_lot"
+    return False, "lot_exceeds_trial_limit"

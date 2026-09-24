@@ -54,7 +54,7 @@ function Cell({ label, pctValue, money, cur }) {
   );
 }
 
-export default function Dashboard({ t, lang, data, onRenew, onSettings }) {
+export default function Dashboard({ t, lang, data, onRenew, onSettings, onRewards }) {
   const { live, nickname, avatar, subscription: sub } = data;
   const r = data.report || {};
   const sync = data.sync || {};
@@ -114,6 +114,13 @@ export default function Dashboard({ t, lang, data, onRenew, onSettings }) {
         <div className="note sub-note" role="status">
           <span>{fill(t.subEnding, { n: sub.days_left })}</span>
           <button type="button" className="btn soft small" onClick={onRenew}><span>{t.renew}</span></button>
+        </div>
+      )}
+
+      {data.scratch_pending > 0 && (
+        <div className="note sub-note scratch-banner" role="status">
+          <span>{t.rwBanner}</span>
+          <button type="button" className="btn primary small" onClick={onRewards}><span>{t.rwOpen}</span></button>
         </div>
       )}
 

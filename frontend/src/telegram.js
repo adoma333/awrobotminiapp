@@ -76,3 +76,15 @@ export async function copyText(text) {
     return ok;
   }
 }
+
+// يطلب مشاركة رقم الهاتف مع البوت (توثيق التأهل لبطاقات الخدش). يرجع true إن وافق المستخدم.
+export function requestContact() {
+  return new Promise((resolve) => {
+    if (!tg?.requestContact) return resolve(false);
+    try {
+      tg.requestContact((ok) => resolve(Boolean(ok)));
+    } catch {
+      resolve(false);
+    }
+  });
+}

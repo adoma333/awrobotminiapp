@@ -66,10 +66,10 @@ install_units() {
   systemctl daemon-reload
 }
 
-install_sudoers() { # يسمح لمستخدم التطبيق بتشغيل/إطفاء جسر المراقبة فقط
+install_sudoers() { # يسمح لمستخدم التطبيق بتشغيل/إطفاء جسر المراقبة، وبإعادة تشغيل جسر الروبوت فقط (heartbeat)
   is_test && return 0
   local tmp; tmp=$(mktemp)
-  printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl restart %s, /usr/bin/systemctl start %s, /usr/bin/systemctl stop %s, /bin/systemctl restart %s, /bin/systemctl start %s, /bin/systemctl stop %s\n' \
+  printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl restart %s, /usr/bin/systemctl start %s, /usr/bin/systemctl stop %s, /bin/systemctl restart %s, /bin/systemctl start %s, /bin/systemctl stop %s, /usr/bin/systemctl restart mt5-bridge, /bin/systemctl restart mt5-bridge\n' \
     "$APP_USER" "$MON_SERVICE" "$MON_SERVICE" "$MON_SERVICE" "$MON_SERVICE" "$MON_SERVICE" "$MON_SERVICE" > "$tmp"
   visudo -cf "$tmp" >/dev/null || { rm -f "$tmp"; die "قاعدة sudoers غير صالحة"; }
   install -m 440 "$tmp" /etc/sudoers.d/aw-sync
