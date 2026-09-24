@@ -79,7 +79,7 @@ export const messages = {
 
     // الباقات والدفع
     plansTitle: 'Choose your plan',
-    plansSub: 'A subscription lets you link your account and follow it live.',
+    plansSub: 'Your account is linked — subscribe to follow it live.',
     renewTitle: 'Renew your plan',
     currentPlan: 'Current plan',
     expiresOn: 'Ends {date}',
@@ -126,6 +126,8 @@ export const messages = {
     subExpired: 'Your subscription has expired.',
     subEnding: 'Your plan ends in {n} days.',
     renew: 'Renew',
+    subNone: 'You don’t have a subscription yet.',
+    subscribe: 'Subscribe',
 
     // الإعدادات
     settingsTitle: 'Settings',
@@ -289,7 +291,7 @@ export const messages = {
 
     // الباقات والدفع
     plansTitle: 'اختر باقتك',
-    plansSub: 'الاشتراك يتيح لك ربط حسابك ومتابعته لحظة بلحظة.',
+    plansSub: 'تم ربط حسابك — اشترك لمتابعته لحظة بلحظة.',
     renewTitle: 'جدّد اشتراكك',
     currentPlan: 'باقتك الحالية',
     expiresOn: 'تنتهي {date}',
@@ -336,6 +338,8 @@ export const messages = {
     subExpired: 'انتهى اشتراكك.',
     subEnding: 'تنتهي باقتك بعد {n} يوم.',
     renew: 'جدّد',
+    subNone: 'ليس لديك اشتراك بعد.',
+    subscribe: 'اشترك',
 
     // الإعدادات
     settingsTitle: 'الإعدادات',

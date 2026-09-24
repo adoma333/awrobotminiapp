@@ -104,10 +104,10 @@ export default function Dashboard({ t, lang, data, onRenew, onSettings }) {
         </div>
       </div>
 
-      {sub && !sub.active && (
+      {!sub?.active && (
         <div className="note warn sub-note" role="status">
-          <span>{t.subExpired}</span>
-          <button type="button" className="btn soft small" onClick={onRenew}><span>{t.renew}</span></button>
+          <span>{sub ? t.subExpired : t.subNone}</span>
+          <button type="button" className="btn soft small" onClick={onRenew}><span>{sub ? t.renew : t.subscribe}</span></button>
         </div>
       )}
       {sub && sub.active && sub.days_left <= 5 && (
