@@ -21,7 +21,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from html import escape
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, quote
 
 import firebase_admin
 import httpx
@@ -1676,6 +1676,8 @@ SHARE_MAX_BYTES = 1_500_000
 SHARE_DAILY_LIMIT = 30
 SHARE_KEEP_DAYS = 30
 _SHARE_ID = re.compile(r"^[A-Za-z0-9_-]{8,24}$")
+SHARE_PLATFORMS = {"instagram": "Instagram", "tiktok": "TikTok", "facebook": "Facebook", "x": "X",
+                   "whatsapp": "WhatsApp", "telegram": "Telegram", "snapchat": "Snapchat", "threads": "Threads"}
 
 
 class ShareCreate(BaseModel):
@@ -1683,6 +1685,7 @@ class ShareCreate(BaseModel):
     story: str  # JPEG بصيغة base64 (1080×1920)
     post: str   # JPEG بصيغة base64 (1080×1080)
     caption: str = Field(default="", max_length=1500)
+    captions: dict[str, str] = {}  # نص مخصّص لكل منصة (instagram, facebook, tiktok, ...)
 
 
 def _jpeg(b64: str) -> bytes:
@@ -1716,8 +1719,9 @@ def share_create(body: ShareCreate):
             f.write(data)
     code = d.get("referral_code") or billing.ensure_referral_code(db, uid)
     bot = _bot_username()
+    captions = {k: str(v)[:2200] for k, v in (body.captions or {}).items() if k in SHARE_PLATFORMS}
     db.collection("shares").document(sid).set({
-        "uid": uid, "caption": body.caption.strip(), "created_at": time.time(),
+        "uid": uid, "caption": body.caption.strip(), "captions": captions, "created_at": time.time(),
         "link": f"https://t.me/{bot}?start={code}" if bot else WEBAPP_URL,
     })
     base = f"{WEBAPP_URL}/api/share"
@@ -1736,33 +1740,118 @@ def share_image(name: str):
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=604800"})
 
 
+SHARE_UI = {
+    "ar": {"dir": "rtl", "title": "انشر على {p}", "go": "انشر الآن على {p}", "copy": "نسخ النص", "copied": "✓ نُسخ",
+           "save": "حفظ الصورة", "s1": "النص يُنسخ تلقائيًا عند الضغط", "s2": "اختر {p} من قائمة المشاركة",
+           "s3": "الصق النص (لصق) ثم انشر", "cta": "ابدأ الآن مع AW Robot", "fb_link": "مشاركة كرابط",
+           "saved": "حُفظت الصورة — افتح {p} وانشرها والصق النص"},
+    "en": {"dir": "ltr", "title": "Post to {p}", "go": "Post to {p} now", "copy": "Copy caption", "copied": "✓ Copied",
+           "save": "Save image", "s1": "The caption is copied when you tap", "s2": "Pick {p} in the share sheet",
+           "s3": "Paste the caption and publish", "cta": "Start with AW Robot", "fb_link": "Share as link",
+           "saved": "Image saved — open {p}, post it and paste the caption"},
+}
+# بعد التنزيل (أجهزة بلا Web Share): نفتح المنصة مباشرة
+SHARE_FALLBACK = {
+    "instagram": "https://www.instagram.com/", "tiktok": "https://www.tiktok.com/upload", "snapchat": "https://www.snapchat.com/",
+    "threads": "https://www.threads.net/", "facebook": "https://www.facebook.com/sharer/sharer.php?u={page}",
+    "x": "https://twitter.com/intent/tweet?text={text}&url={page}", "whatsapp": "https://wa.me/?text={text}",
+    "telegram": "https://t.me/share/url?url={page}&text={text}",
+}
+STORY_PLATFORMS = {"instagram", "tiktok", "snapchat"}
+
+
 @app.get("/api/share/p/{sid}", response_class=HTMLResponse)
-def share_page(sid: str):
-    """صفحة المنشور: وسوم Open Graph (صورة + وصف) كي يظهر المنشور كاملًا في فيسبوك وX وواتساب وتلجرام، ثم تحويل لرابط الدعوة."""
+def share_page(sid: str, to: str | None = None, lang: str = "ar"):
+    """بلا to: صفحة معاينة بوسوم Open Graph (للروابط في فيسبوك وX وواتساب وتلجرام) ثم تحويل لرابط الدعوة.
+    مع to=<منصة>: صفحة "انشر الآن" تُفتح في متصفح الهاتف (خارج تلجرام) حيث تعمل نافذة المشاركة الأصلية
+    بالصورة، فيفتح محرر المنصة مباشرة، مع نسخ نص تلك المنصة تلقائيًا."""
     snap = db.collection("shares").document(sid).get() if _SHARE_ID.match(sid) else None
     if not snap or not snap.exists:
         raise HTTPException(404, "not_found")
     d = snap.to_dict() or {}
-    img = f"{WEBAPP_URL}/api/share/img/{sid}_post.jpg"
-    link = escape(d.get("link") or WEBAPP_URL, quote=True)
-    caption = d.get("caption") or "AW Robot"
-    desc = escape(" ".join(caption.split())[:280], quote=True)
-    body = escape(caption).replace("\n", "<br>")
-    return f"""<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
+    page = f"{WEBAPP_URL}/api/share/p/{sid}"
+    post_img = f"{WEBAPP_URL}/api/share/img/{sid}_post.jpg"
+    link_raw = d.get("link") or WEBAPP_URL
+    link = escape(link_raw, quote=True)
+    base_caption = d.get("caption") or "AW Robot"
+    js = lambda v: json.dumps(v, ensure_ascii=False).replace("</", "<\\/")  # noqa: E731
+
+    if to not in SHARE_PLATFORMS:
+        desc = escape(" ".join(base_caption.split())[:280], quote=True)
+        body = escape(base_caption).replace("\n", "<br>")
+        return f"""<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AW Robot</title>
 <meta property="og:type" content="website"><meta property="og:site_name" content="AW Robot">
 <meta property="og:title" content="AW Robot — التداول الآلي بالذكاء الاصطناعي">
 <meta property="og:description" content="{desc}">
-<meta property="og:image" content="{img}"><meta property="og:image:width" content="1080"><meta property="og:image:height" content="1080">
-<meta property="og:url" content="{WEBAPP_URL}/api/share/p/{sid}">
-<meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="{img}">
+<meta property="og:image" content="{post_img}"><meta property="og:image:width" content="1080"><meta property="og:image:height" content="1080">
+<meta property="og:url" content="{page}">
+<meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="{post_img}">
 <meta name="twitter:title" content="AW Robot"><meta name="twitter:description" content="{desc}">
 <style>body{{margin:0;background:#000;color:#f5efe8;font-family:system-ui,sans-serif;display:flex;justify-content:center}}
 main{{max-width:480px;padding:20px;text-align:center}}img{{width:100%;border-radius:12px}}p{{line-height:1.7;color:#cfc6bb}}
 a{{display:inline-block;margin-top:12px;padding:14px 28px;border-radius:10px;background:linear-gradient(135deg,#ff8a00,#ff5a00);color:#1a0d00;font-weight:800;text-decoration:none}}</style>
-</head><body><main><img src="{img}" alt="AW Robot"><p>{body}</p><a href="{link}">ابدأ الآن مع AW Robot</a></main>
-<script>setTimeout(function(){{location.href={json.dumps(d.get("link") or WEBAPP_URL)}}},2500)</script></body></html>"""
+</head><body><main><img src="{post_img}" alt="AW Robot"><p>{body}</p><a href="{link}">ابدأ الآن مع AW Robot</a></main>
+<script>setTimeout(function(){{location.href={js(link_raw)}}},2500)</script></body></html>"""
+
+    ui = SHARE_UI["en" if lang == "en" else "ar"]
+    name = SHARE_PLATFORMS[to]
+    kind = "story" if to in STORY_PLATFORMS else "post"
+    img = f"{WEBAPP_URL}/api/share/img/{sid}_{kind}.jpg"
+    caption = (d.get("captions") or {}).get(to) or base_caption
+    fallback = SHARE_FALLBACK[to].format(page=quote(page, safe=""), text=quote(caption, safe=""))
+    f = lambda k: escape(ui[k].format(p=name))  # noqa: E731
+    return f"""<!doctype html><html lang="{'en' if lang == 'en' else 'ar'}" dir="{ui['dir']}"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex"><title>AW Robot · {escape(name)}</title>
+<style>
+*{{box-sizing:border-box}}body{{margin:0;background:#000;color:#f5efe8;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}}
+main{{max-width:460px;margin:0 auto;padding:18px 18px 32px}}
+.bar{{display:flex;direction:ltr}}.bar img{{height:30px}}
+h1{{margin:18px 0 6px;font-size:24px}}
+ol{{margin:0 0 14px;padding:0;list-style:none;display:grid;gap:6px;counter-reset:s}}
+li{{counter-increment:s;display:flex;gap:10px;align-items:center;color:#cfc6bb;font-size:14px}}
+li::before{{content:counter(s);width:22px;height:22px;flex:none;border-radius:50%;display:grid;place-items:center;
+  background:rgba(255,138,0,.15);color:#ff8a00;font-weight:800;font-size:12px}}
+.pv{{display:block;margin:0 auto 14px;border:1px solid rgba(255,138,0,.35);border-radius:10px;max-height:52vh;max-width:100%}}
+.cap{{white-space:pre-wrap;background:rgba(255,138,0,.06);border:1px solid rgba(255,255,255,.1);border-radius:8px;
+  padding:12px 14px;font-size:13.5px;line-height:1.7;margin:0 0 14px;max-height:180px;overflow:auto}}
+button,a.btn{{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:15px;border-radius:10px;
+  border:1px solid rgba(255,138,0,.35);background:#141110;color:#ff8a00;font-family:inherit;font-weight:700;font-size:15px;text-decoration:none;margin-top:10px;cursor:pointer}}
+.go{{background:linear-gradient(135deg,#ff8a00,#ff5a00);color:#1a0d00;border:0;font-size:16px;box-shadow:0 10px 28px rgba(255,106,0,.3)}}
+.row{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}.row>*{{margin-top:10px}}
+.toast{{position:fixed;inset-inline:16px;bottom:22px;padding:12px 14px;border-radius:10px;background:#1a1512;border:1px solid rgba(255,138,0,.4);
+  text-align:center;font-size:14px;opacity:0;transform:translateY(10px);transition:.25s}}.toast.on{{opacity:1;transform:none}}
+.cta{{margin-top:22px;text-align:center}}.cta a{{color:#8c8378;font-size:13px}}
+</style></head><body><main>
+<div class="bar"><img src="{WEBAPP_URL}/logo-wordmark.png" alt="AW Robot"></div>
+<h1>{f('title')}</h1>
+<ol><li>{f('s1')}</li><li>{f('s2')}</li><li>{f('s3')}</li></ol>
+<img class="pv" src="{img}" alt="">
+<div class="cap" id="cap"></div>
+<button class="go" id="go">{f('go')}</button>
+<div class="row"><button id="copy">{f('copy')}</button><a class="btn" id="save" href="{img}" download="aw-robot-{kind}.jpg">{f('save')}</a></div>
+{f'<a class="btn" href="https://www.facebook.com/sharer/sharer.php?u={quote(page, safe="")}">{f("fb_link")}</a>' if to == "facebook" else ""}
+<div class="cta"><a href="{link}">{f('cta')}</a></div>
+</main><div class="toast" id="toast"></div>
+<script>
+var CAP={js(caption)},IMG={js(img)},FALL={js(fallback)},SAVED={js(ui['saved'].format(p=name))},COPIED={js(ui['copied'])};
+document.getElementById('cap').textContent=CAP;
+function toast(m){{var t=document.getElementById('toast');t.textContent=m;t.className='toast on';setTimeout(function(){{t.className='toast'}},2600)}}
+function copy(){{if(navigator.clipboard&&navigator.clipboard.writeText){{return navigator.clipboard.writeText(CAP).catch(function(){{}})}}
+  var e=document.createElement('textarea');e.value=CAP;document.body.appendChild(e);e.select();try{{document.execCommand('copy')}}catch(_){{}}e.remove();return Promise.resolve()}}
+var file=null;fetch(IMG).then(function(r){{return r.blob()}}).then(function(b){{file=new File([b],'aw-robot.jpg',{{type:'image/jpeg'}})}}).catch(function(){{}});
+document.getElementById('copy').onclick=function(){{copy().then(function(){{toast(COPIED)}})}};
+document.getElementById('go').onclick=function(){{
+  copy();
+  if(file&&navigator.canShare&&navigator.canShare({{files:[file]}})){{
+    navigator.share({{files:[file],text:CAP}}).catch(function(e){{if(e&&e.name!=='AbortError')fallback()}});return;
+  }}
+  fallback();
+}};
+function fallback(){{document.getElementById('save').click();toast(SAVED);setTimeout(function(){{location.href=FALL}},1400)}}
+</script></body></html>"""
 
 
 def cleanup_share_media():
@@ -1783,14 +1872,28 @@ def cleanup_share_media():
 @app.get("/api/leaderboard")
 def weekly_leaderboard(init_data: str):
     user = verify_init_data(init_data)
-    st = billing.get_settings(db)
-    return leaderboard.build(db, user["id"], bool(st.get("leaderboard_sim")), int(st.get("leaderboard_sim_count") or 0))
+    return leaderboard.build(db, user["id"])
 
 
 def _leaderboard_tick():
-    st = billing.get_settings(db)
-    if st.get("leaderboard_sim"):
-        leaderboard.tick(db, int(st.get("leaderboard_sim_count") or 0))
+    cfg = leaderboard.get_config(db)
+    if cfg["enabled"]:
+        leaderboard.tick(db, cfg)
+
+
+@app.get("/api/admin/leaderboard")
+def admin_leaderboard_config(admin_id: int = Depends(get_current_admin)):
+    return {**leaderboard.get_config(db), "default_profiles": leaderboard.default_config()["profiles"]}
+
+
+@app.put("/api/admin/leaderboard")
+def admin_leaderboard_update(patch: dict, admin_id: int = Depends(get_current_admin)):
+    try:
+        clean = leaderboard.clean_config(patch)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(422, str(e))
+    db.collection("config").document("leaderboard").set(clean, merge=True)
+    return leaderboard.get_config(db)
 
 
 # ═══════════════════════════ لوحة الأدمن: المكافآت والكوبونات ═══════════════════════════

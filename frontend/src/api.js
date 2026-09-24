@@ -309,22 +309,23 @@ export async function paymentStatus(orderId) {
 }
 
 // يرفع صورتي القصة والمنشور ويعيد روابط عامة (قصة تلجرام + صفحة مشاركة بمعاينة كاملة)
-export async function createShare(storyB64, postB64, caption) {
+export async function createShare(storyB64, postB64, caption, captions) {
   if (DEV_MOCK) {
     await sleep(400);
     return { id: 'dev', story_url: '', post_url: '', page_url: 'https://example.com/p/dev' };
   }
-  return request('POST', '/api/share/create', { init_data: initData, story: storyB64, post: postB64, caption });
+  return request('POST', '/api/share/create', { init_data: initData, story: storyB64, post: postB64, caption, captions });
 }
 
 export async function getLeaderboard() {
   if (DEV_MOCK) {
     await sleep(300);
     const names = ['Omar Al-Rashid', 'Layla Haddad', 'Yousef Nasser', 'Sara Mansour', 'Karim Aziz', 'Noor Khalil', 'Tariq Saleh', 'Mira Fares'];
-    const rows = names.map((n, i) => ({ id: `sim${i}`, name: n, avatar: i % 2 ? 'girl' : 'boy', pct: 31.4 - i * 3.3, delta: i % 3 ? 0.6 : -0.4, simulated: true, tier: ['master', 'diamond', 'platinum', 'platinum', 'gold', 'gold', 'gold', 'silver'][i] }));
-    rows.splice(4, 0, { id: 'me', name: 'Ahmed', avatar: 'boy', pct: 18.9, delta: 0, simulated: false, you: true });
+    const usd = [812450, 604210, 318900, 84200, 61750, 43980, 27400, 12650];
+    const rows = names.map((n, i) => ({ id: `sim${i}`, name: n, avatar: i % 2 ? 'girl' : 'boy', usd: usd[i], delta: i % 3 ? 900 : -400, simulated: true, tier: ['master', 'diamond', 'platinum', 'platinum', 'gold', 'gold', 'gold', 'silver'][i] }));
+    rows.splice(5, 0, { id: 'me', name: 'Ahmed', avatar: 'boy', usd: 52340.5, delta: 0, simulated: false, you: true });
     rows.forEach((r, i) => { r.rank = i + 1; });
-    return { week: '2026-W39', rows, me: rows[4], total: rows.length, has_simulated: true };
+    return { week: '2026-W39', rows, me: rows[5], total: rows.length, has_simulated: true };
   }
   return request('GET', `/api/leaderboard?init_data=${encodeURIComponent(initData)}`);
 }

@@ -937,24 +937,50 @@ ok("مسار صورة غير صالح → 404", c.get("/api/share/img/..%2Fmain.
 DB.store["users"]["42"]["share_quota"] = {time.strftime("%Y-%m-%d", time.gmtime()): 30}
 ok("حد يومي للمشاركات", c.post("/api/share/create", json={"init_data": init_data(), "story": JPG, "post": JPG}).status_code == 429)
 
-# ═════════ 25) ترتيب الأسبوع ═════════
+# ═════════ 25) ترتيب الأسبوع (بالدولار) ═════════
 reset()
-add_user(42, status="approved", nickname="Ahmed Ali", avatar="boy", report={"weekly_growth_pct": 12.5})
-add_user(43, status="approved", nickname="Sara", report={"weekly_growth_pct": 30.0})
+add_user(42, status="approved", nickname="Ahmed Ali", avatar="boy", report={"weekly_pnl": 1250.5}, live={"currency": "USD"})
+add_user(43, status="approved", nickname="Sara", report={"weekly_pnl": 300000.0}, live={"currency": "USC"})  # سنت → 3000$
 add_user(44, status="approved", nickname="NoData")
-DB.store["config"] = {"settings": {"leaderboard_sim": False}}
+DB.store["config"] = {"leaderboard": {"enabled": False}}
 lb = c.get("/api/leaderboard", params={"init_data": init_data()}).json()
-ok("المستخدمون الحقيقيون فقط وترتيب فعلي", [r["name"] for r in lb["rows"]] == ["Sara", "Ahmed"] and lb["me"]["rank"] == 2 and not lb["has_simulated"])
-DB.store["config"] = {"settings": {"leaderboard_sim": True, "leaderboard_sim_count": 12}}
+ok("حقيقي فقط بالدولار (حساب السنت ÷100)", [(r["name"], r["usd"]) for r in lb["rows"]] == [("Sara", 3000.0), ("Ahmed", 1250.5)] and lb["me"]["rank"] == 2)
+DB.store["config"] = {"leaderboard": {"enabled": True, "count": 12, "elite_count": 3}}
 lb = c.get("/api/leaderboard", params={"init_data": init_data()}).json()
 sims = [r for r in lb["rows"] if r["simulated"]]
-ok("منافسو المحاكاة معلّمون simulated=true بأسماء وصور", lb["total"] == 14 and len(sims) == 12 and all(r["name"] and r["avatar"] in ("boy", "girl") for r in sims))
-ok("ترتيب المستخدم محسوب بين الجميع", lb["me"]["rank"] == 1 + sum(1 for r in lb["rows"] if r["pct"] > 12.5))
-before = {b["id"]: b["pct"] for b in DB.store["leaderboard"]["sim"]["bots"]}
-leaderboard.tick(DB, 12, rng=__import__("random").Random(3))
-after = {b["id"]: b["pct"] for b in DB.store["leaderboard"]["sim"]["bots"]}
-ok("السباق: الأرقام تتحرك كل دورة", before != after)
-leaderboard.tick(DB, 12, now=time.time() + 8 * 86400)
-ok("تصفير أسبوعي", all(b["pct"] < 3 for b in DB.store["leaderboard"]["sim"]["bots"]))
+ok("النخبة فوق 250 ألف دولار وتتصدر", len(sims) == 12 and all(r["usd"] >= 250000 for r in lb["rows"][:3]) and all(r["simulated"] for r in lb["rows"][:3]))
+ok("ترتيب المستخدم محسوب بين الجميع", lb["me"]["rank"] == 1 + sum(1 for r in lb["rows"] if r["usd"] > 1250.5))
+cfg = leaderboard.get_config(DB)
+before = {b["id"]: b["usd"] for b in DB.store["leaderboard"]["sim"]["bots"]}
+leaderboard.tick(DB, cfg, rng=__import__("random").Random(3))
+ok("السباق: الأرباح تتحرك كل دورة", before != {b["id"]: b["usd"] for b in DB.store["leaderboard"]["sim"]["bots"]})
+ok("أسماء وصور من الإعدادات", DB.store["leaderboard"]["sim"]["bots"][0]["name"] == cfg["profiles"][0]["name"])
+
+W({"message": {"chat": {"id": 555, "type": "private"}, "from": {"id": 555}, "text": "/admin"}})
+txt = CALLS[-1][1]["text"]
+c.post("/api/admin/verify", json={"token": txt.split("token=")[1].split("\n")[0].strip(), "code": txt.split("<code>")[1].split("</code>")[0]})
+g = c.get("/api/admin/leaderboard").json()
+ok("الأدمن: استيراد الأسماء الحالية", len(g["default_profiles"]) == 20 and g["profiles"][0]["name"])
+r = c.put("/api/admin/leaderboard", json={"count": 2, "elite_count": 1, "elite_min": 400000, "elite_max": 500000,
+                                          "profiles": [{"name": "Nour", "avatar": "girl", "tier": "master"}, {"name": "Ali", "avatar": "boy"}]})
+ok("الأدمن: حفظ الأسماء والنطاقات", r.status_code == 200 and [p_["name"] for p_ in r.json()["profiles"]] == ["Nour", "Ali"])
+ok("نطاق غير منطقي مرفوض", c.put("/api/admin/leaderboard", json={"base_min": 9, "base_max": 1}).status_code == 422)
+lb = c.get("/api/leaderboard", params={"init_data": init_data()}).json()
+sims = [r for r in lb["rows"] if r["simulated"]]
+ok("تغيير الإعدادات يطبَّق فورًا", sorted(r["name"] for r in sims) == ["Ali", "Nour"] and max(r["usd"] for r in sims) >= 400000)
+c.post("/api/admin/logout")
+
+# ═════════ 26) صفحة "انشر الآن" لكل منصة ═════════
+reset(); add_user(42, referral_code="ABC123")
+r = c.post("/api/share/create", json={"init_data": init_data(), "story": JPG, "post": JPG, "caption": "عام",
+                                      "captions": {"instagram": "IG <script>x</script> #AWRobot", "facebook": "FB نص", "evil": "x"}}).json()
+path = r["page_url"].replace("https://example.test", "")
+ig = c.get(path, params={"to": "instagram"}).text
+ok("صفحة إنستغرام: صورة القصة + نص المنصة + زر نشر", "_story.jpg" in ig and "IG <\\/script>" not in ig and "#AWRobot" in ig and "navigator.share" in ig and 'id="go"' in ig)
+ok("النص داخل JS مؤمّن من </script>", "<\\/script>" in ig and "<script>x</script>" not in ig)
+fb = c.get(path, params={"to": "facebook", "lang": "en"}).text
+ok("صفحة فيسبوك: صورة المنشور + رابط sharer احتياطي", "_post.jpg" in fb and "facebook.com/sharer" in fb and "Post to Facebook now" in fb)
+ok("منصة غير معروفة → صفحة المعاينة", "og:image" in c.get(path, params={"to": "evil"}).text)
+ok("لا تُخزَّن منصات غير معروفة", "evil" not in DB.store["shares"][r["id"]]["captions"])
 
 print("\nALL BACKEND CHECKS PASSED")

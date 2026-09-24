@@ -55,6 +55,8 @@ export const api = {
   updatePackage: (id, patch) => request(`/packages/${id}`, { method: "PUT", body: JSON.stringify(patch) }),
   deletePackage: (id) => request(`/packages/${id}`, { method: "DELETE" }),
   seedPackages: () => request("/packages/seed", { method: "POST" }),
+  leaderboard: () => request("/leaderboard"),
+  saveLeaderboard: (patch) => request("/leaderboard", { method: "PUT", body: JSON.stringify(patch) }),
   // المكافآت والكوبونات
   rewardsConfig: () => request("/rewards/config"),
   saveRewardsConfig: (patch) => request("/rewards/config", { method: "PUT", body: JSON.stringify(patch) }),

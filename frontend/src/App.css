@@ -2661,7 +2661,8 @@ html[lang='ar'] .btn.small {
   font-family: var(--font-display);
   font-weight: 700;
   color: var(--ok);
-  font-size: 15px;
+  font-size: 14px;
+  white-space: nowrap;
 }
 
 .pod-base {
@@ -2752,10 +2753,117 @@ html[lang='ar'] .btn.small {
 
 .lb-sim {
   flex: none;
-  padding: 1px 6px;
+  width: 17px;
+  height: 17px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(106, 169, 255, 0.14);
+  color: #6aa9ff;
+}
+
+.lb-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pod-pct,
+.lb-pct {
+  font-variant-numeric: tabular-nums;
+}
+
+.cap-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin-bottom: 10px;
+  scrollbar-width: none;
+}
+
+.cap-tabs button {
+  flex: none;
+  padding: 6px 12px;
   border: 1px solid var(--line-dim);
   border-radius: 999px;
+  background: none;
   color: var(--ash);
-  font-size: 10px;
+  font-size: 12.5px;
   font-weight: 600;
+  cursor: pointer;
+}
+
+.cap-tabs button.on {
+  border-color: var(--ember);
+  color: var(--ember);
+  background: var(--fill);
+}
+
+/* ─────────── سجل الفواتير (بطاقات متجاوبة) ─────────── */
+.bill-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bill-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-dim);
+  border-radius: 6px;
+  background: var(--fill);
+}
+
+.bill-top,
+.bill-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.bill-plan {
+  font-family: var(--font-display);
+  font-size: 16px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bill-amount {
+  flex: none;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 17px;
+}
+
+.bill-meta {
+  color: var(--ash);
+  font-size: 13px;
+}
+
+.bill-tx {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-dim);
+  font-size: 12px;
+}
+
+.bill-tx code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ash);
+  text-align: end;
 }
