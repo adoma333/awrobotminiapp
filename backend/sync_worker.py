@@ -82,7 +82,8 @@ ACCOUNT_KEYS = (
 DEAL_KEYS = ("ticket", "time", "type", "entry", "profit", "commission", "swap", "fee")
 
 
-STATS_VERSION = 2  # رفع الرقم يعيد قراءة السجل كاملًا مرة واحدة لكل حساب
+STATS_VERSION = 3  # رفع الرقم يعيد قراءة السجل كاملًا مرة واحدة لكل حساب (3: سلسلة الربح اليومي للرسوم)
+SERIES_DAYS = 120  # أيام محفوظة في سلسلة الربح اليومي
 
 
 def empty_stats():
@@ -97,6 +98,7 @@ def empty_stats():
         "best_trade": 0.0, "worst_trade": 0.0,
         "pnl_cum": 0.0, "pnl_peak": 0.0, "max_dd": 0.0,  # منحنى الأرباح المحققة لحساب أقصى تراجع
         "trade_days": [],  # آخر أيام فيها تداول (لمكافأة 7 أيام متتالية)
+        "daily": {},  # ربح/خسارة كل يوم {YYYY-MM-DD: pnl} لرسوم التحليلات
     }
 
 
@@ -122,6 +124,7 @@ def apply_deals(stats, deals, tz, now_ts):
     s = stats_defaults(stats)
     s["seen"] = list(s["seen"])
     trade_days = set(s["trade_days"])
+    daily = dict(s["daily"])
     today_key, week_key, month_key = period_keys(now_ts, tz)
     if s["day_key"] != today_key:  # يوم جديد: نصفّر عدّادات اليوم
         s.update(day_key=today_key, day_pnl=0.0, day_wins=0, day_losses=0)
@@ -144,6 +147,7 @@ def apply_deals(stats, deals, tz, now_ts):
         elif d["type"] in TRADE_TYPES:
             dk, wk, mk = period_keys(t, tz)
             trade_days.add(dk)
+            daily[dk] = daily.get(dk, 0.0) + amount
             is_today = dk == today_key
             s["trading_pnl"] += amount
             if is_today:
@@ -174,6 +178,7 @@ def apply_deals(stats, deals, tz, now_ts):
         else:
             s["seen"].append(ticket)
     s["trade_days"] = sorted(trade_days)[-30:]
+    s["daily"] = {k: round(daily[k], 2) for k in sorted(daily)[-SERIES_DAYS:]}
     return s
 
 
@@ -217,6 +222,7 @@ def build_report(acc, stats):
         # تقريبي: من منحنى الصفقات المغلقة (لا يشمل الأرباح العائمة)
         "max_drawdown": r2(stats["max_dd"]),
         "max_drawdown_pct": _pct(stats["max_dd"], baseline + stats["pnl_peak"]),
+        "series": [{"d": k, "pnl": v} for k, v in sorted((stats.get("daily") or {}).items())],
     }
 
 

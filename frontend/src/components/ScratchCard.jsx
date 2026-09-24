@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { claimScratch, openSealedPrize, revealScratch } from '../api';
 import { haptic } from '../telegram';
 import { prizeIcon, prizeLabel } from '../rewards';
+import congrats from '../assets/icons/congrats.gif';
 
 const REVEAL_AT = 0.5; // نسبة المساحة المكشوفة التي تُطلق الاستلام
 const BRUSH = 38;
@@ -169,7 +170,8 @@ export default function ScratchCard({ t, cardId, onRevealed, onNeedPhone }) {
       <div className="scratch-prize" aria-live="polite">
         {prize ? (
           <>
-            <span className="scratch-icon">{prizeIcon(prize.type)}</span>
+            <img className="scratch-icon" src={prizeIcon(prize.type)} alt="" />
+            {done && <img className="scratch-congrats" src={congrats} alt="" />}
             <strong>{prizeLabel(t, prize)}</strong>
             {done && <span className="muted">{t.rwYouWon}</span>}
           </>

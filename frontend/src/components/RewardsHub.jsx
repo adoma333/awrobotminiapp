@@ -3,6 +3,7 @@ import { getRewards, redeemReward } from '../api';
 import { haptic, requestContact } from '../telegram';
 import { CHECKOUT_TYPES, countdown, prizeIcon, prizeLabel } from '../rewards';
 import ScratchCard from './ScratchCard';
+import Icon from './Icon';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const STATUS = { active: 'rwActive', used: 'rwUsed', expired: 'rwExpired' };
@@ -130,7 +131,7 @@ export default function RewardsHub({ t, onBack, onUse, onRedeemed }) {
           <div className="rows">
             {cards.map((c) => (
               <button type="button" key={c.id} className="row row-link scratch-row" onClick={() => setActive(c.id)}>
-                <span className="row-label">🎟️ {t[`rwEvent_${c.event.split('_')[0]}`] || t.rwEvent_welcome}</span>
+                <span className="row-label row-icon"><Icon name="rewards" size={18} /> {t[`rwEvent_${c.event.split('_')[0]}`] || t.rwEvent_welcome}</span>
                 <span className="btn soft small"><span>{t.rwScratchCta}</span></span>
               </button>
             ))}
@@ -145,7 +146,7 @@ export default function RewardsHub({ t, onBack, onUse, onRedeemed }) {
           <div className="reward-list">
             {list.map((r) => (
               <article key={r.id} className={`reward is-${r.status}`}>
-                <span className="reward-icon">{prizeIcon(r.type)}</span>
+                <img className="reward-icon" src={prizeIcon(r.type)} alt="" />
                 <div className="reward-body">
                   <strong>{prizeLabel(t, r)}</strong>
                   <span className="muted">

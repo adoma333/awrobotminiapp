@@ -806,4 +806,59 @@ ok("ولا يُفعَّل مرتين", c.post("/api/rewards/redeem", json={"init
 
 ok("حالة النظام: زمن استجابة عالٍ = degraded", main._timed_status(time.time() - 5)["status"] == "degraded" and main._timed_status(time.time())["status"] == "up")
 
+# ═════════ 19) التحليلات والإحالة ═════════
+reset(); add_user(1, referral_code="R1")
+add_user(10, referred_by="1", trial_checked=True, referral_reward_granted=True)
+add_user(11, referred_by="1", status="approved", trial_checked=True)
+add_user(12, referred_by="1")
+add_user(13, referred_by="2", trial_checked=True)
+a = c.get("/api/analytics", params={"init_data": init_data(1)}).json()["referrals"]
+ok("إحصاءات الإحالة: مدعوون/ناجحة/دفعوا/تحويل", a == {"invited": 3, "linked": 2, "paid": 1, "conversion_pct": 66.7})
+ok("بلا إحالات: معدل التحويل None", c.get("/api/analytics", params={"init_data": init_data(99)}).json()["referrals"]["conversion_pct"] is None)
+
+st = sync_worker.apply_deals(sync_worker.empty_stats(), [
+    {"ticket": 1, "time": 1_758_000_000, "type": 0, "entry": 1, "profit": 10.0, "commission": -1.0, "swap": 0.0, "fee": 0.0},
+    {"ticket": 2, "time": 1_758_000_500, "type": 1, "entry": 1, "profit": -4.0, "commission": 0.0, "swap": 0.0, "fee": 0.0},
+    {"ticket": 3, "time": 1_758_090_000, "type": 0, "entry": 1, "profit": 7.5, "commission": 0.0, "swap": 0.0, "fee": 0.0},
+], __import__("zoneinfo").ZoneInfo("UTC"), 1_758_100_000)
+rep = sync_worker.build_report({"balance": 1000.0}, st)
+ok("سلسلة الربح اليومي للرسوم", rep["series"] == [{"d": "2025-09-16", "pnl": 5.0}, {"d": "2025-09-17", "pnl": 7.5}])
+
+# ═════════ 20) التحكم بالمكافآت من لوحة الأدمن ═════════
+reset()
+W({"message": {"chat": {"id": 555, "type": "private"}, "from": {"id": 555}, "text": "/admin"}})
+txt = CALLS[-1][1]["text"]
+c.post("/api/admin/verify", json={"token": txt.split("token=")[1].split("\n")[0].strip(), "code": txt.split("<code>")[1].split("</code>")[0]})
+cfg = c.get("/api/admin/rewards/config").json()
+ok("الإعدادات الافتراضية للمكافآت", cfg["enabled"] and cfg["ttl_hours"] == 24 and len(cfg["prizes"]) == len(rewards.PRIZE_TABLE))
+ok("جدول بلا جائزة مفعّلة مرفوض", c.put("/api/admin/rewards/config", json={"prizes": [{"type": "discount", "value": 10, "weight": 0}]}).status_code == 422)
+ok("نوع جائزة مجهول مرفوض", c.put("/api/admin/rewards/config", json={"prizes": [{"type": "cash", "value": 1, "weight": 1}]}).status_code == 422)
+ok("صلاحية خارج 1..72 مرفوضة", c.put("/api/admin/rewards/config", json={"ttl_hours": 100}).status_code == 422)
+r = c.put("/api/admin/rewards/config", json={"ttl_hours": 6, "require_phone": False, "triggers": {"welcome": False},
+                                             "prizes": [{"type": "discount", "value": 35, "weight": 5}, {"type": "free_days", "value": 2, "weight": 0}]})
+ok("حفظ إعدادات الأدمن", r.status_code == 200 and r.json()["ttl_hours"] == 6 and r.json()["triggers"] == {"welcome": False, "referral": True, "streak7": True})
+add_user(42)
+ok("محفز معطّل لا يمنح بطاقة", c.post("/api/onboarding/complete", json={"init_data": init_data()}).json()["card_id"] is None)
+rewards.grant_card(DB, 42, "referral_9")
+r = c.post("/api/scratch/claim", json={"init_data": init_data()}).json()
+ok("بلا اشتراط الهاتف + الجدول المخصص يُستخدم", DB.store["scratch_cards"]["42_referral_9"]["prize"] == {"type": "discount", "value": 35})
+rv = c.post("/api/scratch/reveal", json={"init_data": init_data(), "card_id": "42_referral_9"}).json()
+ok("الصلاحية من إعدادات الأدمن (6 ساعات)", abs(rv["expires_at"] - time.time() - 6 * 3600) < 5)
+r = c.post("/api/admin/rewards/grant", json={"uid": "42", "type": "discount", "value": 15, "hours": 3})
+cid = r.json()["card_id"]
+ok("كوبون يدوي جاهز للاستخدام + إشعار", DB.store["scratch_cards"][cid]["status"] == "revealed" and DB.store["scratch_cards"][cid]["prize"] == {"type": "discount", "value": 15} and any(p.get("chat_id") == "42" for m, p in CALLS if m == "sendMessage"))
+ok("بطاقة خدش يدوية حتى مع محفز معطّل", c.post("/api/admin/rewards/grant", json={"uid": "42", "notify": False}).json()["card_id"].startswith("42_admin_"))
+ok("كوبون بلا قيمة مرفوض", c.post("/api/admin/rewards/grant", json={"uid": "42", "type": "discount"}).status_code == 422)
+before = DB.store["scratch_cards"][cid]["expires_at"]
+c.post(f"/api/admin/rewards/{cid}/extend", json={"hours": 24})
+ok("تمديد صلاحية كوبون", abs(DB.store["scratch_cards"][cid]["expires_at"] - before - 24 * 3600) < 2)
+lst = c.get("/api/admin/rewards/cards", params={"uid": "42"}).json()
+ok("قائمة البطاقات والإحصاءات", lst["stats"]["total"] == 3 and lst["stats"]["active"] == 2 and lst["stats"]["new"] == 1)
+c.post(f"/api/admin/rewards/{cid}/revoke"); add_package("p1")
+ok("إلغاء كوبون يمنع استخدامه", c.post("/api/payments/create", json={"init_data": init_data(), "package_id": "p1", "reward_id": cid}).status_code == 409)
+c.put("/api/admin/rewards/config", json={"enabled": False})
+ok("تعطيل النظام كليًا", c.post("/api/scratch/claim", json={"init_data": init_data()}).json()["detail"] == "rewards_disabled")
+c.post("/api/admin/logout")
+ok("مسارات المكافآت تتطلب جلسة أدمن", c.get("/api/admin/rewards/config").status_code == 401)
+
 print("\nALL BACKEND CHECKS PASSED")

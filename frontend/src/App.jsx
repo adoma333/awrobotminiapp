@@ -18,7 +18,8 @@ import BillingHistory from './components/BillingHistory';
 import RewardsHub from './components/RewardsHub';
 import Onboarding from './components/Onboarding';
 import BottomNav from './components/BottomNav';
-import FeedbackButton from './components/FeedbackButton';
+import Analytics from './components/Analytics';
+import Referral from './components/Referral';
 import NetworkBanner from './components/NetworkBanner';
 import { AppSkeleton } from './components/Skeleton';
 
@@ -45,7 +46,9 @@ export default function App() {
   phaseRef.current = phase;
 
   const t = messages[lang];
-  const steps = useMemo(() => ['lang', 'profile', 'mt5'], []);
+  // الاسم والصورة والنوع تُطلب مرة واحدة فقط (أول فتح): بعد فكّ الربط يعود مباشرة لربط الحساب
+  const [returning, setReturning] = useState(false);
+  const steps = useMemo(() => (returning ? ['mt5'] : ['lang', 'profile', 'mt5']), [returning]);
   const sub = info.subscription || null;
 
   useEffect(() => {
@@ -76,7 +79,11 @@ export default function App() {
         else if (s.status === 'rejected' || s.status === 'pending') setPhase('status');
         else {
           // none / unlinked: يبدأ رحلة الربط (الدفع يأتي بعد الربط)
-          if (!localStorage.getItem(ONBOARD_KEY)) setShowOnboarding(true);
+          if (s.nickname) {
+            setProfile({ nickname: s.nickname, avatar: s.avatar || 'boy' });
+            setReturning(true);
+            setStep('mt5');
+          } else if (!localStorage.getItem(ONBOARD_KEY)) setShowOnboarding(true);
           setPhase('flow');
         }
       })
@@ -179,6 +186,7 @@ export default function App() {
   async function afterUnlink() {
     const s = await refreshStatus();
     if (s.nickname) setProfile({ nickname: s.nickname, avatar: s.avatar || 'boy' });
+    setReturning(Boolean(s.nickname));
     setMt5(EMPTY_MT5);
     setErrorCode('');
     setStep('mt5');
@@ -189,6 +197,7 @@ export default function App() {
   function retry() {
     setErrorCode('');
     if (info.nickname) setProfile({ nickname: info.nickname, avatar: info.avatar || 'boy' });
+    setReturning(Boolean(info.nickname));
     setStep('mt5');
     setPhase('flow');
   }
@@ -200,9 +209,16 @@ export default function App() {
   return (
     <main className="app" dir={t.dir}>
       <NetworkBanner t={t} />
-      <header className={`brand ${isHero ? 'is-hero' : ''}`}>
-        <img src={logo} alt="AW" />
-      </header>
+      {isHero ? (
+        <header className="brand is-hero">
+          <img src={logo} alt="AW" />
+        </header>
+      ) : (
+        <header className="app-bar">
+          <img src={logo} alt="" />
+          <span>AW Robot</span>
+        </header>
+      )}
 
       {phase === 'loading' && <AppSkeleton />}
 
@@ -221,7 +237,7 @@ export default function App() {
 
       {phase === 'flow' && !showOnboarding && (
         <>
-          <Stepper step={idx + 1} total={steps.length} />
+          {steps.length > 1 && <Stepper step={idx + 1} total={steps.length} />}
           <div key={step} className="stage">
             {step === 'lang' && <LanguageStep t={t} lang={lang} setLang={setLang} onNext={() => go(1)} />}
             {step === 'profile' && (
@@ -235,7 +251,7 @@ export default function App() {
                 submitting={submitting}
                 errorCode={errorCode}
                 onSubmit={submit}
-                onBack={() => go(-1)}
+                onBack={idx > 0 ? () => go(-1) : undefined}
               />
             )}
           </div>
@@ -250,7 +266,6 @@ export default function App() {
 
       {phase === 'dashboard' && (
         <div className="stage has-bottom-nav">
-          {view === 'main' && <FeedbackButton t={t} />}
           {view === 'terms' || view === 'privacy' ? (
             <LegalPage t={t} lang={lang} page={view} onBack={() => setView('settings')} />
           ) : view === 'faq' ? (
@@ -274,6 +289,10 @@ export default function App() {
               onBilling={() => setView('billing')}
               onRewards={() => setView('rewards')}
             />
+          ) : view === 'analytics' ? (
+            <Analytics t={t} lang={lang} data={info} onReferral={() => setView('referral')} />
+          ) : view === 'referral' ? (
+            <Referral t={t} lang={lang} data={info} />
           ) : view === 'rewards' ? (
             <RewardsHub
               t={t}

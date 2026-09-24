@@ -131,3 +131,31 @@ table.list tbody tr:hover { background: var(--surface); }
   }
   .mobile-nav button.active { color: var(--accent); }
 }
+
+/* ─────────── صفحات التحكم (المكافآت، الباقات، الإعدادات) ─────────── */
+.nav-sep { height: 1px; background: var(--border); margin: 8px 0; }
+.panel {
+  display: flex; flex-direction: column; gap: 10px;
+  margin-bottom: 16px; padding: 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.panel h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.panel h3 { margin: 6px 0 0; font-size: 14px; font-weight: 600; color: var(--muted); }
+.panel .topbar { margin-bottom: 0; }
+.muted { color: var(--muted); font-size: 13px; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+.check input { width: 16px; height: 16px; accent-color: var(--accent); }
+.check.danger { color: var(--bad); }
+.field-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 14px; }
+.grid-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.grid-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.grid-form label input, .grid-form label select { color: var(--text); }
+input.narrow { width: 96px; }
+input.narrow-wide { width: 200px; }
+.row-gap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+table.list td select { width: auto; }
+@media (max-width: 860px) {
+  table.list.keep { display: table; }
+  .mobile-nav { overflow-x: auto; justify-content: flex-start; }
+  .mobile-nav button { flex: none; padding: 4px 12px; white-space: nowrap; }
+}

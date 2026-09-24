@@ -1547,8 +1547,91 @@ def rewards_hub(init_data: str):
     d = (snap.to_dict() or {}) if snap.exists else {}
     out = rewards.list_rewards(db, user["id"])
     out["phone_verified"] = bool(d.get("phone_verified") or user.get("is_premium"))
-    out["ttl_hours"] = rewards.REWARD_TTL_HOURS
+    out["ttl_hours"] = rewards.get_config(db)["ttl_hours"]
     return out
+
+
+# ═══════════════════════════ التحليلات والإحالة ═══════════════════════════
+@app.get("/api/analytics")
+def analytics(init_data: str):
+    """إحصاءات الإحالة للمستخدم: المدعوون، من ربط حسابه (إحالة ناجحة)، من دفع، ومعدل التحويل."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    user = verify_init_data(init_data)
+    invited = linked = paid = 0
+    for doc in db.collection("users").where(filter=FieldFilter("referred_by", "==", str(user["id"]))).stream():
+        d = doc.to_dict() or {}
+        invited += 1
+        linked += bool(d.get("trial_checked") or d.get("status") == "approved")  # trial_checked = ربط مرة على الأقل
+        paid += bool(d.get("referral_reward_granted"))
+    return {
+        "referrals": {
+            "invited": invited,
+            "linked": linked,
+            "paid": paid,
+            "conversion_pct": round(linked / invited * 100, 1) if invited else None,
+        }
+    }
+
+
+# ═══════════════════════════ لوحة الأدمن: المكافآت والكوبونات ═══════════════════════════
+@app.get("/api/admin/rewards/config")
+def admin_rewards_config(admin_id: int = Depends(get_current_admin)):
+    return rewards.get_config(db)
+
+
+@app.put("/api/admin/rewards/config")
+def admin_rewards_update(patch: dict, admin_id: int = Depends(get_current_admin)):
+    try:
+        clean = rewards.clean_config(patch)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(422, str(e))
+    db.collection("config").document("rewards").set(clean, merge=True)
+    return rewards.get_config(db)
+
+
+@app.get("/api/admin/rewards/cards")
+def admin_rewards_cards(uid: str | None = None, admin_id: int = Depends(get_current_admin)):
+    return rewards.admin_list_cards(db, uid=uid or None)
+
+
+class AdminGrant(BaseModel):
+    uid: str = Field(pattern=r"^\d{1,15}$")
+    type: str | None = None   # فارغ = بطاقة خدش عادية؛ وإلا كوبون جاهز بهذا النوع
+    value: float | None = None
+    hours: int = 24
+    notify: bool = True
+
+
+@app.post("/api/admin/rewards/grant")
+def admin_rewards_grant(body: AdminGrant, admin_id: int = Depends(get_current_admin)):
+    if body.type:
+        if not body.value or body.value <= 0:
+            raise HTTPException(422, "value_required")
+        value = int(body.value) if float(body.value).is_integer() else body.value
+        card_id = _reward_http(rewards.admin_issue_coupon, db, body.uid, body.type, value, body.hours)
+        text = "🎁 وصلتك مكافأة جديدة من AW Robot! افتح التطبيق ← المكافآت."
+    else:
+        card_id = rewards.grant_card(db, body.uid, f"admin_{int(time.time() * 1000)}", force=True)
+        text = "🎟️ وصلتك بطاقة خدش جديدة! افتح التطبيق وامسحها."
+    if body.notify:
+        tg("sendMessage", chat_id=body.uid, text=text)
+    return {"ok": True, "card_id": card_id}
+
+
+class AdminExtend(BaseModel):
+    hours: int = Field(ge=1, le=720)
+
+
+@app.post("/api/admin/rewards/{card_id}/revoke")
+def admin_rewards_revoke(card_id: str, admin_id: int = Depends(get_current_admin)):
+    _reward_http(rewards.admin_revoke, db, card_id)
+    return {"ok": True}
+
+
+@app.post("/api/admin/rewards/{card_id}/extend")
+def admin_rewards_extend(card_id: str, body: AdminExtend, admin_id: int = Depends(get_current_admin)):
+    return {"ok": True, "expires_at": _reward_http(rewards.admin_extend, db, card_id, body.hours)}
 
 
 @app.post("/api/rewards/redeem")

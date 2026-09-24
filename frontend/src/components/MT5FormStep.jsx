@@ -76,10 +76,12 @@ export default function MT5FormStep({ t, mt5, setMt5, submitting, errorCode, onS
       )}
 
       <div className="actions">
-        <button type="button" className="btn ghost" onClick={onBack}>
-          <svg className="chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
-          <span>{t.back}</span>
-        </button>
+        {onBack && (
+          <button type="button" className="btn ghost" onClick={onBack}>
+            <svg className="chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
+            <span>{t.back}</span>
+          </button>
+        )}
         <button type="button" className="btn primary" disabled={!valid} onClick={onSubmit}>
           <span>{t.submit}</span>
         </button>
