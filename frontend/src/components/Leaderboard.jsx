@@ -3,7 +3,14 @@ import { getLeaderboard } from '../api';
 import { fill } from '../i18n';
 import { TIERS } from '../tiers';
 import Avatar from './Avatar';
-import { fmt } from './Stats';
+import Icon from './Icon';
+
+const usd = (n) => `$${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Math.abs(n))}`;
+const signed = (n) => `${n < 0 ? '−' : '+'}${usd(n)}`;
+// علامة صغيرة للمنافس المحاكاة (مع سطر توضيحي أسفل القائمة)
+const SimMark = ({ t }) => (
+  <span className="lb-sim" title={t.lbSimTitle} aria-label={t.lbSimTitle}><Icon name="bolt" size={11} /></span>
+);
 
 const tierImg = (key) => TIERS.find((x) => x.key === key)?.img;
 
@@ -14,11 +21,11 @@ function Row({ t, r }) {
       <Avatar kind={r.avatar} size={34} />
       <span className="lb-name">
         <bdi>{r.you ? t.lbYou : r.name}</bdi>
-        {r.simulated && <span className="lb-sim">{t.lbSim}</span>}
+        {r.simulated && <SimMark t={t} />}
       </span>
       {r.tier && <img className="lb-tier" src={tierImg(r.tier)} alt="" />}
-      <span className={`lb-pct ${r.pct >= 0 ? 'up' : 'down'}`} dir="ltr">
-        {r.delta > 0 ? '▲' : r.delta < 0 ? '▼' : ''} {r.pct > 0 ? '+' : ''}{fmt(r.pct)}%
+      <span className={`lb-pct ${r.usd >= 0 ? 'up' : 'down'}`} dir="ltr">
+        {r.delta > 0 ? '▲' : r.delta < 0 ? '▼' : ''} {signed(r.usd)}
       </span>
     </li>
   );
@@ -42,10 +49,7 @@ export default function Leaderboard({ t }) {
 
   return (
     <div className="section leaderboard">
-      <div className="section-head">
-        <h2>{t.lbTitle}</h2>
-        <span className="tag live-tag">● {t.lbLive}</span>
-      </div>
+      <h2>{t.lbTitle}</h2>
       {lb.me && (
         <p className="sub">{fill(t.lbYourRank, { rank: lb.me.rank, total: lb.total })}</p>
       )}
@@ -56,8 +60,8 @@ export default function Leaderboard({ t }) {
             <span className="pod-crown">{r.rank === 1 ? '👑' : r.rank}</span>
             <Avatar kind={r.avatar} size={r.rank === 1 ? 64 : 52} />
             <b><bdi>{r.you ? t.lbYou : r.name.split(' ')[0]}</bdi></b>
-            <span className="pod-pct" dir="ltr">+{fmt(r.pct)}%</span>
-            {r.simulated && <span className="lb-sim">{t.lbSim}</span>}
+            <span className="pod-pct" dir="ltr">{signed(r.usd)}</span>
+            {r.simulated && <SimMark t={t} />}
             <span className="pod-base" />
           </div>
         ))}
@@ -71,7 +75,9 @@ export default function Leaderboard({ t }) {
           <Row t={t} r={lb.me} />
         </ol>
       )}
-      {lb.has_simulated && <p className="muted small-note">{t.lbSimNote}</p>}
+      {lb.has_simulated && (
+        <p className="muted small-note lb-legend"><SimMark t={t} /> {t.lbSimNote}</p>
+      )}
     </div>
   );
 }

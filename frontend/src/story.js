@@ -139,18 +139,29 @@ export async function renderStory(s) {
   // رمز QR + كود الدعوة
   const qr = document.createElement('canvas');
   await QRCode.toCanvas(qr, s.link || s.code, { width: 300, margin: 1, color: { dark: '#000000', light: '#ffffff' } });
-  roundRect(ctx, W / 2 - 170, 1400, 340, 340, 30);
+  roundRect(ctx, W / 2 - 170, 1370, 340, 340, 30);
   ctx.fillStyle = '#fff';
   ctx.fill();
-  ctx.drawImage(qr, W / 2 - 150, 1420, 300, 300);
+  ctx.drawImage(qr, W / 2 - 150, 1390, 300, 300);
 
   ctx.fillStyle = '#8c8378';
   ctx.font = `600 38px ${FONT}`;
-  ctx.fillText(s.codeLabel, W / 2, 1800);
+  ctx.fillText(s.codeLabel, W / 2, 1752);
   ctx.fillStyle = '#ff8a00';
-  ctx.font = `700 62px ${DISPLAY}`;
+  ctx.font = `700 58px ${DISPLAY}`;
   ctx.direction = 'ltr';
-  ctx.fillText(s.code, W / 2, 1870);
+  ctx.fillText(s.code, W / 2, 1810);
+  // الرابط مطبوع على الصورة نفسها (القصة تُنشر بلا نص)
+  if (s.link) {
+    const short = s.link.replace(/^https?:\/\//, '');
+    ctx.font = `600 34px ${DISPLAY}`;
+    const tw = ctx.measureText(short).width + 56;
+    roundRect(ctx, (W - tw) / 2, 1838, tw, 52, 26);
+    ctx.fillStyle = 'rgba(255,138,0,0.14)';
+    ctx.fill();
+    ctx.fillStyle = '#f5efe8';
+    ctx.fillText(short, W / 2, 1875);
+  }
 
   return new Promise((resolve) => c.toBlob(resolve, 'image/jpeg', 0.9));
 }

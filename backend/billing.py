@@ -17,9 +17,6 @@ DEFAULT_SETTINGS = {
     "trial_enabled": False,
     "trial_days": 3,          # بين 3 و7
     "trial_max_lot": 0.01,    # 0 = لا تجربة للحسابات العادية (سنت فقط)
-    # ترتيب الأسبوع: منافسون محاكاة (بشارة "محاكاة" دائمًا) لتنشيط السباق
-    "leaderboard_sim": True,
-    "leaderboard_sim_count": 12,
 }
 
 _SETTINGS_DOC = ("config", "settings")

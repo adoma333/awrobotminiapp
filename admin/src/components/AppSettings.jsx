@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api";
+import LeaderboardSettings from "./LeaderboardSettings";
 
 /** الإعدادات العامة (config/settings): سياسة التسجيل، الرافعة، الإحالة، إيقاف التسجيل، والفترة التجريبية. */
 export default function AppSettings() {
@@ -62,14 +63,6 @@ export default function AppSettings() {
       </div>
 
       <div className="panel">
-        <h2>ترتيب أرباح الأسبوع</h2>
-        <label className="check"><input type="checkbox" checked={s.leaderboard_sim} onChange={(e) => set({ leaderboard_sim: e.target.checked })} /> إضافة منافسين محاكاة للسباق (تظهر دائمًا بشارة «محاكاة»)</label>
-        <div className="grid-form">
-          <label>عدد المنافسين المحاكاة (0–20)<input className="mono" type="number" min="0" max="20" value={s.leaderboard_sim_count} onChange={(e) => set({ leaderboard_sim_count: Math.max(0, Math.min(20, num(e.target.value))) })} /></label>
-        </div>
-      </div>
-
-      <div className="panel">
         <h2>الفترة التجريبية للتداول الآلي</h2>
         <label className="check"><input type="checkbox" checked={s.trial_enabled} onChange={(e) => set({ trial_enabled: e.target.checked })} /> منح فترة تجريبية عند أول ربط (حساب سنت أو لوت محدود)</label>
         <div className="grid-form">
@@ -77,6 +70,7 @@ export default function AppSettings() {
           <label>أقصى لوت للحسابات العادية (0 = سنت فقط)<input className="mono" type="number" min="0" step="0.01" value={s.trial_max_lot} onChange={(e) => set({ trial_max_lot: num(e.target.value) })} /></label>
         </div>
       </div>
+      <LeaderboardSettings />
     </>
   );
 }

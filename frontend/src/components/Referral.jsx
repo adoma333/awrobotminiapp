@@ -23,7 +23,8 @@ const toB64 = (blob) =>
     fr.readAsDataURL(blob);
   });
 
-const HASHTAGS = '#AWRobot #Forex #MT5 #Trading #TradingBot';
+const CAPTION_PLATFORMS = ['instagram', 'tiktok', 'facebook', 'x', 'whatsapp', 'telegram'];
+const CAPTION_LABEL = { instagram: 'Instagram', tiktok: 'TikTok', facebook: 'Facebook', x: 'X', whatsapp: 'WhatsApp' };
 
 /** صفحة الإحالة: مستوى المستخدم، كوده، بطاقة قصة 9:16 بنقرة، ونصوص جاهزة للمشاركة. */
 export default function Referral({ t, lang, data }) {
@@ -33,7 +34,7 @@ export default function Referral({ t, lang, data }) {
   const [share, setShare] = useState(null); // روابط عامة من الخادم { story_url, post_url, page_url }
   const [view, setView] = useState('story');
   const [busy, setBusy] = useState(false);
-  const [variant, setVariant] = useState(0);
+  const [capFor, setCapFor] = useState('instagram');
   const link = referralLink(data);
   const code = data.referral_code || '';
   const r = data.report || {};
@@ -51,11 +52,16 @@ export default function Referral({ t, lang, data }) {
   }, [media]);
 
   const growth = r.total_growth_pct;
-  const captions = useMemo(() => {
-    // الرابط في النص = صفحة المنشور (تُظهر الصورة والوصف كمعاينة) إن وُجدت، وإلا رابط الدعوة
-    const vars = { code, link: share?.page_url || link || '', growth: growth == null ? '' : `${growth > 0 ? '+' : ''}${fmt(growth)}%` };
-    return [t.capGrowth, t.capInvite, t.capShort].map((x) => `${fill(x, vars)}\n\n${HASHTAGS}`);
-  }, [t, code, link, growth, share]);
+  // نص مختلف لكل منصة (أسلوبها وطولها ووسومها). واتساب/تلجرام يستعملان صفحة المنشور لتظهر معاينة الصورة
+  const buildCaptions = (pageUrl) => {
+    const hook = growth != null && growth > 0 ? fill(t.hookGrowth, { growth: `+${fmt(growth)}%` }) : t.hookGeneric;
+    const win = r.win_rate == null ? '—' : `${fmt(r.win_rate, 1)}%`;
+    const base = { hook, win, code, link: link || '' };
+    const out = {};
+    for (const k of CAPTION_PLATFORMS) out[k] = fill(t[`cap_${k}`], { ...base, link: k === 'whatsapp' && pageUrl ? pageUrl : base.link });
+    return out;
+  };
+  const captions = useMemo(() => buildCaptions(share?.page_url), [t, code, link, growth, share, r.win_rate]);
 
   const storyData = () => ({
     dir: t.dir,
@@ -84,7 +90,7 @@ export default function Referral({ t, lang, data }) {
     setMedia(m);
     let sh = null;
     try {
-      sh = await createShare(await toB64(storyBlob), await toB64(postBlob), captions[variant]);
+      sh = await createShare(await toB64(storyBlob), await toB64(postBlob), captions.telegram, buildCaptions(null));
       setShare(sh);
     } catch {
       /* بلا روابط عامة: تبقى المشاركة المباشرة للصورة متاحة */
@@ -126,24 +132,29 @@ export default function Referral({ t, lang, data }) {
     notify(t.storySaved, 'success');
   }
 
-  const caption = captions[variant];
   const enc = encodeURIComponent;
+  // صفحة "انشر الآن" تُفتح في متصفح الهاتف: هناك تعمل نافذة المشاركة الأصلية بالصورة (إنستغرام/فيسبوك/تيك توك)
+  const hub = (sh, to) => openExternal(`${sh.page_url}?to=${to}&lang=${lang === 'en' ? 'en' : 'ar'}`);
+  const viaHub = (to, kind) => async ({ media: m, share: sh }) => {
+    if (sh?.page_url) {
+      await copyText(captions[to]);
+      hub(sh, to);
+    } else nativeShare(m, sh, kind, captions[to]);
+  };
   const targets = [
+    // قصة تلجرام: الصورة وحدها (الرابط مطبوع عليها)؛ ويضاف زر الرابط داخل القصة لمشتركي Premium
     { key: 'tgStory', label: t.shTgStory, img: tgIcon, story: true, go: ({ media: m, share: sh }) =>
-      (sh?.story_url && shareToStory(sh.story_url, caption, link ? { url: link, name: 'AW Robot' } : null)) || nativeShare(m, sh, 'story', caption) },
-    { key: 'instagram', label: 'Instagram', img: igIcon, go: ({ media: m, share: sh }) => nativeShare(m, sh, 'story', caption) },
-    { key: 'tiktok', label: 'TikTok', img: ttIcon, go: ({ media: m, share: sh }) => nativeShare(m, sh, 'story', caption) },
-    { key: 'facebook', label: 'Facebook', img: fbIcon, go: async ({ share: sh }) => {
-      await copyText(caption);
-      openExternal(`https://www.facebook.com/sharer/sharer.php?u=${enc(sh?.page_url || link)}`);
-      notify(t.shCaptionCopied, 'success');
-    } },
+      (sh?.story_url && shareToStory(sh.story_url, '', link ? { url: link, name: 'AW Robot' } : null)) || nativeShare(m, sh, 'story', '') },
+    { key: 'instagram', label: 'Instagram', img: igIcon, go: viaHub('instagram', 'story') },
+    { key: 'tiktok', label: 'TikTok', img: ttIcon, go: viaHub('tiktok', 'story') },
+    { key: 'facebook', label: 'Facebook', img: fbIcon, go: viaHub('facebook', 'post') },
     { key: 'x', label: 'X', img: xIcon, go: ({ share: sh }) =>
-      openExternal(`https://twitter.com/intent/tweet?text=${enc(fill(t.capShort, { code, link: '' }).trim())}&url=${enc(sh?.page_url || link)}&hashtags=AWRobot,Forex,MT5`) },
-    { key: 'whatsapp', label: 'WhatsApp', img: waIcon, go: () => openExternal(`https://wa.me/?text=${enc(caption)}`) },
+      openExternal(`https://twitter.com/intent/tweet?text=${enc(captions.x)}&url=${enc(sh?.page_url || link)}&hashtags=AWRobot,AITrading,Forex`) },
+    { key: 'whatsapp', label: 'WhatsApp', img: waIcon, go: ({ share: sh }) =>
+      openExternal(`https://wa.me/?text=${enc(buildCaptions(sh?.page_url).whatsapp)}`) },
     { key: 'telegram', label: t.shTgPost, img: tgIcon, go: ({ share: sh }) =>
-      openTelegramLink(`https://t.me/share/url?url=${enc(sh?.page_url || link)}&text=${enc(caption.replace(sh?.page_url || link || '', '').trim())}`) },
-    { key: 'more', label: t.shMore, icon: 'share', go: ({ media: m, share: sh }) => nativeShare(m, sh, 'post', caption) },
+      openTelegramLink(`https://t.me/share/url?url=${enc(sh?.page_url || link)}&text=${enc(captions.telegram)}`) },
+    { key: 'more', label: t.shMore, icon: 'share', go: ({ media: m, share: sh }) => nativeShare(m, sh, 'post', captions.facebook) },
   ];
 
   async function copy(text, msg) {
@@ -233,15 +244,15 @@ export default function Referral({ t, lang, data }) {
       <div className="section">
         <div className="section-head">
           <h2>{t.capTitle}</h2>
-          <div className="seg">
-            {captions.map((_, i) => (
-              <button key={i} type="button" className={variant === i ? 'on' : ''} onClick={() => setVariant(i)}>{i + 1}</button>
-            ))}
-          </div>
         </div>
-        <pre className="caption-box">{caption}</pre>
+        <div className="cap-tabs">
+          {CAPTION_PLATFORMS.map((k) => (
+            <button key={k} type="button" className={capFor === k ? 'on' : ''} onClick={() => setCapFor(k)}>{CAPTION_LABEL[k] || t.shTgPost}</button>
+          ))}
+        </div>
+        <pre className="caption-box">{captions[capFor]}</pre>
         <div className="actions inline">
-          <button type="button" className="btn soft small" onClick={() => copy(caption, t.copied)}>
+          <button type="button" className="btn soft small" onClick={() => copy(captions[capFor], t.copied)}>
             <Icon name="copy" size={16} />
             <span>{t.capCopy}</span>
           </button>
