@@ -10,6 +10,8 @@ const LABEL = {
 const STATUS_META = {
   up: { color: "#3ddc97", label: "يعمل" },
   degraded: { color: "#e5b84b", label: "بطيء" },
+  idle: { color: "#6aa9ff", label: "خامل (عند الحاجة)" },
+  unknown: { color: "#6b6459", label: "بانتظار أول فحص" },
   down: { color: "#ff6b5e", label: "متوقف" },
   not_configured: { color: "#6b6459", label: "غير مُهيّأ" },
 };
@@ -76,6 +78,9 @@ export default function SystemStatus() {
                   <span className="mono" style={{ display: "block", fontSize: 11, color: "var(--bad)" }}>
                     منقطع منذ {Math.round(svc.down_for_sec)}ث
                   </span>
+                )}
+                {svc.note && (
+                  <span style={{ display: "block", fontSize: 12, opacity: 0.75 }}>{svc.note}</span>
                 )}
                 {svc.error && (
                   <span className="mono" style={{ display: "block", fontSize: 11, color: "var(--bad)" }}>

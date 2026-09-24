@@ -861,4 +861,16 @@ ok("تعطيل النظام كليًا", c.post("/api/scratch/claim", json={"ini
 c.post("/api/admin/logout")
 ok("مسارات المكافآت تتطلب جلسة أدمن", c.get("/api/admin/rewards/config").status_code == 401)
 
+# ═════════ 21) حالة جسر المراقبة حين يكون منفذه مغلقًا ═════════
+units = {}
+main._unit_state = lambda u: units.get(u, "unknown")
+units.update({"mt5-monitor-bridge": "inactive", "aw-sync": "active"})
+ok("جسر مطفأ عمدًا وaw-sync يعمل = idle لا down", main._monitor_bridge_when_closed("refused")["status"] == "idle")
+units["aw-sync"] = "inactive"
+ok("aw-sync متوقف = down مع السبب", "aw-sync" in main._monitor_bridge_when_closed("refused")["error"])
+units.update({"mt5-monitor-bridge": "failed", "aw-sync": "active"})
+ok("خدمة الجسر failed = down", main._monitor_bridge_when_closed("refused")["status"] == "down")
+units["mt5-monitor-bridge"] = "activating"
+ok("قيد التشغيل = degraded", main._monitor_bridge_when_closed("refused")["status"] == "degraded")
+
 print("\nALL BACKEND CHECKS PASSED")

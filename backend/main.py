@@ -16,6 +16,7 @@ import math
 import os
 import re
 import socket
+import subprocess
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -1662,6 +1663,30 @@ def _timed_status(t0) -> dict:
     return {"status": "degraded" if ms > SYSTEM_DEGRADED_MS else "up", "latency_ms": ms}
 
 
+def _unit_state(unit: str) -> str:
+    """حالة خدمة systemd (active | inactive | failed | activating | unknown). لا تحتاج sudo."""
+    try:
+        out = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=5)
+        return (out.stdout or "").strip() or "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _monitor_bridge_when_closed(error: str) -> dict:
+    """منفذ جسر المراقبة مغلق: قد يكون خاملًا عمدًا (aw-sync يطفئه حين لا حساب مستحق) أو معطّلًا فعلًا."""
+    unit = _unit_state(os.getenv("BRIDGE_SERVICE", "mt5-monitor-bridge"))
+    sync = _unit_state("aw-sync")
+    if unit == "inactive" and sync == "active":
+        return {"status": "idle", "note": "خامل: يشغّله aw-sync تلقائيًا عند حلول دور أي حساب"}
+    if unit == "activating":
+        return {"status": "degraded", "note": "قيد التشغيل الآن"}
+    if unit == "inactive" and sync != "active":
+        return {"status": "down", "error": f"aw-sync غير فعّال ({sync}): لن يُشغَّل الجسر ولن تُحدَّث الحسابات"}
+    if unit == "active":
+        return {"status": "down", "error": f"الخدمة تعمل لكن المنفذ لا يستجيب: {error}"}
+    return {"status": "down", "error": f"{error} · حالة الخدمة: {unit}"}
+
+
 @app.get("/api/system/status")
 def system_status(admin_id: int = Depends(get_current_admin)):
     """فحص صحة الخدمات الخلفية: Firestore، جسر MT5 (heartbeat)، وتكامل n8n إن وُجد."""
@@ -1683,7 +1708,7 @@ def system_status(admin_id: int = Depends(get_current_admin)):
         with socket.create_connection((bridge_host, bridge_port), timeout=2) as _s:
             services["mt5_bridge"] = _timed_status(t0)
     except OSError as e:
-        services["mt5_bridge"] = {"status": "down", "error": str(e)[:200]}
+        services["mt5_bridge"] = _monitor_bridge_when_closed(str(e)[:200])
 
     # ترمنال الروبوت: آخر نبضة من مراقب الـ heartbeat الدائم
     services["mt5_robot"] = heartbeat.snapshot()
@@ -1700,7 +1725,7 @@ def system_status(admin_id: int = Depends(get_current_admin)):
         except httpx.HTTPError as e:
             services["n8n"] = {"status": "down", "error": str(e)[:200]}
 
-    order = {"up": 0, "degraded": 1, "not_configured": 2, "down": 3}
+    order = {"up": 0, "idle": 0, "degraded": 1, "not_configured": 2, "unknown": 2, "down": 3}
     overall = max((s["status"] for s in services.values()), key=lambda s: order.get(s, 1))
     return {"overall": overall, "services": services, "checked_at": time.time()}
 
