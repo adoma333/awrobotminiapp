@@ -71,8 +71,10 @@ def clean_config(patch: dict) -> dict:
             name = str(p.get("name") or "").strip()[:32]
             if not name:
                 continue
+            photo = str(p.get("photo") or "").strip()
             rows.append({"name": name, "avatar": "girl" if p.get("avatar") == "girl" else "boy",
-                         "tier": p.get("tier") if p.get("tier") in TIERS else "gold"})
+                         "tier": p.get("tier") if p.get("tier") in TIERS else "gold",
+                         "photo": photo[:300] if photo.startswith(("https://", "http://")) else None})
         out["profiles"] = rows[:50]
     return out
 
@@ -84,7 +86,7 @@ def week_key(ts: float) -> str:
 
 def _fingerprint(cfg: dict) -> str:
     keys = ("count", "elite_count", "elite_min", "elite_max", "base_min", "base_max")
-    return "|".join(str(cfg[k]) for k in keys) + "|" + "|".join(p["name"] for p in cfg["profiles"])
+    return "|".join(str(cfg[k]) for k in keys) + "|" + "|".join(f'{p["name"]}:{p.get("photo") or ""}:{p.get("avatar")}:{p.get("tier")}' for p in cfg["profiles"])
 
 
 def _fresh(cfg: dict, rng) -> list:
@@ -141,7 +143,7 @@ def build(db, uid, now: float | None = None, limit: int = 20) -> dict:
         if usd is None:
             continue
         name = (u.get("nickname") or "Trader").strip().split(" ")[0][:14]
-        rows.append({"id": d.id, "name": name, "avatar": u.get("avatar") or "boy", "usd": usd,
+        rows.append({"id": d.id, "name": name, "avatar": u.get("avatar") or "boy", "photo": u.get("photo_url"), "usd": usd,
                      "simulated": False, "you": str(d.id) == str(uid), "delta": 0.0, "tier": None})
     updated = now
     if cfg["enabled"] and cfg["count"] > 0 and cfg["profiles"]:
@@ -151,7 +153,7 @@ def build(db, uid, now: float | None = None, limit: int = 20) -> dict:
                 or now - float(doc.get("updated_at") or 0) > TICK_SEC):
             doc = tick(db, cfg, now)
         updated = doc.get("updated_at") or now
-        rows += [{"id": b["id"], "name": b["name"], "avatar": b["avatar"], "tier": b["tier"], "usd": b["usd"],
+        rows += [{"id": b["id"], "name": b["name"], "avatar": b["avatar"], "photo": b.get("photo"), "tier": b["tier"], "usd": b["usd"],
                   "delta": b["delta"], "simulated": True, "you": False} for b in doc.get("bots") or []]
     rows.sort(key=lambda r: -r["usd"])
     for i, r in enumerate(rows):

@@ -1882,6 +1882,17 @@ html[lang='ar'] .btn.small {
   animation: orb-flash 2.6s ease-in-out infinite;
 }
 
+.engine-mt5 {
+  transform-origin: 0 0;
+  animation: mt5-breathe 3.2s ease-in-out infinite;
+}
+
+@keyframes mt5-breathe {
+  50% {
+    transform: scale(1.06);
+  }
+}
+
 .engine-label {
   fill: var(--ember);
   font-size: 12px;
@@ -2011,6 +2022,7 @@ html[lang='ar'] .btn.small {
 @media (prefers-reduced-motion: reduce) {
   .edge-flow,
   .engine-orb,
+  .engine-mt5,
   .engine-glow,
   .term-line.is-typing,
   .term-cursor {
@@ -2866,4 +2878,230 @@ html[lang='ar'] .btn.small {
   white-space: nowrap;
   color: var(--ash);
   text-align: end;
+}
+
+/* ─────────── توحيد الأرقام: نفس الخط والعرض والاتجاه في كل الشاشات ─────────── */
+.hero-num,
+.cell-value,
+.cell-sub,
+.kpi-value,
+.row-value,
+.plan-price,
+.pm-amount,
+.bill-amount,
+.lb-pct,
+.pod-pct,
+.lb-rank,
+.cp-value strong,
+.countdown,
+.code-box strong,
+.chip,
+.winrate strong,
+.checkout-summary .plan-price {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: 0;
+}
+
+.row-value {
+  font-weight: 600;
+}
+
+.cell-sub,
+.kpi-sub bdi {
+  font-weight: 500;
+}
+
+/* ─────────── تعديل الملف الشخصي ─────────── */
+.pe-photo {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.pe-avatar {
+  position: relative;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.pe-badge {
+  position: absolute;
+  bottom: 0;
+  inset-inline-end: 0;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--grad);
+  color: #1a0d00;
+  font-size: 13px;
+  font-weight: 800;
+  border: 2px solid #000;
+}
+
+.pe-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.pe-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.pe-field input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line-dim);
+  border-radius: 6px;
+  background: #0d0b0a;
+  color: var(--bone);
+  font: inherit;
+  font-size: 15px;
+}
+
+.pe-field input:focus {
+  outline: none;
+  border-color: var(--ember);
+}
+
+.pe-gender {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.pe-gender button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-dim);
+  border-radius: 6px;
+  background: var(--fill);
+  color: var(--bone);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pe-gender button.on {
+  border-color: var(--ember);
+}
+
+.note.announce {
+  border-color: var(--line);
+  background: radial-gradient(circle at 0 50%, rgba(255, 138, 0, 0.14), transparent 70%), var(--fill);
+  line-height: 1.7;
+}
+
+/* ─────────── اقتراح خوادم MT5 ─────────── */
+.server-field {
+  position: relative;
+}
+
+.srv-ok {
+  position: absolute;
+  inset-inline-end: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ok);
+  font-weight: 800;
+}
+
+.control {
+  position: relative;
+}
+
+.srv-list {
+  position: absolute;
+  inset-inline: 0;
+  z-index: 30;
+  margin: 4px 0 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #110f0d;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.55);
+}
+
+.srv-list button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--bone);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.srv-list button:hover,
+.srv-list li[aria-selected='true'] button {
+  background: var(--fill);
+}
+
+.srv-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.srv-type,
+.srv-verified {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.srv-type.is-demo {
+  color: #6aa9ff;
+  background: rgba(106, 169, 255, 0.12);
+}
+
+.srv-type.is-real {
+  color: var(--ok);
+  background: rgba(61, 220, 151, 0.12);
+}
+
+.srv-verified {
+  color: var(--ember);
+  background: var(--fill);
+}
+
+.srv-dym {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: none;
+  color: var(--ember);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
 }

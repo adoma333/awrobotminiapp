@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Field from './Field';
+import ServerField from './ServerField';
 import { LOGIN_RE } from '../i18n';
 
 function Verifying({ t, secs }) {
@@ -62,12 +63,7 @@ export default function MT5FormStep({ t, mt5, setMt5, submitting, errorCode, onS
         toggleLabels={{ show: t.showPassword, hide: t.hidePassword }}
         onChange={(v) => setMt5({ ...mt5, password: v })}
       />
-      <Field
-        label={t.server}
-        placeholder={t.serverPh}
-        value={mt5.server}
-        onChange={(v) => setMt5({ ...mt5, server: v })}
-      />
+      <ServerField t={t} value={mt5.server} onChange={(v) => setMt5({ ...mt5, server: v })} error={errorCode === 'srv' ? t.srvWrong : ''} />
 
       <div className={`consent ${termsOk ? 'is-on' : ''}`}>
         <label className="consent-check">

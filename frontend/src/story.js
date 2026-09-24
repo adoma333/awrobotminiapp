@@ -12,6 +12,7 @@ const DISPLAY = '"Chakra Petch", "IBM Plex Sans Arabic", system-ui, sans-serif';
 const loadImg = (src) =>
   new Promise((resolve, reject) => {
     const img = new Image();
+    img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
     img.onerror = reject;
     img.src = src;
@@ -56,7 +57,7 @@ export async function renderStory(s) {
 
   const [lg, av, tier] = await Promise.all([
     loadImg(logo),
-    loadImg(s.avatar === 'girl' ? girl : boy),
+    loadImg(s.photo || (s.avatar === 'girl' ? girl : boy)).catch(() => loadImg(s.avatar === 'girl' ? girl : boy)),
     s.tierImg ? loadImg(s.tierImg) : null,
   ]);
 
@@ -187,7 +188,7 @@ export async function renderPost(s) {
   ctx.fillStyle = 'rgba(255,255,255,0.05)';
   for (let x = 30; x < S; x += 54) for (let y = 30; y < S; y += 54) ctx.fillRect(x, y, 3, 3);
 
-  const [lg, av] = await Promise.all([loadImg(logo), loadImg(s.avatar === 'girl' ? girl : boy)]);
+  const [lg, av] = await Promise.all([loadImg(logo), loadImg(s.photo || (s.avatar === 'girl' ? girl : boy)).catch(() => loadImg(s.avatar === 'girl' ? girl : boy))]);
   const lw = 460;
   ctx.drawImage(lg, (S - lw) / 2, 70, lw, (lg.height / lg.width) * lw);
 

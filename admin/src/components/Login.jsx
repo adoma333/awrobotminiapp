@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { api, ApiError } from "../api";
+import logo from "../assets/logo-wordmark.png";
 
 export default function Login({ initialToken, onSuccess }) {
   const [token, setToken] = useState(initialToken || "");
@@ -36,8 +37,8 @@ export default function Login({ initialToken, onSuccess }) {
   return (
     <div style={styles.wrap}>
       <form onSubmit={submit} style={styles.card} className="fade-in">
-        <div style={styles.mark}>AW</div>
-        <h1 style={styles.title}>لوحة تحكم AW Robot</h1>
+        <img src={logo} alt="AW ROBOT" style={styles.mark} />
+        <h1 style={styles.title}>لوحة التحكم</h1>
         <p style={styles.hint}>
           أرسل <span className="mono" style={{ color: "var(--accent)" }}>/admin</span> لبوت
           تلجرام للحصول على رابط ورمز تحقق صالحَين 5 دقائق.
@@ -60,7 +61,7 @@ export default function Login({ initialToken, onSuccess }) {
             <input
               value={token}
               onChange={(e) => setToken(e.target.value.trim())}
-              placeholder="الصق التوكن من الرابط"
+              placeholder="token"
               className="mono"
             />
           </>
@@ -89,24 +90,14 @@ const styles = {
     maxWidth: 360,
     background: "var(--surface)",
     border: "1px solid var(--border)",
-    borderRadius: 10,
+    borderRadius: 16,
     padding: 28,
+    boxShadow: "0 20px 60px rgba(0,0,0,.5)",
     display: "flex",
     flexDirection: "column",
     gap: 4,
   },
-  mark: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
-    background: "var(--accent-dim)",
-    color: "var(--accent)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontWeight: 700,
-    marginBottom: 14,
-  },
+  mark: { height: 30, alignSelf: "center", marginBottom: 18 },
   title: { fontSize: 19, fontWeight: 600, margin: "0 0 6px" },
   hint: { color: "var(--muted)", fontSize: 13.5, margin: "0 0 18px", lineHeight: 1.6 },
   label: { fontSize: 12.5, color: "var(--muted)", margin: "10px 0 6px" },

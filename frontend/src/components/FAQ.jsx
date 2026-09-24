@@ -2,6 +2,20 @@ import React, { useState } from 'react';
 import { haptic } from '../telegram';
 
 const DATA = {
+  system: {
+    ar: [
+      ['ما هو AW ROBOT وكيف يعمل؟', 'AW ROBOT هو نظام تقني متطور لربط حسابات MetaTrader 5 وإدارتها عبر خوارزميات تداول آلي ذكية، مما يتيح لك تنفيذ الصفقات ومتابعة أداء حسابك ونموه بدقة عالية دون الحاجة للتدخل يدويًا.'],
+      ['هل أحتاج إلى ترك هاتفي أو حاسوبي مفتوحًا؟', 'لا، تعمل أنظمة AW ROBOT على خوادم سحابية عالية السرعة على مدار 24/7، مما يعني أن عمليات التداول والمتابعة تستمر بشكل آلي حتى لو كان هاتفك مغلقًا.'],
+      ['هل يمكن لـ AW ROBOT السحب والإيداع من حسابي؟', 'لا، نظام AW ROBOT ليس لديه أي صلاحيات وصول لعمليات السحب والإيداع الخاصة بحساب العميل. جميع التعاملات المالية تتم مباشرة بين العميل وشركة الوساطة المالية الخاصة به.'],
+      ['ماذا أفعل إذا واجهت مشكلة تقنية أو احتجت للمساعدة؟', 'يمكنك التواصل فورًا مع فريق الدعم الفني المخصص من خلال الضغط على «الدعم الفني Support» في الإعدادات.'],
+    ],
+    en: [
+      ['What is AW ROBOT and how does it work?', 'AW ROBOT is an advanced system that links and manages MetaTrader 5 accounts through smart automated-trading algorithms, so trades are executed and your account’s performance and growth are tracked precisely — with no manual intervention.'],
+      ['Do I need to keep my phone or computer on?', 'No. AW ROBOT runs on high-speed cloud servers 24/7, so trading and tracking continue automatically even when your phone is off.'],
+      ['Can AW ROBOT withdraw or deposit from my account?', 'No. AW ROBOT has no access to deposits or withdrawals on your account. All financial transactions happen directly between you and your broker.'],
+      ['What if I face a technical issue or need help?', 'Contact our dedicated support team right away by tapping “Support” in Settings.'],
+    ],
+  },
   setup: {
     ar: [
       ['كيف أربط حساب MT5؟', 'من رحلة الإعداد الأولى أو من "فكّ الربط ثم إعادة الربط" في الإعدادات، أدخل رقم الحساب وكلمة المرور واسم السيرفر كما هي في تطبيق MT5.'],
@@ -41,6 +55,7 @@ const DATA = {
 };
 
 const TABS = [
+  { key: 'system', label: { ar: 'نظام التشغيل', en: 'Operating system' } },
   { key: 'setup', label: { ar: 'التثبيت وربط MT5', en: 'Setup & MT5 linking' } },
   { key: 'connection', label: { ar: 'مشاكل الاتصال', en: 'Connection issues' } },
   { key: 'billing', label: { ar: 'الاشتراك والدفع', en: 'Subscription & billing' } },
@@ -59,7 +74,7 @@ function AccordionItem({ q, a, open, onToggle }) {
 }
 
 export default function FAQ({ t, lang, onBack }) {
-  const [tab, setTab] = useState('setup');
+  const [tab, setTab] = useState('system');
   const [openIdx, setOpenIdx] = useState(null);
   const items = DATA[tab][lang] || DATA[tab].en;
 

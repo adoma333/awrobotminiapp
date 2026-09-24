@@ -1,24 +1,18 @@
 import React, { useState } from 'react';
 import FeedbackButton from './FeedbackButton';
+import ProfileEditor from './ProfileEditor';
 import { unlink, updateProfile, errorCodeOf } from '../api';
 import { fill } from '../i18n';
-import { copyText, haptic, openTelegramLink } from '../telegram';
+import { fmtDate } from '../format';
+import { copyText, haptic, openExternal, openTelegramLink } from '../telegram';
 
 const LANGS = [
   { code: 'ar', name: 'العربية' },
   { code: 'en', name: 'English' },
 ];
 
-const fmtDate = (epoch, lang) =>
-  epoch
-    ? new Date(epoch * 1000).toLocaleDateString(lang === 'ar' ? 'ar-u-nu-latn' : 'en', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-      })
-    : '—';
 
-export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUnlinked, onLegal, onFaq, onCalc, onBilling, onRewards }) {
+export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUnlinked, onLegal, onFaq, onCalc, onBilling, onRewards, onProfileSaved }) {
   const sub = data.subscription;
   const cfg = data.settings || {};
   const code = data.referral_code;
@@ -78,6 +72,8 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
         </button>
         <h1>{t.settingsTitle}</h1>
       </div>
+
+      <ProfileEditor t={t} data={data} onSaved={onProfileSaved} />
 
       <div className="section">
         <h2>{t.language}</h2>
@@ -164,6 +160,12 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
             <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
           </button>
           <FeedbackButton t={t} />
+          {cfg.support_url && (
+            <button type="button" className="row row-link" onClick={() => (/^https:\/\/t\.me\//.test(cfg.support_url) ? openTelegramLink(cfg.support_url) : openExternal(cfg.support_url))}>
+              <span className="row-label">{t.supportLink}</span>
+              <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+            </button>
+          )}
         </div>
       </div>
 

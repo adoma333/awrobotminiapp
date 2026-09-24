@@ -23,7 +23,7 @@ export default function InterestCalculator({ t, lang, onBack }) {
   const final = series[series.length - 1]?.value ?? cap;
   const profit = final - cap;
 
-  const nf = (n) => new Intl.NumberFormat(lang === 'ar' ? 'ar-u-nu-latn' : 'en-US', { maximumFractionDigits: 2 }).format(n);
+  const nf = (n) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n);
 
   return (
     <section className="dash">

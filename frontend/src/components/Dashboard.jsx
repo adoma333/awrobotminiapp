@@ -40,7 +40,7 @@ export default function Dashboard({ t, lang, data, onRenew, onSettings, onReward
   return (
     <section className="dash">
       <div className="who">
-        <Avatar kind={avatar || 'boy'} size={44} />
+        <Avatar kind={avatar || 'boy'} src={data.photo_url} size={44} />
         <div className="who-text">
           <div className="who-name">{nickname}</div>
           <div className="who-meta"><bdi dir="ltr">{account.login} · {account.server}</bdi></div>
@@ -64,6 +64,10 @@ export default function Dashboard({ t, lang, data, onRenew, onSettings, onReward
           <span className="muted">{t.allTime}</span>
         </div>
       </div>
+
+      {(lang === 'ar' ? data.settings?.announcement_ar : data.settings?.announcement_en) && (
+        <div className="note announce" role="status">{lang === 'ar' ? data.settings.announcement_ar : data.settings.announcement_en}</div>
+      )}
 
       {!sub?.active && (
         <div className="note warn sub-note" role="status">

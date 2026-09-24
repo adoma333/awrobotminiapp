@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { getBillingHistory } from '../api';
+import { amount, fmtDate } from '../format';
 
 const STATUS_LABEL = {
   finished: { ar: 'مكتمل', en: 'Finished' },
@@ -8,10 +9,6 @@ const STATUS_LABEL = {
   expired: { ar: 'منتهي', en: 'Expired' },
 };
 
-function fmtDate(ts, lang) {
-  if (!ts) return '—';
-  return new Date(ts * 1000).toLocaleDateString(lang === 'ar' ? 'ar' : 'en-GB', { year: 'numeric', month: 'short', day: 'numeric' });
-}
 
 
 export default function BillingHistory({ t, lang, onBack }) {
@@ -45,7 +42,7 @@ export default function BillingHistory({ t, lang, onBack }) {
               <li key={row.order_id} className="bill-item">
                 <div className="bill-top">
                   <strong className="bill-plan">{(lang === 'ar' ? row.plan_name_ar : row.plan_name_en) || '—'}</strong>
-                  <span className="bill-amount" dir="ltr">{row.amount ?? '—'} {row.currency === 'XTR' ? '⭐' : row.currency}</span>
+                  <span className="bill-amount" dir="ltr">{row.currency === 'USD' ? `$${amount(row.amount)}` : `${amount(row.amount)} ${row.currency === 'XTR' ? '⭐' : row.currency}`}</span>
                 </div>
                 <div className="bill-meta">
                   <span>{fmtDate(row.date, lang)}</span>

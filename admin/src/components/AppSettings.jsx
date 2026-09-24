@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api";
-import LeaderboardSettings from "./LeaderboardSettings";
 
 /** الإعدادات العامة (config/settings): سياسة التسجيل، الرافعة، الإحالة، إيقاف التسجيل، والفترة التجريبية. */
 export default function AppSettings() {
@@ -31,11 +30,31 @@ export default function AppSettings() {
   return (
     <>
       <div className="topbar">
-        <h1>الإعدادات</h1>
+        <h1>مركز التحكم</h1>
         <div className="row-gap">
           {msg && <span className="muted">{msg}</span>}
           <button className="primary" disabled={JSON.stringify(s) === saved} onClick={save}>حفظ</button>
         </div>
+      </div>
+
+      <div className="panel">
+        <h2>طرق الدفع</h2>
+        <label className="check"><input type="checkbox" checked={s.pay_ton_enabled} onChange={(e) => set({ pay_ton_enabled: e.target.checked })} /> محفظة TON (TON Connect)</label>
+        <label className="check"><input type="checkbox" checked={s.pay_crypto_enabled} onChange={(e) => set({ pay_crypto_enabled: e.target.checked })} /> العملات الرقمية (بوابة NOWPayments المخصّصة)</label>
+        <label className="check"><input type="checkbox" checked={s.pay_stars_enabled} onChange={(e) => set({ pay_stars_enabled: e.target.checked })} /> نجوم تلجرام</label>
+        <p className="muted">إيقاف أي طريقة يخفيها من التطبيق فورًا ويرفضها الخادم أيضًا.</p>
+      </div>
+
+      <div className="panel">
+        <h2>الدعم والإعلانات</h2>
+        <div className="grid-form">
+          <label>رابط الدعم الفني (يظهر في إعدادات التطبيق)<input dir="ltr" placeholder="https://t.me/your_support" value={s.support_url} onChange={(e) => set({ support_url: e.target.value.trim() })} /></label>
+        </div>
+        <div className="grid-form">
+          <label>إعلان أعلى الرئيسية (عربي)<textarea rows={2} value={s.announcement_ar} onChange={(e) => set({ announcement_ar: e.target.value })} /></label>
+          <label>Announcement (English)<textarea rows={2} dir="ltr" value={s.announcement_en} onChange={(e) => set({ announcement_en: e.target.value })} /></label>
+        </div>
+        <p className="muted">اترك الإعلان فارغًا لإخفائه.</p>
       </div>
 
       <div className="panel">
@@ -70,7 +89,6 @@ export default function AppSettings() {
           <label>أقصى لوت للحسابات العادية (0 = سنت فقط)<input className="mono" type="number" min="0" step="0.01" value={s.trial_max_lot} onChange={(e) => set({ trial_max_lot: num(e.target.value) })} /></label>
         </div>
       </div>
-      <LeaderboardSettings />
     </>
   );
 }

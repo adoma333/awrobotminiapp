@@ -1,235 +1,131 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { api } from "../api";
-import UserDetail from "./UserDetail";
-import SystemStatus from "./SystemStatus";
+import React, { useEffect, useState } from "react";
+import logo from "../assets/logo-wordmark.png";
+import Ceo from "./Ceo";
+import Users from "./Users";
 import Rewards from "./Rewards";
-import AppSettings from "./AppSettings";
 import Packages from "./Packages";
-
-const PAGES = [
-  { key: "rewards", label: "المكافآت والكوبونات", short: "المكافآت" },
-  { key: "packages", label: "الباقات", short: "الباقات" },
-  { key: "settings", label: "الإعدادات", short: "الإعدادات" },
-  { key: "system", label: "حالة النظام", short: "النظام" },
-];
+import LeaderboardSettings from "./LeaderboardSettings";
+import AppSettings from "./AppSettings";
+import Servers from "./Servers";
+import Staff from "./Staff";
+import Audit from "./Audit";
+import SystemStatus from "./SystemStatus";
 import "../dashboard.css";
 
-const TABS = [
-  { key: "pending", label: "قيد المراجعة" },
-  { key: "approved", label: "مقبول" },
-  { key: "rejected", label: "مرفوض" },
-  { key: "", label: "الكل" },
+const I = {
+  ceo: "M4 20V10M10 20V4M16 20v-7M22 20H2",
+  users: "M16 20v-1.5a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4V20M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 20v-1.5a4 4 0 0 0-3-3.8M16 3.2a4 4 0 0 1 0 7.6",
+  packages: "M6 3h12l3 5-9 13L3 8ZM3 8h18",
+  rewards: "M3.5 8h17v5h-17ZM5 13v7h14v-7M12 8v12M12 8c-1.5-3.5-5.5-3.5-5.5-1 0 1.5 2.5 1 5.5 1ZM12 8c1.5-3.5 5.5-3.5 5.5-1 0 1.5-2.5 1-5.5 1Z",
+  leaderboard: "M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0ZM17 5h3a3 3 0 0 1-3 4M7 5H4a3 3 0 0 0 3 4",
+  control: "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6",
+  servers: "M3 3h18v7H3ZM3 14h18v7H3ZM7 6.5h.01M7 17.5h.01",
+  staff: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8M4 21a8 8 0 0 1 16 0",
+  audit: "M9 5H5v16h14V5h-4M9 3h6v4H9ZM8 12h8M8 16h5",
+  system: "M22 12h-4l-3 9L9 3l-3 9H2",
+};
+const Ico = ({ d }) => (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
+);
+
+// الأقسام مجمّعة؛ كل صفحة تظهر فقط لمن يملك صلاحية قسمها
+const GROUPS = [
+  { title: "نظرة عامة", pages: [{ key: "ceo", label: "لوحة الرئيس التنفيذي", area: "ceo" }, { key: "system", label: "حالة النظام", area: "system" }] },
+  { title: "العملاء", pages: [{ key: "users", label: "المستخدمون", area: "users" }] },
+  { title: "المبيعات والنمو", pages: [
+    { key: "packages", label: "الباقات", area: "packages" },
+    { key: "rewards", label: "المكافآت والكوبونات", area: "rewards" },
+    { key: "leaderboard", label: "ترتيب الأسبوع", area: "settings" },
+  ] },
+  { title: "الإعدادات", pages: [{ key: "control", label: "مركز التحكم", area: "settings" }, { key: "servers", label: "خوادم MT5", area: "settings" }] },
+  { title: "الإدارة", pages: [{ key: "staff", label: "فريق العمل", area: "staff" }, { key: "audit", label: "سجل العمليات", area: "audit" }] },
 ];
+const ICON_OF = { ceo: I.ceo, system: I.system, users: I.users, packages: I.packages, rewards: I.rewards, leaderboard: I.leaderboard, control: I.control, servers: I.servers, staff: I.staff, audit: I.audit };
 
-function fmtMoney(v, cur) {
-  if (v === null || v === undefined) return "—";
-  return `${Number(v).toLocaleString("en-US", { maximumFractionDigits: 2 })} ${cur || ""}`.trim();
-}
-function timeAgo(epoch) {
-  if (!epoch) return "—";
-  const diff = Date.now() / 1000 - epoch;
-  if (diff < 60) return "الآن";
-  if (diff < 3600) return `منذ ${Math.floor(diff / 60)} د`;
-  if (diff < 86400) return `منذ ${Math.floor(diff / 3600)} س`;
-  return `منذ ${Math.floor(diff / 86400)} يوم`;
-}
-
-export default function Dashboard({ adminId, onLogout }) {
-  const [stats, setStats] = useState(null);
-  const [page, setPage] = useState("users"); // users | rewards | packages | settings | system
-  const [tab, setTab] = useState("pending");
-  const [accountType, setAccountType] = useState("");
-  const [levMin, setLevMin] = useState("");
-  const [levMax, setLevMax] = useState("");
-  const [search, setSearch] = useState("");
-  const [users, setUsers] = useState(null);
-  const [error, setError] = useState("");
-  const [openId, setOpenId] = useState(null);
-
-  const loadStats = useCallback(() => {
-    api.stats().then(setStats).catch(() => {});
-  }, []);
-
-  const loadUsers = useCallback(() => {
-    setError("");
-    api
-      .users({
-        status: tab || undefined,
-        account_type: accountType || undefined,
-        leverage_min: levMin || undefined,
-        leverage_max: levMax || undefined,
-        search: search || undefined,
-      })
-      .then((r) => setUsers(r.users))
-      .catch(() => setError("تعذّر تحميل القائمة. تحقّق من الاتصال وحاول مجددًا."));
-  }, [tab, accountType, levMin, levMax, search]);
-
-  useEffect(loadStats, [loadStats]);
+export default function Dashboard({ me, onLogout }) {
+  const perms = me?.perms || {};
+  const groups = GROUPS.map((g) => ({ ...g, pages: g.pages.filter((p) => perms[p.area]) })).filter((g) => g.pages.length);
+  const first = groups[0]?.pages[0]?.key || "ceo";
+  const [page, setPage] = useState(() => {
+    const h = window.location.hash.slice(1);
+    return groups.some((g) => g.pages.some((p) => p.key === h)) ? h : first;
+  });
+  const [drawer, setDrawer] = useState(false);
   useEffect(() => {
-    const t = setTimeout(loadUsers, 250); // تأخير بسيط لتفادي طلب لكل حرف أثناء الكتابة
-    return () => clearTimeout(t);
-  }, [loadUsers]);
+    window.history.replaceState(null, "", `#${page}`);
+    setDrawer(false);
+    window.scrollTo(0, 0);
+  }, [page]);
+  useEffect(() => {
+    const onHash = () => {
+      const h = window.location.hash.slice(1);
+      if (groups.some((g) => g.pages.some((p) => p.key === h))) setPage(h);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  });
+  const current = groups.flatMap((g) => g.pages).find((p) => p.key === page);
+  const canWrite = (area) => perms[area] === "rw";
 
-  function handleDecided(id, action) {
-    setUsers((prev) => (prev ? prev.filter((u) => u.id !== id) : prev));
-    loadStats();
-  }
-
-  const statusLabel = { pending: "قيد المراجعة", approved: "مقبول", rejected: "مرفوض" };
+  const nav = (
+    <>
+      {groups.map((g) => (
+        <div className="nav-group" key={g.title}>
+          <span className="nav-group-title">{g.title}</span>
+          {g.pages.map((p) => (
+            <button key={p.key} className={`nav-item ${page === p.key ? "active" : ""}`} onClick={() => setPage(p.key)}>
+              <Ico d={ICON_OF[p.key]} />
+              <span>{p.label}</span>
+            </button>
+          ))}
+        </div>
+      ))}
+      <div className="nav-footer">
+        <div className="whoami">
+          <b>{me?.name || "مرحبًا"}</b>
+          <span className="muted">{me?.role_label} · <span className="mono">{me?.admin_id}</span></span>
+        </div>
+        <button onClick={onLogout}>تسجيل الخروج</button>
+      </div>
+    </>
+  );
 
   return (
     <div className="shell">
+      <header className="mobile-bar">
+        <img src={logo} alt="AW Robot" />
+        <span className="mobile-title">{current?.label}</span>
+        <button className="menu-btn" onClick={() => setDrawer(true)} aria-label="القائمة">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+        </button>
+      </header>
+
       <nav className="nav">
-        <div className="nav-brand">
-          <div className="mark">AW</div>
-          <span>لوحة التحكم</span>
-        </div>
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            className={`nav-item ${page === "users" && tab === t.key ? "active" : ""}`}
-            onClick={() => {
-              setPage("users");
-              setTab(t.key);
-            }}
-          >
-            {t.label}
-            {stats && t.key && <span className="count mono">{stats[t.key] ?? ""}</span>}
-          </button>
-        ))}
-        <div className="nav-sep" />
-        {PAGES.map((p) => (
-          <button key={p.key} className={`nav-item ${page === p.key ? "active" : ""}`} onClick={() => setPage(p.key)}>
-            {p.label}
-          </button>
-        ))}
-        <div className="nav-footer">
-          <button onClick={onLogout}>تسجيل الخروج</button>
-        </div>
+        <div className="nav-brand"><img src={logo} alt="AW Robot" /><span>لوحة التحكم</span></div>
+        {nav}
       </nav>
 
-      <main className="main">
-        {page === "system" ? (
-          <SystemStatus />
-        ) : page === "rewards" ? (
-          <Rewards />
-        ) : page === "packages" ? (
-          <Packages />
-        ) : page === "settings" ? (
-          <AppSettings />
-        ) : (
-          <>
-        <div className="topbar">
-          <h1>{TABS.find((t) => t.key === tab)?.label || "كل الطلبات"}</h1>
+      {drawer && (
+        <div className="drawer-backdrop" onClick={() => setDrawer(false)}>
+          <nav className="drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="nav-brand"><img src={logo} alt="AW Robot" /><button className="close-btn" onClick={() => setDrawer(false)} aria-label="إغلاق">✕</button></div>
+            {nav}
+          </nav>
         </div>
-
-        {stats && (
-          <div className="stat-row">
-            <div className="stat"><b>{stats.pending}</b><span>قيد المراجعة</span></div>
-            <div className="stat"><b>{stats.approved}</b><span>مقبول</span></div>
-            <div className="stat"><b>{stats.rejected}</b><span>مرفوض</span></div>
-          </div>
-        )}
-
-        <div className="filters">
-          <input
-            className="search"
-            placeholder="بحث بالاسم أو اليوزر أو رقم الحساب…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <select value={accountType} onChange={(e) => setAccountType(e.target.value)}>
-            <option value="">كل الحسابات</option>
-            <option value="real">حقيقي</option>
-            <option value="demo">تجريبي</option>
-          </select>
-          <input className="lev mono" placeholder="رافعة من" value={levMin} onChange={(e) => setLevMin(e.target.value.replace(/\D/g, ""))} />
-          <input className="lev mono" placeholder="إلى" value={levMax} onChange={(e) => setLevMax(e.target.value.replace(/\D/g, ""))} />
-        </div>
-
-        {error && <p style={{ color: "var(--bad)" }}>{error}</p>}
-
-        {users && users.length === 0 && !error && (
-          <div className="empty">لا توجد طلبات مطابقة لهذا الفلتر حاليًا.</div>
-        )}
-
-        {users && users.length > 0 && (
-          <>
-            <div className="scrollx">
-              <table className="list">
-                <thead>
-                  <tr>
-                    <th>المستخدم</th>
-                    <th>الحساب</th>
-                    <th>النوع</th>
-                    <th>الرافعة</th>
-                    <th>الرصيد</th>
-                    <th>الحالة</th>
-                    <th>منذ</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.map((u) => (
-                    <tr key={u.id} onClick={() => setOpenId(u.id)}>
-                      <td>{u.nickname || u.username || u.id}</td>
-                      <td className="mono">{u.mt5_login}</td>
-                      <td>{u.account_type === "real" ? "حقيقي" : u.account_type === "demo" ? "تجريبي" : "—"}</td>
-                      <td className="mono">{u.leverage ? `1:${u.leverage}` : "—"}</td>
-                      <td className="mono">{fmtMoney(u.balance, u.currency)}</td>
-                      <td><span className={`badge ${u.status}`}>{statusLabel[u.status]}</span></td>
-                      <td className="mono">{timeAgo(u.created_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="cardlist">
-              {users.map((u) => (
-                <div className="ucard" key={u.id} onClick={() => setOpenId(u.id)}>
-                  <div className="row1">
-                    <span className="name">{u.nickname || u.username || u.id}</span>
-                    <span className={`badge ${u.status}`}>{statusLabel[u.status]}</span>
-                  </div>
-                  <div className="meta">
-                    <span className="mono">{u.mt5_login}</span>
-                    <span>{u.account_type === "real" ? "حقيقي" : u.account_type === "demo" ? "تجريبي" : "—"}</span>
-                    {u.leverage ? <span className="mono">1:{u.leverage}</span> : null}
-                    <span className="mono">{fmtMoney(u.balance, u.currency)}</span>
-                    <span>{timeAgo(u.created_at)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-          </>
-        )}
-      </main>
-
-      <div className="mobile-nav">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            className={page === "users" && tab === t.key ? "active" : ""}
-            onClick={() => {
-              setPage("users");
-              setTab(t.key);
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
-        {PAGES.map((p) => (
-          <button key={p.key} className={page === p.key ? "active" : ""} onClick={() => setPage(p.key)}>
-            {p.short}
-          </button>
-        ))}
-      </div>
-
-      {openId && (
-        <UserDetail id={openId} onClose={() => setOpenId(null)} onDecided={handleDecided} />
       )}
+
+      <main className="main fade-in" key={page}>
+        {page === "ceo" && <Ceo />}
+        {page === "users" && <Users canWrite={canWrite("users")} />}
+        {page === "packages" && <Packages />}
+        {page === "rewards" && <Rewards />}
+        {page === "leaderboard" && <><div className="topbar"><h1>ترتيب الأسبوع</h1></div><LeaderboardSettings /></>}
+        {page === "control" && <AppSettings />}
+        {page === "servers" && <Servers />}
+        {page === "staff" && <Staff />}
+        {page === "audit" && <Audit />}
+        {page === "system" && <SystemStatus />}
+      </main>
     </div>
   );
 }

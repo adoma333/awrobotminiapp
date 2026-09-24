@@ -16,7 +16,7 @@ function fmtMoney(v, cur) {
   return `${Number(v).toLocaleString("en-US", { maximumFractionDigits: 2 })} ${cur || ""}`.trim();
 }
 
-export default function UserDetail({ id, onClose, onDecided }) {
+export default function UserDetail({ id, onClose, onDecided, canWrite = true }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -110,10 +110,10 @@ export default function UserDetail({ id, onClose, onDecided }) {
               <>
                 {!showReject ? (
                   <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
-                    <button className="primary" style={{ flex: 1 }} disabled={busy} onClick={() => decide("approve")}>
+                    <button className="primary" style={{ flex: 1 }} disabled={busy || !canWrite} onClick={() => decide("approve")}>
                       ✅ موافقة
                     </button>
-                    <button className="danger-ghost" style={{ flex: 1 }} disabled={busy} onClick={() => setShowReject(true)}>
+                    <button className="danger-ghost" style={{ flex: 1 }} disabled={busy || !canWrite} onClick={() => setShowReject(true)}>
                       ❌ رفض
                     </button>
                   </div>

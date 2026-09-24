@@ -37,6 +37,8 @@ import heartbeat
 import reminders
 import rewards
 import leaderboard
+import servers
+import admin_access
 import ton
 from retry import RetryableError, raise_for_retryable, with_backoff
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -121,6 +123,13 @@ def notify_admins(text: str):
         tg("sendMessage", chat_id=chat, text=text)
 
 
+def _safe(fn):
+    try:
+        fn()
+    except Exception:  # noqa: BLE001
+        log.exception("background task %s", getattr(fn, "__name__", fn))
+
+
 def record_system_event(kind: str, detail: dict):
     try:
         db.collection("system_events").document().set({"source": "mt5_heartbeat", "type": kind, "at": time.time(), **detail})
@@ -132,6 +141,7 @@ def record_system_event(kind: str, detail: dict):
 async def lifespan(_app):
     threading.Thread(target=_watchdog, daemon=True, name="tg-watchdog").start()
     heartbeat.start(notify_admins, record_system_event)
+    threading.Thread(target=lambda: _safe(backfill_servers), daemon=True, name="servers-backfill").start()
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "weekly"), "cron", day_of_week="mon", hour=9, id="digest_weekly")
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "monthly"), "cron", day=1, hour=9, id="digest_monthly")
     _scheduler.add_job(retry_inbox, "interval", seconds=60, id="webhook_inbox_retry")
@@ -385,6 +395,10 @@ def register(body: Registration):
         text=f"🟢 ربط تلقائي ناجح: <code>{uid}</code> · {body.mt5.login} · {body.mt5.server} · {account_type}",
         parse_mode="HTML",
     )
+    try:
+        servers.record_success(db, body.mt5.server)  # اسم خادم صحيح 100% لاقتراحات البحث
+    except Exception:  # noqa: BLE001
+        log.exception("server registry")
     # بطاقات الخدش: الترحيب عند ربط حساب تجريبي، وبطاقة للمُحيل عند نجاح ربط من دعاه (مرة لكل صديق)
     if account_type == "demo":
         rewards.grant_card(db, uid, "welcome")
@@ -435,6 +449,12 @@ def _public_settings() -> dict:
         "kill_switch": bool(s.get("kill_switch")),
         "referral_enabled": bool(s.get("referral_enabled")),
         "referral_days": s.get("referral_days", 7),
+        "support_url": s.get("support_url") or "",
+        "pay_ton": bool(s.get("pay_ton_enabled", True)),
+        "pay_crypto": bool(s.get("pay_crypto_enabled", True)),
+        "pay_stars": bool(s.get("pay_stars_enabled", True)),
+        "announcement_ar": s.get("announcement_ar") or "",
+        "announcement_en": s.get("announcement_en") or "",
     }
 
 
@@ -456,6 +476,7 @@ def build_status(user: dict) -> dict:
         "language": d.get("language"),
         "nickname": d.get("nickname"),
         "avatar": d.get("avatar"),
+        "photo_url": d.get("photo_url"),
         "subscription": _subscription_info(d),
         "referral_code": d.get("referral_code") or billing.ensure_referral_code(db, user["id"]),
         "settings": settings,
@@ -782,7 +803,7 @@ def handle_admin_login(msg: dict):
     """أمر /admin: يرسل للأدمن رابط دخول سري + رمز تحقق صالحين 5 دقائق."""
     admin_id = msg["from"]["id"]
     chat_id = msg["chat"]["id"]
-    if admin_id not in ADMIN_IDS:
+    if not admin_access.role_of(db, ADMIN_IDS, admin_id):  # المالك أو عضو فريق
         return
     _cleanup_login_tokens()
     token = secrets.token_urlsafe(24)
@@ -820,7 +841,7 @@ def get_current_admin(request: Request) -> int:
         admin_id = int(payload.get("sub"))
     except (TypeError, ValueError):
         raise HTTPException(401, "invalid_session")
-    if admin_id not in ADMIN_IDS:
+    if not admin_access.role_of(db, ADMIN_IDS, admin_id):
         raise HTTPException(403, "not_admin")
     return admin_id
 
@@ -831,7 +852,7 @@ class AdminVerify(BaseModel):
 
 
 @app.post("/api/admin/verify")
-def admin_verify(body: AdminVerify, response: Response):
+def admin_verify(body: AdminVerify, response: Response, request: Request):
     _cleanup_login_tokens()
     entry = _login_tokens.get(body.token)
     if not entry or entry["used"] or entry["expires"] < time.time():
@@ -839,6 +860,7 @@ def admin_verify(body: AdminVerify, response: Response):
     if entry["code"] != body.code.strip():
         raise HTTPException(401, "wrong_code")
     entry["used"] = True
+    write_audit(entry["admin"], "LOGIN", "LOGIN", 200, dict(request.headers), request.client.host if request.client else None, "")
     session = create_admin_session(entry["admin"])
     response.set_cookie(
         "aw_admin", session, max_age=ADMIN_SESSION_HOURS * 3600,
@@ -855,7 +877,78 @@ def admin_logout(response: Response):
 
 @app.get("/api/admin/me")
 def admin_me(admin_id: int = Depends(get_current_admin)):
-    return {"admin_id": admin_id}
+    role = admin_access.role_of(db, ADMIN_IDS, admin_id)
+    member = admin_access.staff_members(db).get(str(admin_id)) or {}
+    return {"admin_id": admin_id, "role": role, "role_label": admin_access.ROLE_LABEL.get(role),
+            "name": member.get("name"), "perms": admin_access.PERMS.get(role, {})}
+
+
+# ═══════════════════════════ سجل العمليات + الصلاحيات (كل طلب لمسارات الأدمن) ═══════════════════════════
+def write_audit(admin_id, method: str, path: str, status: int, headers: dict, peer: str | None, body_summary: str):
+    try:
+        ua = headers.get("user-agent", "")
+        db.collection("audit_log").document().set({
+            "at": time.time(), "admin_id": admin_id, "role": admin_access.role_of(db, ADMIN_IDS, admin_id),
+            "method": method, "path": path, "action": admin_access.action_label(method, path), "status": status,
+            "ip": admin_access.client_ip(headers, peer), "user_agent": ua[:300], "device": admin_access.parse_device(ua),
+            "body": body_summary,
+        })
+    except Exception:  # noqa: BLE001 — السجل لا يعطّل العملية نفسها
+        log.exception("audit log")
+
+
+def _session_admin(cookie_header: str):
+    from http.cookies import SimpleCookie
+
+    try:
+        c = SimpleCookie(cookie_header or "")
+        token = c["aw_admin"].value if "aw_admin" in c else None
+        return int(pyjwt.decode(token, ADMIN_SESSION_SECRET, algorithms=["HS256"]).get("sub")) if token else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+class AdminGuard:
+    """ASGI: يمنع أي دور من الوصول لقسم ليس من صلاحياته، ويسجّل كل عملية تعديل (IP + الجهاز + المحتوى)."""
+
+    def __init__(self, app_):
+        self.app = app_
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "")
+        if scope["type"] != "http" or not (path.startswith("/api/admin") or path == "/api/system/status"):
+            return await self.app(scope, receive, send)
+        method = scope["method"]
+        headers = {k.decode().lower(): v.decode(errors="replace") for k, v in scope.get("headers", [])}
+        admin_id = _session_admin(headers.get("cookie", ""))
+        if admin_id and path not in admin_access.OPEN_PATHS:
+            role = await run_in_threadpool(admin_access.role_of, db, ADMIN_IDS, admin_id)
+            if role and not admin_access.allowed(role, admin_access.area_for(path), method):
+                body = json.dumps({"detail": "forbidden_role"}).encode()
+                await send({"type": "http.response.start", "status": 403,
+                            "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+                return await send({"type": "http.response.body", "body": body})
+        chunks, status = [], {"code": 0}
+
+        async def recv():
+            msg = await receive()
+            if msg["type"] == "http.request":
+                chunks.append(msg.get("body", b""))
+            return msg
+
+        async def snd(msg):
+            if msg["type"] == "http.response.start":
+                status["code"] = msg["status"]
+            await send(msg)
+
+        await self.app(scope, recv, snd)
+        if method not in ("GET", "HEAD", "OPTIONS") and path != "/api/admin/verify" and admin_id:
+            peer = (scope.get("client") or [None])[0]
+            await run_in_threadpool(write_audit, admin_id, method, path, status["code"], headers, peer,
+                                    admin_access.summarize_body(b"".join(chunks)))
+
+
+app.add_middleware(AdminGuard)
 
 
 def _account_type(server) -> str:
@@ -1116,6 +1209,12 @@ class PaymentCreate(BaseModel):
     pay_currency: str | None = None  # مع قيمة: بوابة مخصّصة (عنوان + مبلغ) بدل صفحة NOWPayments المستضافة
 
 
+def require_method(key: str):
+    """طرق الدفع قابلة للإيقاف من مركز التحكم في لوحة الأدمن."""
+    if not billing.get_settings(db).get(key, True):
+        raise HTTPException(403, "payment_method_disabled")
+
+
 def checkout_reward(uid, reward_id) -> dict | None:
     """يتحقق من جائزة الخدش قبل إنشاء طلب الدفع (منتهية/مستخدمة/ليست له → رفض)."""
     if not reward_id:
@@ -1136,6 +1235,7 @@ def reward_fields(card, reward_id, full_price) -> dict:
 @app.post("/api/payments/create")
 def create_payment(body: PaymentCreate):
     user = verify_init_data(body.init_data)
+    require_method("pay_crypto_enabled")
     pkgs = {p["id"]: p for p in billing.list_packages(db, active_only=True)}
     pkg = pkgs.get(body.package_id)
     if not pkg:
@@ -1309,6 +1409,7 @@ def tonconnect_manifest(response: Response):
 @app.post("/api/payments/create-ton")
 def create_ton_payment(body: TonPaymentCreate):
     user = verify_init_data(body.init_data)
+    require_method("pay_ton_enabled")
     if not ton.configured():
         raise HTTPException(503, "ton_not_configured")
     pkgs = {p["id"]: p for p in billing.list_packages(db, active_only=True)}
@@ -1437,6 +1538,7 @@ class StarsPaymentCreate(BaseModel):
 @app.post("/api/payments/create-stars")
 def create_stars_payment(body: StarsPaymentCreate):
     user = verify_init_data(body.init_data)
+    require_method("pay_stars_enabled")
     pkgs = {p["id"]: p for p in billing.list_packages(db, active_only=True)}
     pkg = pkgs.get(body.package_id)
     if not pkg:
@@ -1552,6 +1654,63 @@ def update_profile(body: ProfileUpdate):
     if patch:
         ref.set(patch, merge=True)
     return {"ok": True}
+
+
+# ═══════════════════════════ الصورة الشخصية ═══════════════════════════
+AVATAR_DIR = os.getenv("AVATAR_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "avatars")
+AVATAR_MAX_BYTES = 400_000
+_AVATAR_NAME = re.compile(r"^[A-Za-z0-9_-]{4,64}\.jpg$")
+
+
+def save_avatar(prefix: str, b64: str) -> str:
+    """يحفظ صورة JPEG (base64) ويعيد رابطها العام."""
+    try:
+        raw = base64.b64decode(b64.split(",")[-1], validate=True)
+    except (ValueError, TypeError):
+        raise HTTPException(422, "bad_image")
+    if len(raw) > AVATAR_MAX_BYTES or not raw.startswith(b"\xff\xd8\xff"):
+        raise HTTPException(422, "bad_image")
+    os.makedirs(AVATAR_DIR, exist_ok=True)
+    name = f"{prefix}_{secrets.token_urlsafe(6)}.jpg"
+    with open(os.path.join(AVATAR_DIR, name), "wb") as f:
+        f.write(raw)
+    return f"{WEBAPP_URL}/api/media/avatars/{name}"
+
+
+def delete_avatar(url: str | None):
+    name = (url or "").rsplit("/", 1)[-1]
+    if _AVATAR_NAME.match(name):
+        try:
+            os.remove(os.path.join(AVATAR_DIR, name))
+        except OSError:
+            pass
+
+
+class PhotoUpdate(BaseModel):
+    init_data: str
+    photo: str = ""  # JPEG base64؛ فارغ = حذف الصورة والعودة للصورة الافتراضية
+
+
+@app.post("/api/profile/photo")
+def update_photo(body: PhotoUpdate):
+    user = verify_init_data(body.init_data)
+    ref = user_ref(user["id"])
+    snap = ref.get()
+    if not snap.exists:
+        raise HTTPException(404, "not_found")
+    old = (snap.to_dict() or {}).get("photo_url")
+    url = save_avatar(f"u{user['id']}", body.photo) if body.photo else None
+    ref.set({"photo_url": url}, merge=True)
+    delete_avatar(old)
+    return {"ok": True, "photo_url": url}
+
+
+@app.get("/api/media/avatars/{name}")
+def avatar_file(name: str):
+    path = os.path.join(AVATAR_DIR, name)
+    if not _AVATAR_NAME.match(name) or not os.path.exists(path):
+        raise HTTPException(404, "not_found")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=2592000"})
 
 
 class FeedbackRequest(BaseModel):
@@ -1868,6 +2027,180 @@ def cleanup_share_media():
             pass
 
 
+# ═══════════════════════════ فريق العمل وسجل العمليات ═══════════════════════════
+@app.get("/api/admin/staff")
+def admin_staff(admin_id: int = Depends(get_current_admin)):
+    members = admin_access.staff_members(db)
+    owners = [{"id": str(i), "role": "owner", "name": None, "fixed": True} for i in sorted(ADMIN_IDS)]
+    rows = [{"id": k, **v, "fixed": False} for k, v in members.items()]
+    return {"members": owners + rows, "roles": {r: admin_access.ROLE_LABEL[r] for r in admin_access.ROLES[1:]},
+            "perms": admin_access.PERMS}
+
+
+class StaffMember(BaseModel):
+    id: str = Field(pattern=r"^\d{3,15}$")
+    role: str = Field(pattern="^(manager|support|viewer)$")
+    name: str = Field(default="", max_length=40)
+
+
+@app.put("/api/admin/staff")
+def admin_staff_put(body: StaffMember, admin_id: int = Depends(get_current_admin)):
+    if int(body.id) in ADMIN_IDS:
+        raise HTTPException(400, "owner_is_fixed")
+    db.collection("config").document("staff").set(
+        {"members": {body.id: {"role": body.role, "name": body.name.strip(), "added_at": time.time(), "added_by": admin_id}}},
+        merge=True,
+    )
+    admin_access.invalidate()
+    return {"ok": True}
+
+
+@app.delete("/api/admin/staff/{member_id}")
+def admin_staff_delete(member_id: str, admin_id: int = Depends(get_current_admin)):
+    ref = db.collection("config").document("staff")
+    snap = ref.get()
+    members = dict(((snap.to_dict() or {}).get("members") or {}) if snap.exists else {})
+    members.pop(member_id, None)
+    ref.set({"members": members})
+    admin_access.invalidate()
+    return {"ok": True}
+
+
+@app.get("/api/admin/audit")
+def admin_audit(limit: int = 200, admin: str | None = None, admin_id: int = Depends(get_current_admin)):
+    q = db.collection("audit_log").order_by("at", direction="DESCENDING").limit(max(1, min(limit, 1000)))
+    rows = []
+    for d in q.stream():
+        x = d.to_dict() or {}
+        if admin and str(x.get("admin_id")) != admin:
+            continue
+        rows.append({"id": d.id, **x})
+    return {"rows": rows}
+
+
+# ═══════════════════════════ لوحة الرئيس التنفيذي (CEO) ═══════════════════════════
+def _pay_usd(p: dict) -> float:
+    if p.get("amount_usd") is not None and p.get("method") != "stars":
+        return float(p["amount_usd"])
+    if p.get("method") == "ton" and p.get("amount_ton") and p.get("ton_rate_usd"):
+        return float(p["amount_ton"]) * float(p["ton_rate_usd"])
+    return 0.0
+
+
+@app.get("/api/admin/ceo")
+def admin_ceo(admin_id: int = Depends(get_current_admin)):
+    """أرقام الأعمال بلغة بسيطة: المستخدمون، الاشتراكات، الإيرادات، التحويل، الإحالة، ومنحنى 30 يومًا."""
+    now = time.time()
+    day = lambda ts: time.strftime("%Y-%m-%d", time.gmtime(ts))  # noqa: E731
+    days = [day(now - i * 86400) for i in range(29, -1, -1)]
+    signups = {d: 0 for d in days}
+    revenue = {d: 0.0 for d in days}
+
+    users = total = linked = active = expired = trial = referred = new7 = new30 = 0
+    for d in db.collection("users").stream():
+        u = d.to_dict() or {}
+        total += 1
+        created = _epoch(u.get("created_at")) or 0
+        if created:
+            new7 += created > now - 7 * 86400
+            new30 += created > now - 30 * 86400
+            if day(created) in signups:
+                signups[day(created)] += 1
+        linked += u.get("status") == "approved"
+        exp = float((u.get("subscription") or {}).get("expires_at") or 0)
+        active += exp > now
+        expired += 0 < exp <= now
+        trial += float(u.get("trial_expires_at") or 0) > now
+        referred += bool(u.get("referred_by"))
+
+    paid_users, by_method, by_package = set(), {}, {}
+    rev_total = rev30 = rev7 = 0.0
+    stars_total = orders = 0
+    pkgs = {p["id"]: p for p in billing.list_packages(db)}
+    for d in db.collection("payments").stream():
+        p = d.to_dict() or {}
+        if p.get("status") != "finished":
+            continue
+        orders += 1
+        paid_users.add(str(p.get("uid")))
+        at = float(p.get("confirmed_at") or p.get("created_at") or 0)
+        usd_v = _pay_usd(p)
+        method = p.get("method") or "nowpayments"
+        by_method[method] = by_method.get(method, 0) + 1
+        name = (pkgs.get(p.get("package_id")) or {}).get("name_en") or p.get("package_id")
+        by_package[name] = by_package.get(name, 0) + 1
+        stars_total += int(p.get("amount_stars") or 0)
+        rev_total += usd_v
+        rev30 += usd_v if at > now - 30 * 86400 else 0
+        rev7 += usd_v if at > now - 7 * 86400 else 0
+        if day(at) in revenue:
+            revenue[day(at)] += usd_v
+
+    r2 = lambda v: round(v, 2)  # noqa: E731
+    return {
+        "users": {"total": total, "linked": linked, "new_7d": new7, "new_30d": new30, "referred": referred},
+        "subscriptions": {"active": active, "expired": expired, "trial": trial,
+                          "paying_users": len(paid_users),
+                          "conversion_pct": r2(len(paid_users) / linked * 100) if linked else None},
+        "revenue": {"total_usd": r2(rev_total), "last_30d_usd": r2(rev30), "last_7d_usd": r2(rev7), "orders": orders,
+                    "stars_total": stars_total, "arpu_usd": r2(rev_total / len(paid_users)) if paid_users else None},
+        "by_method": by_method,
+        "by_package": dict(sorted(by_package.items(), key=lambda x: -x[1])),
+        "series": [{"d": d, "signups": signups[d], "revenue": r2(revenue[d])} for d in days],
+        "generated_at": now,
+    }
+
+
+# ═══════════════════════════ اقتراح خوادم MT5 ═══════════════════════════
+@app.get("/api/servers")
+def server_suggestions(q: str = ""):
+    return {"servers": servers.search(db, q[:64])}
+
+
+def backfill_servers() -> int:
+    """يسجّل خوادم الحسابات المربوطة حاليًا (أسماء قبلها MT5 فعلًا)."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    n = 0
+    for d in db.collection("users").where(filter=FieldFilter("status", "==", "approved")).stream():
+        name = (d.to_dict() or {}).get("mt5_server")
+        if name and servers.upsert(db, name, verified=True, source="linked"):
+            n += 1
+    return n
+
+
+@app.get("/api/admin/servers")
+def admin_servers(admin_id: int = Depends(get_current_admin)):
+    rows = sorted(servers.all_rows(db), key=lambda r: (not r["verified"], (r["name"] or "").lower()))
+    return {"servers": rows, "total": len(rows)}
+
+
+class ServerImport(BaseModel):
+    text: str = Field(max_length=500_000)
+
+
+@app.post("/api/admin/servers/import")
+def admin_servers_import(body: ServerImport, admin_id: int = Depends(get_current_admin)):
+    try:
+        rows = servers.parse_import(body.text)
+    except ValueError:
+        raise HTTPException(422, "bad_file")
+    added = sum(1 for name, typ in rows if servers.upsert(db, name, stype=typ, source="import"))
+    return {"imported": added}
+
+
+@app.post("/api/admin/servers/backfill")
+def admin_servers_backfill(admin_id: int = Depends(get_current_admin)):
+    return {"imported": backfill_servers()}
+
+
+@app.delete("/api/admin/servers/{sid}")
+def admin_servers_delete(sid: str, admin_id: int = Depends(get_current_admin)):
+    db.collection(servers.COLLECTION).document(sid).delete()
+    servers._CACHE["rows"] = None
+    return {"ok": True}
+
+
 # ═══════════════════════════ ترتيب أرباح هذا الأسبوع ═══════════════════════════
 @app.get("/api/leaderboard")
 def weekly_leaderboard(init_data: str):
@@ -1884,6 +2217,16 @@ def _leaderboard_tick():
 @app.get("/api/admin/leaderboard")
 def admin_leaderboard_config(admin_id: int = Depends(get_current_admin)):
     return {**leaderboard.get_config(db), "default_profiles": leaderboard.default_config()["profiles"]}
+
+
+class AdminPhoto(BaseModel):
+    photo: str
+
+
+@app.post("/api/admin/leaderboard/photo")
+def admin_leaderboard_photo(body: AdminPhoto, admin_id: int = Depends(get_current_admin)):
+    """رفع صورة بروفايل لمنافس في الترتيب؛ يعيد رابطها لاستخدامه في القائمة."""
+    return {"url": save_avatar("lb", body.photo)}
 
 
 @app.put("/api/admin/leaderboard")

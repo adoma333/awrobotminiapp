@@ -17,6 +17,13 @@ DEFAULT_SETTINGS = {
     "trial_enabled": False,
     "trial_days": 3,          # بين 3 و7
     "trial_max_lot": 0.01,    # 0 = لا تجربة للحسابات العادية (سنت فقط)
+    # مركز التحكم: يظهر أثرها في التطبيق مباشرة
+    "support_url": "",         # رابط الدعم الفني (t.me/... أو https://...)
+    "pay_ton_enabled": True,
+    "pay_crypto_enabled": True,
+    "pay_stars_enabled": True,
+    "announcement_ar": "",     # شريط إعلان أعلى الرئيسية (فارغ = لا يظهر)
+    "announcement_en": "",
 }
 
 _SETTINGS_DOC = ("config", "settings")

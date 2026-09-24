@@ -64,7 +64,9 @@ class Query:
         return Query(self.store, self.name, self.filters + [(field, op, value)], self.lim, self.order)
 
     def limit(self, n):
-        return Query(self.store, self.name, self.filters, n, self.order)
+        q = Query(self.store, self.name, self.filters, n, self.order)
+        q.desc = getattr(self, "desc", False)
+        return q
 
     def order_by(self, field, direction="ASCENDING"):
         q = Query(self.store, self.name, self.filters, self.lim, field)
@@ -490,7 +492,7 @@ ok("رمز خاطئ → 401", c.post("/api/admin/verify", json={"token": token, 
 ok("بلا جلسة → 401", c.get("/api/admin/me").status_code == 401)
 r = c.post("/api/admin/verify", json={"token": token, "code": code})
 ok("دخول ناجح ويضع كوكي الجلسة", r.status_code == 200 and "aw_admin" in c.cookies)
-ok("الجلسة تعمل (JWT بـ sub نصّي)", c.get("/api/admin/me").json() == {"admin_id": 555})
+ok("الجلسة تعمل (JWT بـ sub نصّي)", c.get("/api/admin/me").json()["admin_id"] == 555)
 ok("الرمز أحادي الاستخدام", c.post("/api/admin/verify", json={"token": token, "code": code}).status_code == 401)
 
 s = c.get("/api/admin/settings").json()
@@ -982,5 +984,73 @@ fb = c.get(path, params={"to": "facebook", "lang": "en"}).text
 ok("صفحة فيسبوك: صورة المنشور + رابط sharer احتياطي", "_post.jpg" in fb and "facebook.com/sharer" in fb and "Post to Facebook now" in fb)
 ok("منصة غير معروفة → صفحة المعاينة", "og:image" in c.get(path, params={"to": "evil"}).text)
 ok("لا تُخزَّن منصات غير معروفة", "evil" not in DB.store["shares"][r["id"]]["captions"])
+
+# ═════════ 27) اقتراح خوادم MT5 ═════════
+import servers  # noqa: E402
+reset(); add_user(42); servers._CACHE["rows"] = None
+c.post("/api/register", json=BODY(server="Exness-MT5Trial16"))
+ok("الربط الناجح يسجّل الخادم موثّقًا", DB.store["mt5_servers"]["exnessmt5trial16"]["verified"] and DB.store["mt5_servers"]["exnessmt5trial16"]["type"] == "demo")
+servers.upsert(DB, "Dukascopy-Demo-MT5", source="import"); servers.upsert(DB, "ICMarketsSC-MT5-2", stype="real")
+r = c.get("/api/servers", params={"q": "dukascopy-demo-mt5-1"}).json()["servers"]
+ok("خطأ في الكتابة → اقتراح الاسم الصحيح", r and r[0]["name"] == "Dukascopy-Demo-MT5" and r[0]["type"] == "demo")
+r = c.get("/api/servers", params={"q": "exness mt5 trial"}).json()["servers"]
+ok("تجاهل المسافات والشرطات + الموثّق أولًا", r[0]["name"] == "Exness-MT5Trial16" and r[0]["verified"])
+ok("مطابقة تامة معلّمة exact", c.get("/api/servers", params={"q": "icmarketssc-mt5-2"}).json()["servers"][0]["exact"])
+ok("parse CSV", servers.parse_import("name,type\nAlpari-MT5-Demo,demo\nFoo-Live , live\n") == [("Alpari-MT5-Demo", "demo"), ("Foo-Live", "real")])
+
+# ═════════ 28) الصور: بروفايل المستخدم ومنافسو الترتيب ═════════
+main.AVATAR_DIR = tempfile.mkdtemp()
+reset(); add_user(42, status="approved", nickname="Ahmed", report={"weekly_pnl": 10.0})
+r = c.post("/api/profile/photo", json={"init_data": init_data(), "photo": JPG}).json()
+ok("رفع الصورة الشخصية وتظهر في الحالة", r["photo_url"].startswith("https://example.test/api/media/avatars/u42_") and c.post("/api/status", json={"init_data": init_data()}).json()["photo_url"] == r["photo_url"])
+ok("الصورة متاحة للعرض", c.get(r["photo_url"].replace("https://example.test", "")).status_code == 200)
+ok("ليست JPEG → 422", c.post("/api/profile/photo", json={"init_data": init_data(), "photo": _b64.b64encode(b"<svg>").decode()}).status_code == 422)
+ok("حذف الصورة", c.post("/api/profile/photo", json={"init_data": init_data(), "photo": ""}).json()["photo_url"] is None)
+clean = leaderboard.clean_config({"profiles": [{"name": "A", "photo": "https://example.test/api/media/avatars/lb_x.jpg"}, {"name": "B", "photo": "javascript:alert(1)"}]})
+ok("صور المنافسين: روابط https فقط", clean["profiles"][0]["photo"].startswith("https://") and clean["profiles"][1]["photo"] is None)
+
+# ═════════ 29) فريق العمل والصلاحيات وسجل العمليات ولوحة CEO ═════════
+import admin_access  # noqa: E402
+def admin_login(uid, ua="Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148 Safari/604.1"):
+    c.cookies.clear()
+    W({"message": {"chat": {"id": uid, "type": "private"}, "from": {"id": uid}, "text": "/admin"}})
+    txt_ = CALLS[-1][1]["text"]
+    return c.post("/api/admin/verify", json={"token": txt_.split("token=")[1].split("\n")[0].strip(), "code": txt_.split("<code>")[1].split("</code>")[0]},
+                  headers={"User-Agent": ua, "X-Forwarded-For": "203.0.113.7, 10.0.0.1"})
+reset(); admin_access.invalidate()
+admin_login(555)
+ok("المالك يرى صلاحياته", c.get("/api/admin/me").json()["role"] == "owner")
+ok("المالك يضيف عضو دعم", c.put("/api/admin/staff", json={"id": "7777", "role": "support", "name": "Mona"},
+                                 headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile", "X-Forwarded-For": "203.0.113.7"}).status_code == 200)
+log_ = c.get("/api/admin/audit").json()["rows"]
+ok("سجل العمليات: الفعل + IP + الجهاز", log_[0]["action"] == "إضافة/تعديل عضو فريق" and log_[0]["ip"] == "203.0.113.7" and log_[0]["device"]["os"] == "iOS" and '"name": "Mona"' in log_[0]["body"])
+ok("تسجيل الدخول مسجّل", any(x["action"] == "تسجيل دخول" for x in log_))
+c.put("/api/admin/settings", json={"kill_switch": True})
+ok("كل تعديل يُسجَّل", c.get("/api/admin/audit").json()["rows"][0]["action"] == "تعديل الإعدادات العامة")
+
+CALLS.clear(); admin_login(7777, ua="Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36")
+me = c.get("/api/admin/me").json()
+ok("عضو الدعم يدخل بدوره", me["role"] == "support" and me["name"] == "Mona")
+ok("الدعم لا يعدّل الإعدادات", c.put("/api/admin/settings", json={"kill_switch": False}).status_code == 403)
+ok("الدعم لا يدير الفريق", c.get("/api/admin/staff").status_code == 403)
+ok("الدعم يرى CEO", c.get("/api/admin/ceo").status_code == 200)
+admin_login(555)
+ok("الجهاز والطراز من User-Agent", admin_access.parse_device("Mozilla/5.0 (Linux; Android 14; SM-S918B) Chrome/126 Mobile")["model"] == "SM-S918B")
+ok("إخفاء القيم الحساسة في السجل", "•••" in admin_access.summarize_body(b'{"code":"123456","photo":"abc"}'))
+c.delete("/api/admin/staff/7777")
+ok("إزالة العضو تمنع دخوله", admin_access.role_of(DB, main.ADMIN_IDS, 7777) is None)
+
+reset(); admin_login(555)
+now_ = time.time()
+add_user(1, status="approved", subscription={"expires_at": now_ + 86400}); add_user(2, status="approved", referred_by="1"); add_user(3)
+add_package("p1")
+DB.store["payments"] = {"a": {"uid": 1, "package_id": "p1", "status": "finished", "amount_usd": 29.0, "method": "nowpayments", "confirmed_at": now_},
+                        "b": {"uid": 1, "package_id": "p1", "status": "finished", "amount_ton": 10, "ton_rate_usd": 3.0, "method": "ton", "confirmed_at": now_},
+                        "c": {"uid": 2, "package_id": "p1", "status": "waiting", "amount_usd": 29.0}}
+ceo = c.get("/api/admin/ceo").json()
+ok("CEO: المستخدمون والاشتراكات", ceo["users"]["total"] == 3 and ceo["users"]["linked"] == 2 and ceo["subscriptions"]["active"] == 1 and ceo["subscriptions"]["conversion_pct"] == 50.0)
+ok("CEO: الإيرادات بالدولار (TON × سعره)", ceo["revenue"]["total_usd"] == 59.0 and ceo["revenue"]["orders"] == 2 and ceo["by_method"] == {"nowpayments": 1, "ton": 1})
+ok("CEO: منحنى 30 يومًا", len(ceo["series"]) == 30 and ceo["series"][-1]["revenue"] == 59.0)
+c.post("/api/admin/logout")
 
 print("\nALL BACKEND CHECKS PASSED")
