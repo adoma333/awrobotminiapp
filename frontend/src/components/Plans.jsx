@@ -40,8 +40,8 @@ function Emblem({ kind }) {
 }
 
 /**
- * mode = 'flow'  : خطوة داخل رحلة التسجيل (زر "متابعة" يظهر عند وجود اشتراك فعّال)
- * mode = 'renew' : شاشة تجديد من لوحة الحساب
+ * mode = 'renew' : شاشة الباقات من لوحة الحساب (بعد ربط الحساب — شراء أول باقة أو تجديدها)
+ * mode = 'flow'  : غير مستخدم حاليًا (كانت خطوة قبل الربط)
  */
 export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, onBack }) {
   const [packages, setPackages] = useState(null);
@@ -160,7 +160,7 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
 
   return (
     <section className="step">
-      <h1>{mode === 'renew' ? t.renewTitle : t.plansTitle}</h1>
+      <h1>{mode === 'renew' && sub ? t.renewTitle : t.plansTitle}</h1>
       <p className="sub">{t.plansSub}</p>
 
       {sub?.active && (

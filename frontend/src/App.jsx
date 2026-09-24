@@ -28,8 +28,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export default function App() {
   const [lang, setLang] = useState(tgLang === 'ar' ? 'ar' : 'en');
   const [phase, setPhase] = useState('loading'); // loading | flow | dashboard | status
-  const [step, setStep] = useState('lang'); // lang | profile | plan | mt5
-  const [needsPlan, setNeedsPlan] = useState(true);
+  const [step, setStep] = useState('lang'); // lang | profile | mt5  (شراء الباقة بعد الربط)
   const [view, setView] = useState('main'); // داخل اللوحة: main | plans | settings | terms | privacy | faq | calc | billing
   const [profile, setProfile] = useState({ nickname: '', avatar: 'boy' });
   const [mt5, setMt5] = useState(EMPTY_MT5);
@@ -39,10 +38,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
 
   const t = messages[lang];
-  const steps = useMemo(
-    () => (needsPlan ? ['lang', 'profile', 'plan', 'mt5'] : ['lang', 'profile', 'mt5']),
-    [needsPlan]
-  );
+  const steps = useMemo(() => ['lang', 'profile', 'mt5'], []);
   const sub = info.subscription || null;
 
   useEffect(() => {
@@ -66,11 +62,10 @@ export default function App() {
       .then((s) => {
         setInfo(s);
         if (s.language) setLang(s.language);
-        setNeedsPlan(!s.subscription?.active);
         if (s.status === 'approved') setPhase('dashboard');
         else if (s.status === 'rejected' || s.status === 'pending') setPhase('status');
         else {
-          // none / unlinked: يبدأ رحلة الربط (يتجاوز الدفع إن كان اشتراكه فعّالًا)
+          // none / unlinked: يبدأ رحلة الربط (الدفع يأتي بعد الربط)
           if (!localStorage.getItem(ONBOARD_KEY)) setShowOnboarding(true);
           setPhase('flow');
         }
@@ -103,7 +98,8 @@ export default function App() {
     if (s.status === 'approved') {
       haptic.success();
       setMt5(EMPTY_MT5);
-      setView('main');
+      // بلا اشتراك فعّال: نعرض الباقات مباشرة بعد نجاح الربط
+      setView(s.subscription?.active ? 'main' : 'plans');
       setPhase('dashboard');
     }
   }
@@ -138,11 +134,6 @@ export default function App() {
       const code = errorCodeOf(e);
       if (code === 'approved') {
         await finishLinked();
-      } else if (code === 'subscription_required') {
-        haptic.error();
-        setNeedsPlan(true);
-        setStep('plan');
-        refreshStatus().catch(() => {});
       } else if (code === 'network') {
         if (await waitForApproval(150000)) await finishLinked();
         else {
@@ -161,12 +152,10 @@ export default function App() {
   // بعد فكّ الربط: نعود لرحلة الربط لحساب جديد، والاشتراك باقٍ
   async function afterUnlink() {
     const s = await refreshStatus();
-    const active = Boolean(s.subscription?.active);
-    setNeedsPlan(!active);
     if (s.nickname) setProfile({ nickname: s.nickname, avatar: s.avatar || 'boy' });
     setMt5(EMPTY_MT5);
     setErrorCode('');
-    setStep(active ? 'mt5' : 'plan');
+    setStep('mt5');
     setView('main');
     setPhase('flow');
   }
@@ -174,7 +163,7 @@ export default function App() {
   function retry() {
     setErrorCode('');
     if (info.nickname) setProfile({ nickname: info.nickname, avatar: info.avatar || 'boy' });
-    setStep(info.subscription?.active ? 'mt5' : 'plan');
+    setStep('mt5');
     setPhase('flow');
   }
 
@@ -210,17 +199,6 @@ export default function App() {
             {step === 'lang' && <LanguageStep t={t} lang={lang} setLang={setLang} onNext={() => go(1)} />}
             {step === 'profile' && (
               <ProfileStep t={t} profile={profile} setProfile={setProfile} onNext={() => go(1)} onBack={() => go(-1)} />
-            )}
-            {step === 'plan' && (
-              <Plans
-                t={t}
-                lang={lang}
-                mode="flow"
-                sub={sub}
-                refreshStatus={refreshStatus}
-                onContinue={() => go(1)}
-                onBack={() => go(-1)}
-              />
             )}
             {step === 'mt5' && (
               <MT5FormStep

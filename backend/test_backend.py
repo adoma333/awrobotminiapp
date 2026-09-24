@@ -306,9 +306,9 @@ ok("kill_switch → 503 registration_paused", r.status_code == 503 and r.json()[
 
 reset(); add_user(42)
 r = c.post("/api/register", json=BODY())
-ok("بلا اشتراك → 402 subscription_required", r.status_code == 402 and r.json()["detail"] == "subscription_required")
-add_user(42, subscription={"expires_at": time.time() - 5})
-ok("اشتراك منتهٍ → 402", c.post("/api/register", json=BODY()).status_code == 402)
+ok("بلا اشتراك → الربط مسموح (الشراء بعد الربط)", r.status_code == 200 and r.json() == {"status": "approved"})
+reset(); add_user(42, subscription={"expires_at": time.time() - 5})
+ok("اشتراك منتهٍ → الربط مسموح", c.post("/api/register", json=BODY()).status_code == 200)
 
 reset(); add_user(42, subscription=active_sub())
 DB.store["blacklist"] = {"51234567": {"reason": "x"}}

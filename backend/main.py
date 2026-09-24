@@ -264,8 +264,7 @@ def register(body: Registration):
     settings = billing.get_settings(db)
     if settings.get("kill_switch"):
         raise HTTPException(503, "registration_paused")
-    if not billing.is_subscription_active(previous or {}):
-        raise HTTPException(402, "subscription_required")
+    # الربط متاح بلا اشتراك: شراء الباقة يأتي بعد ربط الحساب (من لوحة الحساب)
 
     fails = [t for t in ((previous or {}).get("link_fails") or []) if now_ts - t < 3600]
     if len(fails) >= 3:
