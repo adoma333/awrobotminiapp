@@ -2,7 +2,7 @@ import React from 'react';
 import Avatar from './Avatar';
 import { fill } from '../i18n';
 import { DashboardSkeleton } from './Skeleton';
-import { fmt, pct, timeAgo, tone } from './Stats';
+import { fmt, pct, tone } from './Stats';
 
 function Cell({ label, pctValue, money, cur }) {
   return (
@@ -97,10 +97,6 @@ export default function Dashboard({ t, lang, data, onRenew, onSettings, onReward
         </div>
       </div>
 
-      <p className="foot">
-        <i className={`dot ${stale ? 'warn' : 'up'}`} />
-        {t.updated}: {timeAgo(live.updated_at, lang)} · {t.syncNote}
-      </p>
     </section>
   );
 }

@@ -1,5 +1,5 @@
 import QRCode from 'qrcode';
-import logo from './assets/logo.png';
+import logo from './assets/logo-wordmark.png';
 import boy from './assets/icons/boy.webp';
 import girl from './assets/icons/girl.webp';
 
@@ -61,11 +61,9 @@ export async function renderStory(s) {
   ]);
 
   // الشعار
-  const lh = 150;
-  const lw = (lg.width / lg.height) * lh;
-  ctx.globalCompositeOperation = 'screen';
-  ctx.drawImage(lg, (W - lw) / 2, 110, lw, lh);
-  ctx.globalCompositeOperation = 'source-over';
+  const lw = 560;
+  const lh = (lg.height / lg.width) * lw;
+  ctx.drawImage(lg, (W - lw) / 2, 150 - lh / 2 + 20, lw, lh);
 
   // الصورة والاسم
   ctx.save();
@@ -154,5 +152,94 @@ export async function renderStory(s) {
   ctx.direction = 'ltr';
   ctx.fillText(s.code, W / 2, 1870);
 
-  return new Promise((resolve) => c.toBlob(resolve, 'image/png'));
+  return new Promise((resolve) => c.toBlob(resolve, 'image/jpeg', 0.9));
+}
+
+/** منشور مربّع 1080×1080 للمنصات (فيسبوك/إنستغرام/X) ولمعاينة الروابط. */
+export async function renderPost(s) {
+  await document.fonts?.load(`700 64px ${FONT}`).catch(() => {});
+  const S = 1080;
+  const c = document.createElement('canvas');
+  c.width = S;
+  c.height = S;
+  const ctx = c.getContext('2d');
+  const dir = s.dir || 'rtl';
+  ctx.direction = dir;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, S, S);
+  const glow = ctx.createRadialGradient(S / 2, 470, 30, S / 2, 470, 640);
+  glow.addColorStop(0, 'rgba(255,106,0,0.36)');
+  glow.addColorStop(1, 'rgba(255,106,0,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, S, S);
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  for (let x = 30; x < S; x += 54) for (let y = 30; y < S; y += 54) ctx.fillRect(x, y, 3, 3);
+
+  const [lg, av] = await Promise.all([loadImg(logo), loadImg(s.avatar === 'girl' ? girl : boy)]);
+  const lw = 460;
+  ctx.drawImage(lg, (S - lw) / 2, 70, lw, (lg.height / lg.width) * lw);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(S / 2, 300, 72, 0, Math.PI * 2);
+  ctx.clip();
+  const sc = Math.max(144 / av.width, 144 / av.height);
+  ctx.drawImage(av, S / 2 - (av.width * sc) / 2, 228, av.width * sc, av.height * sc);
+  ctx.restore();
+  ctx.strokeStyle = '#ff8a00';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.arc(S / 2, 300, 74, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = '#f5efe8';
+  ctx.font = `700 50px ${FONT}`;
+  ctx.fillText(s.nickname || 'AW Trader', S / 2, 430);
+
+  const g = ctx.createLinearGradient(0, 480, 0, 640);
+  g.addColorStop(0, '#ffb35c');
+  g.addColorStop(1, '#ff5a00');
+  ctx.fillStyle = g;
+  ctx.font = `700 150px ${DISPLAY}`;
+  ctx.direction = 'ltr';
+  ctx.fillText(s.bigValue, S / 2, 615);
+  ctx.direction = dir;
+  ctx.fillStyle = '#8c8378';
+  ctx.font = `600 38px ${FONT}`;
+  ctx.fillText(s.bigLabel, S / 2, 680);
+
+  const stats = (s.stats || []).slice(0, 3);
+  const cw = 290;
+  const gap = 24;
+  const x0 = (S - (cw * stats.length + gap * (stats.length - 1))) / 2;
+  stats.forEach((st, i) => {
+    const x = x0 + i * (cw + gap);
+    roundRect(ctx, x, 730, cw, 150, 24);
+    ctx.fillStyle = 'rgba(255,138,0,0.08)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,138,0,0.35)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.fillStyle = '#f5efe8';
+    ctx.font = `700 54px ${DISPLAY}`;
+    ctx.direction = 'ltr';
+    ctx.fillText(st.value, x + cw / 2, 805);
+    ctx.direction = dir;
+    ctx.fillStyle = '#8c8378';
+    let size = 30;
+    do {
+      ctx.font = `600 ${size}px ${FONT}`;
+      size -= 2;
+    } while (ctx.measureText(st.label).width > cw - 28 && size > 18);
+    ctx.fillText(st.label, x + cw / 2, 852);
+  });
+
+  ctx.fillStyle = '#8c8378';
+  ctx.font = `600 32px ${FONT}`;
+  ctx.fillText(s.codeLabel, S / 2, 945);
+  ctx.fillStyle = '#ff8a00';
+  ctx.font = `700 60px ${DISPLAY}`;
+  ctx.direction = 'ltr';
+  ctx.fillText(s.code, S / 2, 1015);
+  return new Promise((resolve) => c.toBlob(resolve, 'image/jpeg', 0.9));
 }

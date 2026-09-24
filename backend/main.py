@@ -28,13 +28,15 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response, Depends
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+import base64
 import billing
 import payments
 import digest
 import heartbeat
 import reminders
 import rewards
+import leaderboard
 import ton
 from retry import RetryableError, raise_for_retryable, with_backoff
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -133,6 +135,8 @@ async def lifespan(_app):
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "weekly"), "cron", day_of_week="mon", hour=9, id="digest_weekly")
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "monthly"), "cron", day=1, hour=9, id="digest_monthly")
     _scheduler.add_job(retry_inbox, "interval", seconds=60, id="webhook_inbox_retry")
+    _scheduler.add_job(cleanup_share_media, "cron", hour=4, id="share_media_cleanup")
+    _scheduler.add_job(_leaderboard_tick, "interval", seconds=leaderboard.TICK_SEC, id="leaderboard_tick")
     _scheduler.add_job(lambda: reminders.run_renewal_reminders(db, tg, WEBAPP_URL), "cron", hour=10, id="renewal_reminders")
     if ton.configured():
         _scheduler.add_job(scan_ton_payments, "interval", seconds=60, id="ton_scan")
@@ -203,11 +207,15 @@ class MT5(BaseModel):
     server: str = Field(min_length=2, max_length=64)
 
 
+TERMS_VERSION = "2026-09"  # نسخة شروط الاستخدام وإخلاء المسؤولية (Terms & Risks)
+
+
 class Registration(BaseModel):
     init_data: str
     language: str = Field(pattern="^(ar|en)$")
     profile: Profile
     mt5: MT5
+    terms_accepted: bool = False  # موافقة صريحة على Terms & Risks قبل الربط
 
 
 class StatusRequest(BaseModel):
@@ -296,6 +304,8 @@ def register(body: Registration):
     if previous and previous.get("status") == "approved":
         raise HTTPException(409, "approved")
 
+    if not body.terms_accepted:
+        raise HTTPException(400, "terms_required")
     settings = billing.get_settings(db)
     if settings.get("kill_switch"):
         raise HTTPException(503, "registration_paused")
@@ -354,6 +364,7 @@ def register(body: Registration):
             "mt5_login": body.mt5.login,
             "mt5_password": body.mt5.password,
             "mt5_server": body.mt5.server,
+            "terms": {"version": TERMS_VERSION, "accepted_at": now_ts},
             "status": "approved",
             "rejection_reason": None,
             "link_fails": [],
@@ -967,7 +978,11 @@ def admin_stats(admin_id: int = Depends(get_current_admin)):
 # ═══════════════════════════ الإعدادات والباقات (Admin) ═══════════════════════════
 @app.get("/api/packages")
 def public_packages():
-    return {"packages": billing.list_packages(db, active_only=True), "ton_enabled": ton.configured()}
+    pkgs = billing.list_packages(db, active_only=True)
+    rate = ton.usd_rate() if ton.configured() else None
+    for p in pkgs:  # سعر TON متغيّر حسب السوق (يُحسب من السعر بالدولار)
+        p["price_ton"] = ton.usd_to_ton(p["price_usd"], rate) if rate else None
+    return {"packages": pkgs, "ton_enabled": bool(rate), "ton_rate": rate}
 
 
 @app.get("/api/admin/settings")
@@ -983,6 +998,12 @@ def admin_update_settings(patch: dict, admin_id: int = Depends(get_current_admin
 @app.get("/api/admin/packages")
 def admin_list_packages(admin_id: int = Depends(get_current_admin)):
     return {"packages": billing.list_packages(db)}
+
+
+@app.post("/api/admin/packages/seed")
+def admin_seed_packages(admin_id: int = Depends(get_current_admin)):
+    """يستورد الباقات المقترحة (Starter / Pro / Premium) غير الموجودة."""
+    return {"created": billing.seed_packages(db)}
 
 
 @app.post("/api/admin/packages")
@@ -1092,6 +1113,7 @@ class PaymentCreate(BaseModel):
     init_data: str
     package_id: str
     reward_id: str | None = None  # جائزة خدش صالحة تُطبَّق تلقائيًا على المبلغ
+    pay_currency: str | None = None  # مع قيمة: بوابة مخصّصة (عنوان + مبلغ) بدل صفحة NOWPayments المستضافة
 
 
 def checkout_reward(uid, reward_id) -> dict | None:
@@ -1125,6 +1147,8 @@ def create_payment(body: PaymentCreate):
 
     order_id = f"{user['id']}-{body.package_id}-{int(time.time())}"
     base = FRONTEND_ORIGIN if FRONTEND_ORIGIN != "*" else (WEBAPP_URL or "")
+    if body.pay_currency:
+        return _create_direct_crypto(user, body, pkg, card, amount_usd, order_id, base)
     try:
         inv = payments.create_invoice(
             order_id=order_id,
@@ -1154,6 +1178,75 @@ def create_payment(body: PaymentCreate):
         # بوابة NOWPayments المضمّنة: تُعرض داخل الـ Mini App في iframe بدل متصفح خارجي
         "widget_url": payments.widget_url(inv.get("id")) if inv.get("id") else None,
     }
+
+
+def _create_direct_crypto(user, body, pkg, card, amount_usd, order_id, base):
+    try:
+        pay = payments.create_direct_payment(
+            order_id=order_id,
+            amount_usd=amount_usd,
+            pay_currency=body.pay_currency,
+            description=f"AW Robot - {pkg.get('name_en') or pkg.get('name_ar')}",
+            ipn_url=f"{base}/api/payments/nowpayments-webhook",
+        )
+    except payments.PaymentError as e:
+        code = str(e)
+        raise HTTPException(400 if code in ("unsupported_currency", "amount_too_low") else 502,
+                            code if code in ("unsupported_currency", "amount_too_low") else "payment_provider_error")
+    info = {
+        "payment_id": pay.get("payment_id"),
+        "pay_address": pay.get("pay_address"),
+        "pay_amount": pay.get("pay_amount"),
+        "pay_currency": pay.get("pay_currency") or body.pay_currency,
+        "payin_extra_id": pay.get("payin_extra_id"),  # memo/tag مطلوب لبعض الشبكات (مثل TON)
+        "network": payments.CURRENCIES.get(body.pay_currency, ("", ""))[1],
+        "expires_at": pay.get("expiration_estimate_date"),
+    }
+    db.collection("payments").document(order_id).set({
+        "uid": user["id"],
+        "package_id": body.package_id,
+        "amount_usd": amount_usd,
+        "method": "nowpayments",
+        "status": "waiting",
+        "created_at": time.time(),
+        "np_payment_id": info["payment_id"],
+        "np_pay": info,
+        **reward_fields(card, body.reward_id, pkg["price_usd"]),
+    })
+    return {"order_id": order_id, "amount_usd": amount_usd, **info}
+
+
+@app.get("/api/payments/currencies")
+def payment_currencies():
+    return {"currencies": payments.currencies()}
+
+
+class OrderStatus(BaseModel):
+    init_data: str
+    order_id: str
+
+
+@app.post("/api/payments/status")
+def payment_status(body: OrderStatus):
+    """حالة طلب الدفع لشاشة الدفع المخصّصة. يسأل NOWPayments مباشرة (بحد أدنى 10ث بين الطلبات)."""
+    user = verify_init_data(body.init_data)
+    ref = db.collection("payments").document(body.order_id)
+    snap = ref.get()
+    pay = snap.to_dict() if snap.exists else None
+    if not pay or str(pay.get("uid")) != str(user["id"]):
+        raise HTTPException(404, "order_not_found")
+    status = pay.get("status")
+    if status not in ("finished", "failed", "expired", "refunded") and pay.get("np_payment_id"):
+        if time.time() - float(pay.get("np_checked_at") or 0) >= 10:
+            ref.set({"np_checked_at": time.time()}, merge=True)
+            try:
+                remote = payments.get_payment(pay["np_payment_id"]).get("payment_status")
+            except payments.PaymentError:
+                remote = None
+            if remote and remote != status:
+                process_nowpayments({"order_id": body.order_id, "payment_status": remote, "payment_id": pay["np_payment_id"]})
+                status = ref.get().to_dict().get("status")
+    return {"status": status}
 
 
 def process_nowpayments(data: dict):
@@ -1222,9 +1315,10 @@ def create_ton_payment(body: TonPaymentCreate):
     pkg = pkgs.get(body.package_id)
     if not pkg:
         raise HTTPException(404, "package_not_found")
-    full = pkg.get("price_ton")
-    if not full:
-        raise HTTPException(400, "ton_not_configured_for_package")
+    rate = ton.usd_rate()
+    if not rate:
+        raise HTTPException(503, "ton_rate_unavailable")
+    full = ton.usd_to_ton(pkg["price_usd"], rate)  # سعر متغيّر حسب سعر TON الحالي
     card = checkout_reward(user["id"], body.reward_id)
     price = round(rewards.apply_to_amount(card, full)[0], 4) if card else full
 
@@ -1235,6 +1329,7 @@ def create_ton_payment(body: TonPaymentCreate):
         "package_id": body.package_id,
         "amount_ton": price,
         "amount_nano": nano,
+        "ton_rate_usd": rate,
         "method": "ton",
         "status": "waiting",
         "created_at": time.time(),
@@ -1575,6 +1670,129 @@ def analytics(init_data: str):
     }
 
 
+# ═══════════════════════════ مشاركة القصص والمنشورات ═══════════════════════════
+MEDIA_DIR = os.getenv("MEDIA_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "share")
+SHARE_MAX_BYTES = 1_500_000
+SHARE_DAILY_LIMIT = 30
+SHARE_KEEP_DAYS = 30
+_SHARE_ID = re.compile(r"^[A-Za-z0-9_-]{8,24}$")
+
+
+class ShareCreate(BaseModel):
+    init_data: str
+    story: str  # JPEG بصيغة base64 (1080×1920)
+    post: str   # JPEG بصيغة base64 (1080×1080)
+    caption: str = Field(default="", max_length=1500)
+
+
+def _jpeg(b64: str) -> bytes:
+    try:
+        raw = base64.b64decode(b64.split(",")[-1], validate=True)
+    except (ValueError, TypeError):
+        raise HTTPException(422, "bad_image")
+    if len(raw) > SHARE_MAX_BYTES or not raw.startswith(b"\xff\xd8\xff"):
+        raise HTTPException(422, "bad_image")
+    return raw
+
+
+@app.post("/api/share/create")
+def share_create(body: ShareCreate):
+    """يرفع صورة القصة وصورة المنشور ويعيد روابط عامة: للقصة (Telegram Stories)، وللصورة، ولصفحة مشاركة بمعاينة كاملة."""
+    user = verify_init_data(body.init_data)
+    uid = str(user["id"])
+    story, post = _jpeg(body.story), _jpeg(body.post)
+    ref = user_ref(uid)
+    d = (ref.get().to_dict() or {})
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    count = (d.get("share_quota") or {}).get(day, 0)
+    if count >= SHARE_DAILY_LIMIT:
+        raise HTTPException(429, "share_limit")
+    ref.set({"share_quota": {day: count + 1}}, merge=True)
+
+    sid = secrets.token_urlsafe(9)
+    os.makedirs(MEDIA_DIR, exist_ok=True)
+    for kind, data in (("story", story), ("post", post)):
+        with open(os.path.join(MEDIA_DIR, f"{sid}_{kind}.jpg"), "wb") as f:
+            f.write(data)
+    code = d.get("referral_code") or billing.ensure_referral_code(db, uid)
+    bot = _bot_username()
+    db.collection("shares").document(sid).set({
+        "uid": uid, "caption": body.caption.strip(), "created_at": time.time(),
+        "link": f"https://t.me/{bot}?start={code}" if bot else WEBAPP_URL,
+    })
+    base = f"{WEBAPP_URL}/api/share"
+    return {"id": sid, "story_url": f"{base}/img/{sid}_story.jpg", "post_url": f"{base}/img/{sid}_post.jpg",
+            "page_url": f"{base}/p/{sid}"}
+
+
+@app.get("/api/share/img/{name}")
+def share_image(name: str):
+    sid, _, kind = name.removesuffix(".jpg").rpartition("_")
+    if not _SHARE_ID.match(sid) or kind not in ("story", "post"):
+        raise HTTPException(404, "not_found")
+    path = os.path.join(MEDIA_DIR, f"{sid}_{kind}.jpg")
+    if not os.path.exists(path):
+        raise HTTPException(404, "not_found")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=604800"})
+
+
+@app.get("/api/share/p/{sid}", response_class=HTMLResponse)
+def share_page(sid: str):
+    """صفحة المنشور: وسوم Open Graph (صورة + وصف) كي يظهر المنشور كاملًا في فيسبوك وX وواتساب وتلجرام، ثم تحويل لرابط الدعوة."""
+    snap = db.collection("shares").document(sid).get() if _SHARE_ID.match(sid) else None
+    if not snap or not snap.exists:
+        raise HTTPException(404, "not_found")
+    d = snap.to_dict() or {}
+    img = f"{WEBAPP_URL}/api/share/img/{sid}_post.jpg"
+    link = escape(d.get("link") or WEBAPP_URL, quote=True)
+    caption = d.get("caption") or "AW Robot"
+    desc = escape(" ".join(caption.split())[:280], quote=True)
+    body = escape(caption).replace("\n", "<br>")
+    return f"""<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AW Robot</title>
+<meta property="og:type" content="website"><meta property="og:site_name" content="AW Robot">
+<meta property="og:title" content="AW Robot — التداول الآلي بالذكاء الاصطناعي">
+<meta property="og:description" content="{desc}">
+<meta property="og:image" content="{img}"><meta property="og:image:width" content="1080"><meta property="og:image:height" content="1080">
+<meta property="og:url" content="{WEBAPP_URL}/api/share/p/{sid}">
+<meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="{img}">
+<meta name="twitter:title" content="AW Robot"><meta name="twitter:description" content="{desc}">
+<style>body{{margin:0;background:#000;color:#f5efe8;font-family:system-ui,sans-serif;display:flex;justify-content:center}}
+main{{max-width:480px;padding:20px;text-align:center}}img{{width:100%;border-radius:12px}}p{{line-height:1.7;color:#cfc6bb}}
+a{{display:inline-block;margin-top:12px;padding:14px 28px;border-radius:10px;background:linear-gradient(135deg,#ff8a00,#ff5a00);color:#1a0d00;font-weight:800;text-decoration:none}}</style>
+</head><body><main><img src="{img}" alt="AW Robot"><p>{body}</p><a href="{link}">ابدأ الآن مع AW Robot</a></main>
+<script>setTimeout(function(){{location.href={json.dumps(d.get("link") or WEBAPP_URL)}}},2500)</script></body></html>"""
+
+
+def cleanup_share_media():
+    """يحذف صور المشاركة الأقدم من SHARE_KEEP_DAYS يومًا."""
+    if not os.path.isdir(MEDIA_DIR):
+        return
+    cutoff = time.time() - SHARE_KEEP_DAYS * 86400
+    for name in os.listdir(MEDIA_DIR):
+        path = os.path.join(MEDIA_DIR, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except OSError:
+            pass
+
+
+# ═══════════════════════════ ترتيب أرباح هذا الأسبوع ═══════════════════════════
+@app.get("/api/leaderboard")
+def weekly_leaderboard(init_data: str):
+    user = verify_init_data(init_data)
+    st = billing.get_settings(db)
+    return leaderboard.build(db, user["id"], bool(st.get("leaderboard_sim")), int(st.get("leaderboard_sim_count") or 0))
+
+
+def _leaderboard_tick():
+    st = billing.get_settings(db)
+    if st.get("leaderboard_sim"):
+        leaderboard.tick(db, int(st.get("leaderboard_sim_count") or 0))
+
+
 # ═══════════════════════════ لوحة الأدمن: المكافآت والكوبونات ═══════════════════════════
 @app.get("/api/admin/rewards/config")
 def admin_rewards_config(admin_id: int = Depends(get_current_admin)):
@@ -1738,10 +1956,10 @@ def billing_history(init_data: str):
     user = verify_init_data(init_data)
     pkgs = {p["id"]: p for p in billing.list_packages(db)}
     rows = []
-    query = db.collection("payments").where(filter=FieldFilter("uid", "==", user["id"])).order_by(
-        "created_at", direction="DESCENDING"
-    )
-    for doc in query.stream():
+    # بلا order_by: الجمع بين where و order_by يتطلب فهرسًا مركّبًا في Firestore (وبدونه يفشل الطلب)
+    docs = list(db.collection("payments").where(filter=FieldFilter("uid", "==", user["id"])).stream())
+    docs.sort(key=lambda d: (d.to_dict() or {}).get("created_at") or 0, reverse=True)
+    for doc in docs:
         p = doc.to_dict() or {}
         pkg = pkgs.get(p.get("package_id"), {})
         if p.get("method") == "stars" or p.get("amount_stars"):

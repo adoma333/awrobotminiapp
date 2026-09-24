@@ -7,6 +7,7 @@ import { fmt, pct, Row, tone } from './Stats';
 import { DashboardSkeleton } from './Skeleton';
 import Icon from './Icon';
 import N8nFlow from './N8nFlow';
+import Leaderboard from './Leaderboard';
 
 // لونا القطبية (ربح/خسارة) — مُتحقَّق منهما لعمى الألوان على خلفية داكنة؛ والاتجاه (فوق/تحت الصفر) يرمّز الإشارة أيضًا
 const UP = '#1fa7a0';
@@ -159,6 +160,8 @@ export default function Analytics({ t, lang, data, onReferral }) {
           </div>
         </div>
       )}
+
+      <Leaderboard t={t} />
 
       <div className="section motivate">
         <img src={tier.cur.img} alt="" className="tier-badge" />

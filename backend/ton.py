@@ -9,6 +9,7 @@ AW TON — الدفع المباشر عبر محفظة TON (TON Connect).
 """
 import base64
 import os
+import time
 
 import httpx
 
@@ -103,3 +104,38 @@ def find_payment(txs: list, comment: str, min_nano: int):
         if tx["comment"] == comment and tx["value"] >= min_nano and tx["hash"]:
             return tx
     return None
+
+
+# ───────────── سعر TON بالدولار (متغيّر حسب السوق، مخزّن مؤقتًا 5 دقائق) ─────────────
+RATE_TTL = int(os.getenv("TON_RATE_TTL_SEC", "300"))
+_rate = {"v": None, "at": 0.0}
+
+
+@with_backoff(attempts=2)
+def _fetch_rate() -> float:
+    try:
+        res = raise_for_retryable(httpx.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": "the-open-network", "vs_currencies": "usd"}, timeout=10,
+        ))
+        return float(res.json()["the-open-network"]["usd"])
+    except (KeyError, ValueError, TypeError):
+        res = raise_for_retryable(httpx.get("https://tonapi.io/v2/rates", params={"tokens": "ton", "currencies": "usd"}, timeout=10))
+        return float(res.json()["rates"]["TON"]["prices"]["USD"])
+
+
+def usd_rate() -> float | None:
+    """سعر 1 TON بالدولار. يعيد آخر قيمة معروفة إن تعذّر الجلب، وNone إن لم تتوفر أي قيمة."""
+    if _rate["v"] and time.time() - _rate["at"] < RATE_TTL:
+        return _rate["v"]
+    try:
+        v = _fetch_rate()
+        if v > 0:
+            _rate.update(v=v, at=time.time())
+    except Exception:  # noqa: BLE001
+        pass
+    return _rate["v"]
+
+
+def usd_to_ton(usd: float, rate: float) -> float:
+    return round(float(usd) / rate, 2)

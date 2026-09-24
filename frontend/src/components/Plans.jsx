@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { checkTonPayment, createPayment, createStarsPayment, createTonPayment, getPackages, getRewards } from '../api';
+import {
+  checkTonPayment, createCryptoPayment, createStarsPayment, createTonPayment, getCurrencies, getPackages, getRewards,
+} from '../api';
 import { fill } from '../i18n';
 import { haptic, openExternal, openInvoice } from '../telegram';
 import { payWithTon } from '../ton';
 import walletIcon from '../assets/icons/wallet.webp';
 import coinIcon from '../assets/icons/coin.webp';
 import { bestCheckoutReward, countdown, prizeLabel } from '../rewards';
+import CryptoPay from './CryptoPay';
 
 const fmtDate = (epoch, lang) =>
   epoch
@@ -17,6 +20,12 @@ const fmtDate = (epoch, lang) =>
     : '—';
 
 const price = (n) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n);
+const BackIcon = () => (
+  <svg className="chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
+);
+const Check = () => (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10" /></svg>
+);
 
 function Emblem({ kind }) {
   return (
@@ -48,30 +57,25 @@ function Emblem({ kind }) {
  * mode = 'flow'  : غير مستخدم حاليًا (كانت خطوة قبل الربط)
  */
 const TON_CHECK_EVERY_MS = 15000; // لا نُثقل toncenter: فحص فوري كل 15ث كحد أقصى (والخادم يفحص كل دقيقة)
-
-// بوابة NOWPayments المضمّنة داخل الـ Mini App (iframe) بدل التحويل لمتصفح خارجي
-function PayModal({ t, pay, onClose }) {
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-sheet pay-sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="pay-sheet-head">
-          <h2>{t.payInAppTitle}</h2>
-          <button type="button" className="btn ghost small" onClick={onClose}><span>{t.close}</span></button>
-        </div>
-        <iframe className="pay-frame" src={pay.widget} title="NOWPayments" allow="clipboard-write" />
-        <button type="button" className="link" onClick={() => openExternal(pay.url)}>{t.openInBrowser}</button>
-      </div>
-    </div>
-  );
-}
-
 const REWARD_ERRORS = ['reward_expired', 'reward_used', 'reward_not_found', 'reward_not_applicable'];
 
+/**
+ * الباقات كبطاقات بمزايا كاملة ← "اشترك" ← خطوة طرق الدفع (TON أولًا وموصى بها، العملات الرقمية ببوابتنا، النجوم).
+ * mode = 'renew' : من لوحة الحساب (شراء أول باقة أو تجديدها)
+ */
 export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, onBack, botUsername, autoTon, preferredReward }) {
   const [packages, setPackages] = useState(null);
   const [tonEnabled, setTonEnabled] = useState(false);
-  const [payModal, setPayModal] = useState(null); // { widget, url }
-  const [reward, setReward] = useState(null); // جائزة خدش صالحة تُطبَّق تلقائيًا (الخادم يتحقق ويحسب المبلغ)
+  const [coins, setCoins] = useState([]);
+  const [selected, setSelected] = useState(null); // الباقة المختارة ← خطوة الدفع
+  const [pickCoin, setPickCoin] = useState(false);
+  const [cryptoPay, setCryptoPay] = useState(null); // تفاصيل الدفعة في بوابتنا المخصّصة
+  const [reward, setReward] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState('');
+  const [waiting, setWaiting] = useState(null); // { startExpiry, tonOrder? }
+  const [paid, setPaid] = useState(false);
 
   const loadReward = useCallback(() => {
     getRewards()
@@ -79,6 +83,19 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
       .catch(() => setReward(null));
   }, [preferredReward]);
   useEffect(loadReward, [loadReward]);
+
+  const load = useCallback(() => {
+    setLoadError(false);
+    setPackages(null);
+    getPackages()
+      .then((r) => {
+        setPackages(r.packages || []);
+        setTonEnabled(Boolean(r.ton_enabled));
+      })
+      .catch(() => setLoadError(true));
+    getCurrencies().then((r) => setCoins(r.currencies || [])).catch(() => setCoins([]));
+  }, []);
+  useEffect(load, [load]);
 
   // السعر المعروض بعد الخصم (للعرض فقط؛ المبلغ الفعلي يحسبه الخادم)
   const discounted = (n, round) => {
@@ -92,23 +109,13 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
     loadReward();
     return true;
   };
-  const [loadError, setLoadError] = useState(false);
-  const [busy, setBusy] = useState('');
-  const [msg, setMsg] = useState('');
-  const [waiting, setWaiting] = useState(null); // { startExpiry }
-  const [paid, setPaid] = useState(false);
 
-  const load = useCallback(() => {
-    setLoadError(false);
-    setPackages(null);
-    getPackages()
-      .then((r) => {
-        setPackages(r.packages || []);
-        setTonEnabled(Boolean(r.ton_enabled));
-      })
-      .catch(() => setLoadError(true));
+  const markPaid = useCallback(() => {
+    setWaiting(null);
+    setCryptoPay(null);
+    setPaid(true);
+    haptic.success();
   }, []);
-  useEffect(load, [load]);
 
   // يفحص تفعيل الاشتراك: ظهور تاريخ انتهاء أبعد من وقت بدء الدفع
   const check = useCallback(async () => {
@@ -120,16 +127,11 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
     try {
       const s = await refreshStatus();
       const sb = s.subscription;
-      if (sb?.active && sb.expires_at > waiting.startExpiry + 60) {
-        setWaiting(null);
-        setPayModal(null);
-        setPaid(true);
-        haptic.success();
-      }
+      if (sb?.active && sb.expires_at > waiting.startExpiry + 60) markPaid();
     } catch {
       /* نعيد المحاولة في الدورة التالية */
     }
-  }, [waiting, refreshStatus]);
+  }, [waiting, refreshStatus, markPaid]);
 
   useEffect(() => {
     if (!waiting) return undefined;
@@ -137,36 +139,31 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
     return () => clearInterval(id);
   }, [waiting, check]);
 
-  // البث اللحظي (SSE) يحدّث sub فور تفعيل الاشتراك: نكشف الدفع دون انتظار دورة الفحص
+  // البث اللحظي (SSE) يحدّث sub فور تفعيل الاشتراك
   useEffect(() => {
-    if (waiting && sub?.active && sub.expires_at > waiting.startExpiry + 60) {
-      setWaiting(null);
-      setPayModal(null);
-      setPaid(true);
-      haptic.success();
-    }
-  }, [sub?.expires_at, sub?.active, waiting]);
+    if (waiting && sub?.active && sub.expires_at > waiting.startExpiry + 60) markPaid();
+  }, [sub?.expires_at, sub?.active, waiting, markPaid]);
 
   const startWaiting = (extra = {}) => setWaiting({ startExpiry: sub?.expires_at || 0, ...extra });
 
-  async function payCrypto(pkg) {
-    setBusy(`${pkg.id}:crypto`);
+  async function payCrypto(pkg, coin) {
+    setBusy(`crypto:${coin}`);
     setMsg('');
     try {
-      const r = await createPayment(pkg.id, reward?.id);
-      if (r.widget_url) setPayModal({ widget: r.widget_url, url: r.invoice_url });
-      else openExternal(r.invoice_url);
-      startWaiting();
+      const r = await createCryptoPayment(pkg.id, reward?.id, coin);
+      setCryptoPay(r);
+      setWaiting({ startExpiry: sub?.expires_at || 0 });
     } catch (e) {
       haptic.error();
-      if (!rewardFailed(e)) setMsg(e.detail === 'payment_provider_error' ? 'payProviderErr' : 'payErr');
+      if (rewardFailed(e)) return;
+      setMsg(e.detail === 'amount_too_low' ? 'payTooLow' : e.detail === 'payment_provider_error' ? 'payProviderErr' : 'payErr');
     } finally {
       setBusy('');
     }
   }
 
   async function payStars(pkg) {
-    setBusy(`${pkg.id}:stars`);
+    setBusy('stars');
     setMsg('');
     try {
       const r = await createStarsPayment(pkg.id, reward?.id);
@@ -188,7 +185,7 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
   }
 
   async function payTon(pkg) {
-    setBusy(`${pkg.id}:ton`);
+    setBusy('ton');
     setMsg('');
     try {
       const tx = await createTonPayment(pkg.id, reward?.id);
@@ -200,24 +197,26 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
       const cancelled = e?.message === 'ton_cancelled' || e?.constructor?.name === 'UserRejectsError' || /reject/i.test(e?.message || '');
       if (rewardFailed(e)) return;
       if (cancelled) setMsg('payCancelled');
-      else if (e?.detail === 'ton_not_configured' || e?.detail === 'ton_not_configured_for_package') setMsg('tonNotReady');
+      else if (['ton_not_configured', 'ton_rate_unavailable'].includes(e?.detail)) setMsg('tonNotReady');
       else setMsg('payErr');
     } finally {
       setBusy('');
     }
   }
 
-  // تذكير التجديد: نبدأ الدفع بـ TON لباقة المستخدم الحالية (أو أول باقة تقبل TON) مرة واحدة
+  // تذكير التجديد (?renew=ton): نفتح خطوة الدفع لباقة المستخدم الحالية ونبدأ TON مباشرة
   const autoTonDone = useRef(false);
   useEffect(() => {
-    if (!autoTon || autoTonDone.current || !packages || !tonEnabled) return;
-    const pkg = packages.find((p) => p.id === sub?.package_id && p.price_ton) || packages.find((p) => p.price_ton);
-    if (!pkg) return;
+    if (!autoTon || autoTonDone.current || !packages?.length || !tonEnabled) return;
+    const pkg = packages.find((p) => p.id === sub?.package_id) || packages[0];
     autoTonDone.current = true;
+    setSelected(pkg);
     payTon(pkg);
   }, [autoTon, packages, tonEnabled]);
 
-  const modal = payModal && <PayModal t={t} pay={payModal} onClose={() => setPayModal(null)} />;
+  const name = (p) => (lang === 'ar' ? p.name_ar || p.name_en : p.name_en || p.name_ar);
+  const tagline = (p) => (lang === 'ar' ? p.tagline_ar : p.tagline_en) || '';
+  const features = (p) => (lang === 'ar' ? p.features_ar : p.features_en) || [];
 
   // ───────── حالات خاصة ─────────
   if (paid) {
@@ -235,10 +234,23 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
     );
   }
 
+  if (cryptoPay) {
+    return (
+      <CryptoPay
+        t={t}
+        pay={cryptoPay}
+        onFinished={() => refreshStatus().then(markPaid).catch(markPaid)}
+        onCancel={() => {
+          setCryptoPay(null);
+          setWaiting(null);
+        }}
+      />
+    );
+  }
+
   if (waiting) {
     return (
       <section className="step status" aria-live="polite">
-        {modal}
         <Emblem kind="pending" />
         <h1>{t.payWaitTitle}</h1>
         <p className="sub">{t.payWaitBody}</p>
@@ -254,9 +266,90 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
     );
   }
 
-  // ───────── قائمة الباقات ─────────
-  const name = (p) => (lang === 'ar' ? p.name_ar || p.name_en : p.name_en || p.name_ar);
+  const rewardChip = reward && (
+    <div className="note reward-applied" role="status">
+      <span>🎁 {fill(t.rwApplied, { label: prizeLabel(t, reward) })} · {countdown(t, reward.expires_at, Date.now() / 1000)}</span>
+      <button type="button" className="link" onClick={() => setReward(null)}>{t.rwRemove}</button>
+    </div>
+  );
 
+  // ───────── خطوة طرق الدفع ─────────
+  if (selected) {
+    const p = selected;
+    const usd = discounted(p.price_usd);
+    return (
+      <section className="step checkout">
+        <h1>{t.checkoutTitle}</h1>
+        <div className="checkout-summary">
+          <div>
+            <strong>{name(p)}</strong>
+            <span className="muted">{fill(t.perDays, { n: p.duration_days })}</span>
+          </div>
+          <div className="plan-price" dir="ltr">
+            {usd !== p.price_usd && <s className="muted">${price(p.price_usd)}</s>} <strong>${price(usd)}</strong>
+          </div>
+        </div>
+        {rewardChip}
+
+        <h2 className="pay-heading">{t.payMethod}</h2>
+        <div className="pay-methods">
+          {tonEnabled && p.price_ton ? (
+            <button type="button" className="pay-method is-best" disabled={!!busy} onClick={() => payTon(p)}>
+              <span className="best-badge">{t.tonBest}</span>
+              <img src={walletIcon} alt="" className="pm-icon" />
+              <span className="pm-body">
+                <b>{t.payTonTitle}</b>
+                <small>{t.tonPerks}</small>
+              </span>
+              <span className="pm-amount" dir="ltr">{busy === 'ton' ? '…' : `${price(discounted(p.price_ton))} TON`}</span>
+            </button>
+          ) : null}
+
+          <button type="button" className={`pay-method ${pickCoin ? 'is-open' : ''}`} disabled={!!busy && !busy.startsWith('crypto')} onClick={() => setPickCoin((v) => !v)}>
+            <img src={coinIcon} alt="" className="pm-icon" />
+            <span className="pm-body">
+              <b>{t.payCrypto}</b>
+              <small dir="ltr">{coins.map((c) => c.symbol).filter((v, i, a) => a.indexOf(v) === i).join(' · ') || 'USDT · BTC · ETH'}</small>
+            </span>
+            <span className="pm-amount" dir="ltr">${price(usd)}</span>
+          </button>
+          {pickCoin && (
+            <div className="coin-grid">
+              {coins.map((c) => (
+                <button key={c.code} type="button" className="coin-chip" disabled={!!busy} onClick={() => payCrypto(p, c.code)}>
+                  <b>{c.symbol}</b>
+                  <small>{busy === `crypto:${c.code}` ? t.sending : c.network}</small>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {p.price_stars ? (
+            <button type="button" className="pay-method" disabled={!!busy} onClick={() => payStars(p)}>
+              <span className="pm-icon pm-star" aria-hidden="true">★</span>
+              <span className="pm-body">
+                <b>{t.payStarsTitle}</b>
+                <small>{t.starsPerks}</small>
+              </span>
+              <span className="pm-amount" dir="ltr">{busy === 'stars' ? '…' : `${price(discounted(p.price_stars, true))} ⭐`}</span>
+            </button>
+          ) : null}
+        </div>
+
+        {msg && <p className="banner-error" role="alert">{t[msg]}</p>}
+        <p className="muted small-note">{t.paySecure}</p>
+
+        <div className="actions">
+          <button type="button" className="btn ghost" onClick={() => { setSelected(null); setPickCoin(false); setMsg(''); }}>
+            <BackIcon />
+            <span>{t.back}</span>
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  // ───────── بطاقات الباقات ─────────
   return (
     <section className="step">
       <h1>{mode === 'renew' && sub ? t.renewTitle : t.plansTitle}</h1>
@@ -269,71 +362,53 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
           {fill(t.expiresOn, { date: fmtDate(sub.expires_at, lang) })} ({fill(t.daysLeft, { n: sub.days_left })})
         </div>
       )}
-
-      {reward && (
-        <div className="note reward-applied" role="status">
-          <span>🎁 {fill(t.rwApplied, { label: prizeLabel(t, reward) })} · {countdown(t, reward.expires_at, Date.now() / 1000)}</span>
-          <button type="button" className="link" onClick={() => setReward(null)}>{t.rwRemove}</button>
-        </div>
-      )}
+      {rewardChip}
 
       {packages === null && !loadError && <div className="loader" role="status" aria-label={t.loading} />}
-
       {loadError && (
         <div className="banner-error" role="alert">
           {t.plansLoadErr}{' '}
           <button type="button" className="link" onClick={load}>{t.reload}</button>
         </div>
       )}
-
       {packages && packages.length === 0 && <p className="note">{t.noPlans}</p>}
 
       {packages && packages.length > 0 && (
         <div className="plans">
           {packages.map((p) => (
-            <article className="plan" key={p.id}>
+            <article className={`plan ${p.featured ? 'is-featured' : ''}`} key={p.id}>
+              {p.featured && <span className="plan-badge">{tagline(p) || t.mostPopular}</span>}
               <div className="plan-head">
-                <h2 className="plan-name">{name(p)}</h2>
+                <div>
+                  <h2 className="plan-name" dir="ltr">{name(p)}</h2>
+                  {!p.featured && tagline(p) && <span className="plan-tag">{tagline(p)}</span>}
+                </div>
                 <div className="plan-price" dir="ltr">
                   {discounted(p.price_usd) !== p.price_usd && <s className="muted">${price(p.price_usd)}</s>}{' '}
                   <strong>${price(discounted(p.price_usd))}</strong>
                 </div>
               </div>
               <div className="plan-meta">{fill(t.perDays, { n: p.duration_days })}</div>
-              <div className="plan-actions">
-                <button type="button" className="btn primary" disabled={!!busy} onClick={() => payCrypto(p)}>
-                  <img className="btn-img" src={coinIcon} alt="" />
-                  <span>{busy === `${p.id}:crypto` ? t.sending : t.payCrypto}</span>
-                </button>
-                {tonEnabled && p.price_ton ? (
-                  <button type="button" className="btn soft" disabled={!!busy} onClick={() => payTon(p)}>
-                    <img className="btn-img" src={walletIcon} alt="" />
-                    <span>{busy === `${p.id}:ton` ? t.sending : fill(t.payTon, { n: price(discounted(p.price_ton)) })}</span>
-                  </button>
-                ) : null}
-                {p.price_stars ? (
-                  <button type="button" className="btn soft" disabled={!!busy} onClick={() => payStars(p)}>
-                    <span>{busy === `${p.id}:stars` ? t.sending : fill(t.payStars, { n: price(discounted(p.price_stars, true)) })}</span>
-                  </button>
-                ) : null}
-              </div>
+              {features(p).length > 0 && (
+                <ul className="plan-features">
+                  {features(p).map((f) => (
+                    <li key={f}><Check />{f}</li>
+                  ))}
+                </ul>
+              )}
+              <button type="button" className={`btn ${p.featured ? 'primary' : 'soft'}`} onClick={() => { setSelected(p); setMsg(''); }}>
+                <span>{t.subscribe}</span>
+              </button>
             </article>
           ))}
         </div>
       )}
 
-      {msg && <p className="banner-error" role="alert">{t[msg]}</p>}
-
       <div className="actions">
         <button type="button" className="btn ghost" onClick={onBack}>
-          <svg className="chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
+          <BackIcon />
           <span>{t.back}</span>
         </button>
-        {mode === 'flow' && sub?.active && (
-          <button type="button" className="btn primary" onClick={onContinue}>
-            <span>{t.next}</span>
-          </button>
-        )}
       </div>
     </section>
   );

@@ -54,6 +54,7 @@ export const api = {
   createPackage: (data) => request("/packages", { method: "POST", body: JSON.stringify(data) }),
   updatePackage: (id, patch) => request(`/packages/${id}`, { method: "PUT", body: JSON.stringify(patch) }),
   deletePackage: (id) => request(`/packages/${id}`, { method: "DELETE" }),
+  seedPackages: () => request("/packages/seed", { method: "POST" }),
   // المكافآت والكوبونات
   rewardsConfig: () => request("/rewards/config"),
   saveRewardsConfig: (patch) => request("/rewards/config", { method: "PUT", body: JSON.stringify(patch) }),

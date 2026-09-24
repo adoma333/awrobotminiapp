@@ -127,26 +127,31 @@ disk_guard() {
 }
 
 # تسجيل الحساب يتحقق مباشرة عبر MT5 وقد يتجاوز 60ث (مهلة nginx الافتراضية): نرفعها إلى 180ث
-tune_nginx() {
+tune_nginx() { # مهلة 180ث للـ API + حد حجم الطلب 6MB (رفع صور القصص). آمن عند التكرار
   local f="${NGINX_CONF_OVERRIDE:-}"
   if [ -z "$f" ]; then
     is_test && return 0
     f=$(grep -l 'location /api/' /etc/nginx/sites-enabled/* 2>/dev/null | head -1)
   fi
   [ -n "$f" ] || return 0
-  grep -q 'proxy_read_timeout' "$f" && return 0
+  grep -q 'proxy_read_timeout' "$f" && grep -q 'client_max_body_size' "$f" && return 0
   cp "$f" "$f.aw-bak"
-  python3 - "$f" <<'PY' || { cp "$f.aw-bak" "$f"; warn "تعذّر تعديل مهلة nginx"; return 0; }
+  python3 - "$f" <<'PY' || { cp "$f.aw-bak" "$f"; warn "تعذّر تعديل إعداد nginx"; return 0; }
 import re, sys
 p = sys.argv[1]
 s = open(p).read()
 m = re.search(r"location /api/ \{\n", s)
 assert m, "لا يوجد location /api/"
-s = s[:m.end()] + "        proxy_read_timeout 180s;\n        proxy_send_timeout 180s;\n" + s[m.end():]
+add = ""
+if "proxy_read_timeout" not in s:
+    add += "        proxy_read_timeout 180s;\n        proxy_send_timeout 180s;\n"
+if "client_max_body_size" not in s:
+    add += "        client_max_body_size 6m;\n"
+s = s[:m.end()] + add + s[m.end():]
 open(p, "w").write(s)
 PY
   if [ -n "${NGINX_CONF_OVERRIDE:-}" ] || { nginx -t >/dev/null 2>&1 && systemctl reload nginx; }; then
-    ok "مهلة nginx للـ API رُفعت إلى 180ث"
+    ok "إعداد nginx للـ API محدَّث (مهلة 180ث · حجم 6MB)"
   else
     cp "$f.aw-bak" "$f"
     warn "إعداد nginx الجديد غير صالح، أعدت الأصلي"

@@ -176,6 +176,17 @@ React + Vite، منشورة عبر nginx على `https://205-209-121-79.sslip.io
 - **الخلفية:** `GET /api/analytics` (المدعوون/الناجحة/الدافعون/التحويل). `STATS_VERSION=3` في المزامنة: يعيد قراءة السجل مرة واحدة لكل حساب لبناء `report.series` (ربح كل يوم، آخر 120 يومًا).
 - **لوحة الأدمن:** صفحات جديدة: المكافآت والكوبونات (تشغيل/إيقاف، المحفزات، الصلاحية، اشتراط الهاتف، جدول الجوائز والأوزان والاحتمالات، منح بطاقة أو كوبون يدويًا، تمديد/إلغاء)، الباقات (أسعار $/⭐/TON)، الإعدادات (التسجيل، الرافعة، الإحالة، الفترة التجريبية). تُحفظ إعدادات المكافآت في `config/rewards`. مسارات: `GET/PUT /api/admin/rewards/config`، `GET /api/admin/rewards/cards`، `POST /api/admin/rewards/grant`، `POST /api/admin/rewards/{id}/revoke|extend`.
 
+### ✅ الدفعة الرابعة (الباقات، الدفع المخصّص، المشاركة، الترتيب، الشروط)
+
+- **الشعار:** `frontend/src/assets/logo-wordmark.png` (خلفية شفافة)، يسارًا دائمًا في كل اللغات.
+- **Terms & Risks:** صف موافقة قبل ربط MT5 + صفحة الشروط (`TermsRisks.jsx`). الخادم يرفض الربط بلا `terms_accepted` (`400 terms_required`) ويحفظ `users.terms {version, accepted_at}` (`TERMS_VERSION` في main.py).
+- **الباقات:** حقول جديدة `tagline_ar/en`, `features_ar/en` (قائمة)، `featured`. استيراد Starter/Pro/Premium من لوحة الأدمن (`POST /api/admin/packages/seed`). بعد "اشترك" تظهر خطوة طرق الدفع.
+- **سعر TON متغيّر:** يُحسب من `price_usd` بسعر TON الحالي (CoinGecko ثم TonAPI احتياطًا، مخزّن 5 دقائق). حقل `price_ton` اليدوي لم يعد مستخدمًا.
+- **بوابة العملات الرقمية المخصّصة:** `POST /api/payments/create` مع `pay_currency` ينشئ دفعة NOWPayments مباشرة (عنوان + مبلغ + memo) وتعرضها `CryptoPay.jsx`. `POST /api/payments/status` يسأل NOWPayments (كل 10ث كحد أدنى) ويفعّل عند `finished`. العملات: `NP_CURRENCIES` في `.env`.
+- **المشاركة:** `POST /api/share/create` يرفع صورتي القصة (9:16) والمنشور (1:1) إلى `backend/media/share/` (تُحذف بعد 30 يومًا)، ويعيد رابطًا عامًا للقصة (Telegram `shareToStory`) وصفحة منشور بوسوم Open Graph (`/api/share/p/{id}`) لفيسبوك/X/واتساب/تلجرام. يلزم `client_max_body_size 6m` في nginx (يضيفه `aw-update` تلقائيًا).
+- **ترتيب الأسبوع:** `GET /api/leaderboard` (`leaderboard.py`): المستخدمون الحقيقيون بنمو أسبوعهم الفعلي + منافسون محاكاة اختياريون (`leaderboard_sim`, `leaderboard_sim_count` في الإعدادات) يظهرون دائمًا بشارة "محاكاة".
+- **إصلاح سجل الفواتير:** الاستعلام لم يعد يجمع `where` مع `order_by` (كان يتطلب فهرسًا مركّبًا غير موجود).
+
 ## 6) دروس مُستفادة بصعوبة — لا تكرر نفس الأخطاء
 
 1. **حزمة `mt5linux` الحديثة (1.1.1) معطوبة مع Python الحديث**: تحتوي f-strings ممتدة على عدة أسطر (غير صالحة نحوياً إلا من Python 3.12+)، وبنيتها الداخلية تغيّرت بالكامل لتعتمد "container runtime" (Docker) بدل الاستدعاء المباشر. **الحل الذي نجح: تثبيت `mt5linux==0.1.9` تحديداً** على الجانبين (Wine وLinux)، مع `--no-deps` على جانب لينكس (لأن اعتمادياته القديمة `numpy==1.21.4` لا تدعم بايثون 3.14 الحديث). الصيغة الصحيحة للتشغيل في هذا الإصدار: **يُشغَّل من بايثون-لينكس** (وليس من داخل Wine!) هكذا: `python -m mt5linux "<مسار python.exe داخل Wine>" --host 0.0.0.0 -p <منفذ> -w wine -s <مجلد مؤقت>`. خدمة `mt5-bridge`/`mt5-monitor-bridge` في systemd يجب أن تُشغَّل كـ **root** (وليس `sudo -u aw`) لأن بيئة Wine (`WINEPREFIX=/root/.wine`) خاصة بـ root تحديداً — تشغيلها بمستخدم آخر يُنشئ بيئة Wine فارغة جديدة بلا MT5.
