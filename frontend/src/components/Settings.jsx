@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import FeedbackButton from './FeedbackButton';
 import { unlink, updateProfile, errorCodeOf } from '../api';
 import { fill } from '../i18n';
 import { copyText, haptic, openTelegramLink } from '../telegram';
@@ -162,6 +163,7 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
             <span className="row-label">{t.billLink}</span>
             <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
           </button>
+          <FeedbackButton t={t} />
         </div>
       </div>
 

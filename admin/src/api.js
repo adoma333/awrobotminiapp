@@ -46,6 +46,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ action, reason }),
     }),
+  // الإعدادات العامة
+  settings: () => request("/settings"),
+  saveSettings: (patch) => request("/settings", { method: "PUT", body: JSON.stringify(patch) }),
+  // الباقات
+  packages: () => request("/packages"),
+  createPackage: (data) => request("/packages", { method: "POST", body: JSON.stringify(data) }),
+  updatePackage: (id, patch) => request(`/packages/${id}`, { method: "PUT", body: JSON.stringify(patch) }),
+  deletePackage: (id) => request(`/packages/${id}`, { method: "DELETE" }),
+  // المكافآت والكوبونات
+  rewardsConfig: () => request("/rewards/config"),
+  saveRewardsConfig: (patch) => request("/rewards/config", { method: "PUT", body: JSON.stringify(patch) }),
+  rewardCards: (uid) => request(`/rewards/cards${uid ? `?uid=${encodeURIComponent(uid)}` : ""}`),
+  grantReward: (data) => request("/rewards/grant", { method: "POST", body: JSON.stringify(data) }),
+  revokeReward: (id) => request(`/rewards/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+  extendReward: (id, hours) =>
+    request(`/rewards/${encodeURIComponent(id)}/extend`, { method: "POST", body: JSON.stringify({ hours }) }),
 };
 
 export { ApiError };

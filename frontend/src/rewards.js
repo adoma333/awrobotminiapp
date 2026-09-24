@@ -1,4 +1,9 @@
 import { fill } from './i18n';
+import coin from './assets/icons/coin.webp';
+import silver from './assets/icons/silver.webp';
+import platinum from './assets/icons/platinum.webp';
+import diamond from './assets/icons/diamond.webp';
+import master from './assets/icons/master.webp';
 
 // أنواع الجوائز كما يولّدها الخادم (generate_scratch_prize)
 export const CHECKOUT_TYPES = ['discount', 'free_days'];
@@ -21,8 +26,9 @@ export function prizeLabel(t, p) {
   }
 }
 
+// صورة كل نوع جائزة (من حزمة الأيقونات)
 export function prizeIcon(type) {
-  return { discount: '🏷️', free_days: '📅', slippage_insurance: '🛡️', free_month: '👑', funded_challenge: '🏆' }[type] || '🎁';
+  return { discount: coin, free_days: silver, slippage_insurance: platinum, free_month: diamond, funded_challenge: master }[type] || coin;
 }
 
 // عدّاد تنازلي بالساعات والدقائق

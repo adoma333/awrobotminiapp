@@ -2,6 +2,16 @@ import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import UserDetail from "./UserDetail";
 import SystemStatus from "./SystemStatus";
+import Rewards from "./Rewards";
+import AppSettings from "./AppSettings";
+import Packages from "./Packages";
+
+const PAGES = [
+  { key: "rewards", label: "المكافآت والكوبونات", short: "المكافآت" },
+  { key: "packages", label: "الباقات", short: "الباقات" },
+  { key: "settings", label: "الإعدادات", short: "الإعدادات" },
+  { key: "system", label: "حالة النظام", short: "النظام" },
+];
 import "../dashboard.css";
 
 const TABS = [
@@ -26,7 +36,7 @@ function timeAgo(epoch) {
 
 export default function Dashboard({ adminId, onLogout }) {
   const [stats, setStats] = useState(null);
-  const [page, setPage] = useState("users"); // users | system
+  const [page, setPage] = useState("users"); // users | rewards | packages | settings | system
   const [tab, setTab] = useState("pending");
   const [accountType, setAccountType] = useState("");
   const [levMin, setLevMin] = useState("");
@@ -87,9 +97,12 @@ export default function Dashboard({ adminId, onLogout }) {
             {stats && t.key && <span className="count mono">{stats[t.key] ?? ""}</span>}
           </button>
         ))}
-        <button className={`nav-item ${page === "system" ? "active" : ""}`} onClick={() => setPage("system")}>
-          حالة النظام
-        </button>
+        <div className="nav-sep" />
+        {PAGES.map((p) => (
+          <button key={p.key} className={`nav-item ${page === p.key ? "active" : ""}`} onClick={() => setPage(p.key)}>
+            {p.label}
+          </button>
+        ))}
         <div className="nav-footer">
           <button onClick={onLogout}>تسجيل الخروج</button>
         </div>
@@ -98,6 +111,12 @@ export default function Dashboard({ adminId, onLogout }) {
       <main className="main">
         {page === "system" ? (
           <SystemStatus />
+        ) : page === "rewards" ? (
+          <Rewards />
+        ) : page === "packages" ? (
+          <Packages />
+        ) : page === "settings" ? (
+          <AppSettings />
         ) : (
           <>
         <div className="topbar">
@@ -201,9 +220,11 @@ export default function Dashboard({ adminId, onLogout }) {
             {t.label}
           </button>
         ))}
-        <button className={page === "system" ? "active" : ""} onClick={() => setPage("system")}>
-          النظام
-        </button>
+        {PAGES.map((p) => (
+          <button key={p.key} className={page === p.key ? "active" : ""} onClick={() => setPage(p.key)}>
+            {p.short}
+          </button>
+        ))}
       </div>
 
       {openId && (

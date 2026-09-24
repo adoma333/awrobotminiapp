@@ -3,6 +3,8 @@ import { checkTonPayment, createPayment, createStarsPayment, createTonPayment, g
 import { fill } from '../i18n';
 import { haptic, openExternal, openInvoice } from '../telegram';
 import { payWithTon } from '../ton';
+import walletIcon from '../assets/icons/wallet.webp';
+import coinIcon from '../assets/icons/coin.webp';
 import { bestCheckoutReward, countdown, prizeLabel } from '../rewards';
 
 const fmtDate = (epoch, lang) =>
@@ -300,10 +302,12 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
               <div className="plan-meta">{fill(t.perDays, { n: p.duration_days })}</div>
               <div className="plan-actions">
                 <button type="button" className="btn primary" disabled={!!busy} onClick={() => payCrypto(p)}>
+                  <img className="btn-img" src={coinIcon} alt="" />
                   <span>{busy === `${p.id}:crypto` ? t.sending : t.payCrypto}</span>
                 </button>
                 {tonEnabled && p.price_ton ? (
                   <button type="button" className="btn soft" disabled={!!busy} onClick={() => payTon(p)}>
+                    <img className="btn-img" src={walletIcon} alt="" />
                     <span>{busy === `${p.id}:ton` ? t.sending : fill(t.payTon, { n: price(discounted(p.price_ton)) })}</span>
                   </button>
                 ) : null}

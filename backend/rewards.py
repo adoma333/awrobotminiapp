@@ -49,13 +49,69 @@ CHECKOUT_TYPES = {"discount", "free_days"}   # تُطبَّق تلقائيًا �
 REDEEM_TYPES = {"free_month"}                # تُفعَّل مباشرة بلا دفع
 MANUAL_TYPES = {"slippage_insurance", "funded_challenge"}  # يسلّمها الأدمن يدويًا
 
+PRIZE_TYPES = {"discount", "free_days", "slippage_insurance", "free_month", "funded_challenge"}
+TRIGGERS = ("welcome", "referral", "streak7")
+
 _rng = random.SystemRandom()
 
 
-def generate_scratch_prize(rng=_rng) -> dict:
-    """جائزة عشوائية بتوزيع احتمالي مرجّح (weighted random) وفق PRIZE_TABLE."""
-    _, typ, value = rng.choices(PRIZE_TABLE, weights=[w for w, _, _ in PRIZE_TABLE], k=1)[0]
-    return {"type": typ, "value": value}
+# ───────────────────────── الإعدادات القابلة للتحكم من لوحة الأدمن (config/rewards) ─────────────────────────
+def default_config() -> dict:
+    return {
+        "enabled": True,
+        "ttl_hours": REWARD_TTL_HOURS,
+        "require_phone": True,  # false = لا يُشترط توثيق الهاتف/Premium لكشف البطاقات
+        "triggers": {k: True for k in TRIGGERS},
+        "prizes": [{"type": t, "value": v, "weight": w, "enabled": True} for w, t, v in PRIZE_TABLE],
+    }
+
+
+def get_config(db) -> dict:
+    snap = db.collection("config").document("rewards").get()
+    saved = (snap.to_dict() or {}) if snap.exists else {}
+    cfg = default_config()
+    cfg.update({k: v for k, v in saved.items() if k in cfg})
+    cfg["triggers"] = {**default_config()["triggers"], **(saved.get("triggers") or {})}
+    return cfg
+
+
+def clean_config(patch: dict) -> dict:
+    """يتحقق من إعدادات الأدمن قبل حفظها. يرفع ValueError برسالة واضحة."""
+    cfg = default_config()
+    out = {}
+    if "enabled" in patch:
+        out["enabled"] = bool(patch["enabled"])
+    if "require_phone" in patch:
+        out["require_phone"] = bool(patch["require_phone"])
+    if "ttl_hours" in patch:
+        ttl = int(patch["ttl_hours"])
+        if not 1 <= ttl <= 72:
+            raise ValueError("ttl_hours must be 1..72")
+        out["ttl_hours"] = ttl
+    if "triggers" in patch:
+        out["triggers"] = {k: bool((patch["triggers"] or {}).get(k, cfg["triggers"][k])) for k in TRIGGERS}
+    if "prizes" in patch:
+        rows = []
+        for row in patch["prizes"] or []:
+            typ = row.get("type")
+            if typ not in PRIZE_TYPES:
+                raise ValueError(f"unknown prize type: {typ}")
+            value, weight = float(row.get("value") or 0), float(row.get("weight") or 0)
+            if value <= 0 or weight < 0 or (typ == "discount" and value > 100):
+                raise ValueError(f"bad value/weight for {typ}")
+            rows.append({"type": typ, "value": int(value) if value.is_integer() else value,
+                         "weight": weight, "enabled": bool(row.get("enabled", True))})
+        if not any(r["enabled"] and r["weight"] > 0 for r in rows):
+            raise ValueError("at least one enabled prize with weight > 0 is required")
+        out["prizes"] = rows
+    return out
+
+
+def generate_scratch_prize(rng=_rng, prizes: list | None = None) -> dict:
+    """جائزة عشوائية بتوزيع احتمالي مرجّح (weighted random). الجدول من لوحة الأدمن، وإلا PRIZE_TABLE."""
+    table = [p for p in (prizes or default_config()["prizes"]) if p.get("enabled", True) and p.get("weight", 0) > 0]
+    pick = rng.choices(table, weights=[p["weight"] for p in table], k=1)[0]
+    return {"type": pick["type"], "value": pick["value"]}
 
 
 class RewardError(Exception):
@@ -65,9 +121,14 @@ class RewardError(Exception):
 
 
 # ───────────────────────── منح البطاقات ─────────────────────────
-def grant_card(db, uid, event: str, now: float | None = None):
-    """يمنح بطاقة واحدة لهذا المستخدم لهذا الحدث. يعيد معرّف البطاقة، أو None إن مُنحت سابقًا."""
+def grant_card(db, uid, event: str, now: float | None = None, force: bool = False):
+    """يمنح بطاقة واحدة لهذا المستخدم لهذا الحدث. يعيد معرّف البطاقة، أو None إن مُنحت سابقًا
+    أو كان النظام/هذا المحفز معطّلًا من لوحة الأدمن (force=True لمنح الأدمن اليدوي)."""
     now = time.time() if now is None else now
+    if not force:
+        cfg = get_config(db)
+        if not cfg["enabled"] or not cfg["triggers"].get(event.split("_")[0], True):
+            return None
     card_id = f"{uid}_{event}"
     try:
         db.collection(CARDS).document(card_id).create(
@@ -139,7 +200,7 @@ def verify_phone(db, uid, phone: str) -> bool:
     return ok
 
 
-def check_eligibility(db, tg_user: dict, card: dict, card_id: str):
+def check_eligibility(db, tg_user: dict, card: dict, card_id: str, require_phone: bool = True):
     """يرفع RewardError إن لم يكن المستخدم مؤهلًا لكشف البطاقة."""
     from google.cloud.firestore_v1.base_query import FieldFilter
 
@@ -154,6 +215,8 @@ def check_eligibility(db, tg_user: dict, card: dict, card_id: str):
     if any(s.id != card_id for s in same):
         raise RewardError("duplicate_event", 409)
     # 2) حساب حقيقي: رقم هاتف موثّق (غير مستخدم لحساب آخر) أو اشتراك Telegram Premium
+    if not require_phone:
+        return
     snap = db.collection("users").document(uid).get()
     user = (snap.to_dict() or {}) if snap.exists else {}
     if not (user.get("phone_verified") or tg_user.get("is_premium")):
@@ -188,10 +251,13 @@ def claim(db, tg_user: dict, card_id: str | None, secret: str):
             raise RewardError("no_card", 404)
         card_id = new[0].id
     card = _card(db, uid, card_id)
-    check_eligibility(db, tg_user, card, card_id)
+    cfg = get_config(db)
+    if not cfg["enabled"]:
+        raise RewardError("rewards_disabled", 403)
+    check_eligibility(db, tg_user, card, card_id, cfg["require_phone"])
     prize = card.get("prize")
     if not prize:
-        prize = generate_scratch_prize()
+        prize = generate_scratch_prize(prizes=cfg["prizes"])
         db.collection(CARDS).document(card_id).set({"prize": prize, "claimed_at": time.time()}, merge=True)
     return {"card_id": card_id, "status": card.get("status"), **sealed(prize, card_id, secret)}
 
@@ -203,7 +269,8 @@ def reveal(db, uid, card_id: str, now: float | None = None) -> dict:
     if not card.get("prize"):
         raise RewardError("not_claimed", 409)
     if card.get("status") != "revealed":
-        card.update(status="revealed", revealed_at=now, expires_at=now + REWARD_TTL_HOURS * 3600)
+        ttl = int(get_config(db)["ttl_hours"])
+        card.update(status="revealed", revealed_at=now, expires_at=now + ttl * 3600)
         db.collection(CARDS).document(card_id).set(
             {"status": "revealed", "revealed_at": now, "expires_at": card["expires_at"]}, merge=True
         )
@@ -279,3 +346,63 @@ def mark_used(db, reward_id: str, order_id: str | None = None):
     db.collection(CARDS).document(reward_id).set(
         {"used": True, "used_at": time.time(), "used_order": order_id}, merge=True
     )
+
+
+# ───────────────────────── أدوات الأدمن ─────────────────────────
+def admin_issue_coupon(db, uid, typ: str, value, hours: int, now: float | None = None) -> str:
+    """كوبون جاهز (جائزة مكشوفة) يمنحه الأدمن مباشرة لمستخدم."""
+    if typ not in PRIZE_TYPES:
+        raise RewardError("unknown_prize_type", 400)
+    hours = int(hours)
+    if not 1 <= hours <= 24 * 30:
+        raise RewardError("bad_hours", 400)
+    now = time.time() if now is None else now
+    card_id = f"{uid}_admin_{int(now * 1000)}"
+    db.collection(CARDS).document(card_id).create({
+        "uid": str(uid), "event": "admin", "status": "revealed", "prize": {"type": typ, "value": value},
+        "created_at": now, "claimed_at": now, "revealed_at": now, "expires_at": now + hours * 3600,
+        "used": False, "issued_by_admin": True,
+    })
+    return card_id
+
+
+def admin_list_cards(db, uid: str | None = None, limit: int = 200, now: float | None = None) -> dict:
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    now = time.time() if now is None else now
+    q = db.collection(CARDS)
+    if uid:
+        q = q.where(filter=FieldFilter("uid", "==", str(uid)))
+    rows, stats = [], {"total": 0, "new": 0, "active": 0, "used": 0, "expired": 0, "by_type": {}}
+    for snap in q.stream():
+        c = snap.to_dict() or {}
+        state = "new" if c.get("status") != "revealed" else reward_state(c, now)
+        typ = (c.get("prize") or {}).get("type")
+        stats["total"] += 1
+        stats[state] += 1
+        if typ:
+            stats["by_type"][typ] = stats["by_type"].get(typ, 0) + 1
+        rows.append({"id": snap.id, "uid": c.get("uid"), "event": c.get("event"), "state": state,
+                     "type": typ, "value": (c.get("prize") or {}).get("value"),
+                     "created_at": c.get("created_at"), "expires_at": c.get("expires_at"),
+                     "used_at": c.get("used_at"), "revoked": bool(c.get("revoked"))})
+    rows.sort(key=lambda r: -(r["created_at"] or 0))
+    return {"cards": rows[:limit], "stats": stats}
+
+
+def admin_revoke(db, card_id: str):
+    ref = db.collection(CARDS).document(card_id)
+    if not ref.get().exists:
+        raise RewardError("card_not_found", 404)
+    ref.set({"used": True, "revoked": True, "used_at": time.time(), "used_order": "revoked_by_admin"}, merge=True)
+
+
+def admin_extend(db, card_id: str, hours: int, now: float | None = None) -> float:
+    now = time.time() if now is None else now
+    ref = db.collection(CARDS).document(card_id)
+    snap = ref.get()
+    if not snap.exists or (snap.to_dict() or {}).get("status") != "revealed":
+        raise RewardError("card_not_found", 404)
+    new_exp = max(now, float(snap.to_dict().get("expires_at") or 0)) + int(hours) * 3600
+    ref.set({"expires_at": new_exp}, merge=True)
+    return new_exp

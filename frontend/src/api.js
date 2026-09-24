@@ -38,6 +38,21 @@ export function errorCodeOf(e) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// بيانات تجريبية للمعاينة خارج تلجرام فقط
+function devReport(now) {
+  const series = Array.from({ length: 90 }, (_, i) => {
+    const d = new Date((now - (89 - i) * 86400) * 1000).toISOString().slice(0, 10);
+    return { d, pnl: Math.round((Math.sin(i / 5) * 40 + 18) * 100) / 100 };
+  });
+  return {
+    daily_pnl: 42.1, daily_growth_pct: 0.31, weekly_pnl: 180.4, weekly_growth_pct: 1.37, monthly_pnl: 620.3,
+    monthly_growth_pct: 4.86, total_pnl: 3395.59, total_growth_pct: 33.96, net_deposits: 10000, trades: 214,
+    wins: 131, losses: 83, win_rate: 61.21, profit_factor: 1.84, avg_win: 58.2, avg_loss: 49.6, payoff_ratio: 1.17,
+    expectancy: 15.9, best_trade: 412.5, worst_trade: -280.1, gross_profit: 7624.2, gross_loss: 4116.8,
+    max_drawdown: 902.3, max_drawdown_pct: 7.1, series,
+  };
+}
+
 export async function getStatus() {
   if (DEV_MOCK) {
     await sleep(300);
@@ -51,12 +66,16 @@ export async function getStatus() {
       bot_username: 'awfxapp_bot',
       settings: { kill_switch: false, referral_enabled: true, referral_days: 7 },
     };
-    if (!mock.approved) return { status: mock.unlinked ? 'unlinked' : 'none', nickname: 'Ahmed', avatar: 'boy', bot_username: 'awfxapp_bot', ...base };
+    if (!mock.approved) {
+      // مستخدم جديد بلا ملف شخصي؛ بعد فكّ الربط يبقى اسمه وصورته (كما يعيد الخادم)
+      const who = mock.unlinked ? { nickname: 'Ahmed', avatar: 'boy' } : {};
+      return { status: mock.unlinked ? 'unlinked' : 'none', ...who, bot_username: 'awfxapp_bot', ...base };
+    }
     return {
       status: 'approved', nickname: 'Ahmed', avatar: 'boy', language: 'ar', ...base,
       account: { login: '51234567', server: 'Exness-MT5Trial16' },
       live: { balance: 13395.59, equity: 13352.1, profit: -43.49, margin: 210.5, margin_free: 13141.6, margin_level: 6343.2, leverage: 2000, currency: 'USD', updated_at: now - 300 },
-      report: null,
+      report: devReport(now),
       sync: { state: 'ok', last_ok: now - 300 },
     };
   }
@@ -240,4 +259,13 @@ export function openSealedPrize(token) {
   const b64 = token.replace(/-/g, '+').replace(/_/g, '/');
   const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+// ───────── التحليلات والإحالة ─────────
+export async function getAnalytics() {
+  if (DEV_MOCK) {
+    await sleep(300);
+    return { referrals: { invited: 12, linked: 8, paid: 5, conversion_pct: 66.7 } };
+  }
+  return request('GET', `/api/analytics?init_data=${encodeURIComponent(initData)}`);
 }

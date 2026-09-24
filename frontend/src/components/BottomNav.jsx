@@ -1,14 +1,17 @@
 import React from 'react';
 import { haptic } from '../telegram';
+import Icon from './Icon';
 
 const ITEMS = [
-  { view: 'main', label: 'navHome', icon: '🏠' },
-  { view: 'plans', label: 'navPlans', icon: '💎' },
-  { view: 'rewards', label: 'navRewards', icon: '🎁' },
-  { view: 'settings', label: 'navSettings', icon: '⚙️' },
+  { view: 'main', label: 'navHome', icon: 'home' },
+  { view: 'analytics', label: 'navAnalytics', icon: 'analytics' },
+  { view: 'referral', label: 'navReferral', icon: 'referral' },
+  { view: 'rewards', label: 'navRewards', icon: 'rewards' },
+  { view: 'plans', label: 'navPlans', icon: 'plans' },
+  { view: 'settings', label: 'navSettings', icon: 'settings' },
 ];
 
-// شريط تنقل سفلي ثابت بين اللوحة الرئيسية والباقات والإعدادات.
+// شريط تنقل سفلي ثابت بأيقونات خطية موحّدة.
 export default function BottomNav({ t, view, onSelect }) {
   return (
     <nav className="bottom-nav" role="navigation">
@@ -17,12 +20,13 @@ export default function BottomNav({ t, view, onSelect }) {
           key={item.view}
           type="button"
           className={`bn-item ${view === item.view ? 'on' : ''}`}
+          aria-current={view === item.view ? 'page' : undefined}
           onClick={() => {
             haptic.select();
             onSelect(item.view);
           }}
         >
-          <span className="bn-icon">{item.icon}</span>
+          <Icon name={item.icon} size={21} className="bn-icon" />
           <span className="bn-label">{t[item.label]}</span>
         </button>
       ))}

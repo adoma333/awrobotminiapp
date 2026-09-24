@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { sendFeedback } from '../api';
 import { haptic } from '../telegram';
 import { useToast } from './Toast';
+import Icon from './Icon';
 
-// زر عائم لجمع تقييم ونص ملاحظة قصير من المستخدم وإرساله لقناة الأدمن.
+// صف في الإعدادات لجمع تقييم ونص ملاحظة قصير من المستخدم وإرساله لقناة الأدمن.
 export default function FeedbackButton({ t }) {
   const [open, setOpen] = useState(false);
   const [rating, setRating] = useState(0);
@@ -35,8 +36,9 @@ export default function FeedbackButton({ t }) {
 
   return (
     <>
-      <button type="button" className="fab-feedback" onClick={() => setOpen(true)}>
-        <span>⭐</span> {t.feedbackBtn}
+      <button type="button" className="row row-link" onClick={() => setOpen(true)}>
+        <span className="row-label row-icon"><Icon name="star" size={18} /> {t.feedbackBtn}</span>
+        <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
       </button>
 
       {open && (
