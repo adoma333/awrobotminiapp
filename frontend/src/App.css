@@ -1457,3 +1457,147 @@ html[lang='ar'] .btn.small {
   color: var(--danger);
   background: rgba(255, 107, 94, 0.12);
 }
+
+/* ─────────── بوابة الدفع المضمّنة (NOWPayments) ─────────── */
+.pay-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 92vh;
+}
+
+.pay-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pay-frame {
+  width: 100%;
+  height: min(696px, 70vh);
+  border: 0;
+  border-radius: 14px;
+  background: #fff;
+}
+
+/* ─────────── بطاقة الخدش ─────────── */
+.scratch {
+  position: relative;
+  width: 100%;
+  max-width: 360px;
+  height: 180px;
+  margin: 12px auto;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: radial-gradient(circle at 50% 40%, rgba(255, 138, 0, 0.18), #100e0c 70%);
+  user-select: none;
+}
+
+.scratch-prize {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  padding: 16px;
+}
+
+.scratch-prize strong {
+  font-family: var(--font-display);
+  font-size: 20px;
+}
+
+.scratch-icon {
+  font-size: 40px;
+}
+
+.scratch-cover {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: grab;
+  transition: opacity 0.6s ease;
+}
+
+.scratch.is-done .scratch-cover {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.scratch.is-done .scratch-prize {
+  animation: prize-pop 0.5s ease-out both;
+}
+
+@keyframes prize-pop {
+  from { transform: scale(0.85); }
+  to { transform: scale(1); }
+}
+
+/* ─────────── محفظة المكافآت ─────────── */
+.scratch-row {
+  justify-content: space-between;
+}
+
+.reward-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reward {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-dim);
+  border-radius: 14px;
+  background: var(--fill);
+}
+
+.reward.is-active {
+  border-color: var(--line);
+}
+
+.reward.is-used,
+.reward.is-expired {
+  opacity: 0.55;
+}
+
+.reward-icon {
+  font-size: 26px;
+}
+
+.reward-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.countdown {
+  color: var(--ember);
+  font-variant-numeric: tabular-nums;
+}
+
+.small-note {
+  font-size: 12px;
+}
+
+.reward-applied {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.plan-price s {
+  font-size: 13px;
+}

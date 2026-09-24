@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useState } from "react";
 
 const LABEL = {
   firestore: "قاعدة البيانات (Firestore)",
-  mt5_bridge: "جسر MT5 (Wine)",
+  mt5_bridge: "جسر MT5 للمراقبة (Wine)",
+  mt5_robot: "ترمنال الروبوت (Heartbeat)",
   n8n: "تكامل n8n",
 };
 
@@ -34,7 +35,7 @@ export default function SystemStatus() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, 30000); // تحديث حي كل 30 ثانية
+    const id = setInterval(load, 10000); // تحديث حي كل 10 ثوانٍ
     return () => clearInterval(id);
   }, [load]);
 
@@ -69,6 +70,11 @@ export default function SystemStatus() {
                 {svc.latency_ms !== undefined && (
                   <span className="mono" style={{ display: "block", fontSize: 12, opacity: 0.7 }}>
                     {svc.latency_ms}ms
+                  </span>
+                )}
+                {svc.down_for_sec > 0 && (
+                  <span className="mono" style={{ display: "block", fontSize: 11, color: "var(--bad)" }}>
+                    منقطع منذ {Math.round(svc.down_for_sec)}ث
                   </span>
                 )}
                 {svc.error && (

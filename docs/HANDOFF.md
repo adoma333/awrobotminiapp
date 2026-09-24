@@ -146,6 +146,27 @@ React + Vite، منشورة عبر nginx على `https://205-209-121-79.sslip.io
 
 ---
 
+### ✅ إضافات الدفعة الثانية (TON، الخدش، البث اللحظي، النبضة...)
+
+**وحدات جديدة في `backend/`:** `ton.py` (TON Connect + تحقق on-chain عبر toncenter)، `retry.py` (tenacity)، `reminders.py` (تذكير التجديد)، `heartbeat.py` (نبضة ترمنال الروبوت)، `rewards.py` (بطاقات الخدش).
+
+**مسارات جديدة:**
+- `POST /api/payments/create-ton` · `POST /api/payments/ton-check` · `POST /api/payments/ton-webhook` (سر عبر `?secret=` أو `X-Webhook-Secret` أو `Authorization: Bearer`) · `GET /api/tonconnect-manifest.json`
+- `GET /api/stream?init_data=` — بث SSE لحالة الحساب/الاشتراك (نفس شكل `/api/status`).
+- `POST /api/onboarding/complete` · `POST /api/scratch/claim` · `POST /api/scratch/reveal` · `GET /api/rewards` · `POST /api/rewards/redeem`
+- `POST /api/payments/create` و`create-stars` و`create-ton` تقبل `reward_id` اختياريًا (خصم/أيام مجانية).
+
+**Firestore:** `webhook_inbox` (كل webhook وارد يُحفظ ثم يُعالَج في الخلفية ويُعاد كل دقيقة حتى ينجح)، `ton_txs` (معاملة واحدة لطلب واحد)، `scratch_cards/{uid}_{event}`، `phone_claims/{sha256}`، `system_events` (انقطاع/تنبيه/إعادة تشغيل/تعافي ترمنال الروبوت). حقول مستخدم جديدة: `trial_checked`, `trial_expires_at`, `trial`, `scratch_pending`, `achievements`, `phone_verified`, `subscription.reminders`. حقل باقة جديد: `price_ton`.
+
+**إعدادات `config/settings` جديدة:** `trial_enabled` (افتراضيًا false)، `trial_days` (3..7)، `trial_max_lot`.
+
+**متغيرات `.env` الجديدة (كلها اختيارية):**
+- `TON_WALLET_ADDRESS` (بدونه يختفي الدفع بـ TON)، `TONCENTER_API_KEY`، `TONCENTER_API`، `TON_WEBHOOK_SECRET`، `TON_PAYMENT_WINDOW_SEC`
+- `HEARTBEAT_ENABLED`، `HEARTBEAT_HOST`، `HEARTBEAT_PORT` (8001)، `HEARTBEAT_INTERVAL_SEC` (5)، `HEARTBEAT_ALERT_SEC` (15)، `HEARTBEAT_RESTART_COOLDOWN_SEC`، `HEARTBEAT_SERVICE` (mt5-bridge)
+- `REWARD_TTL_HOURS` (24، الحد 72)، `REWARD_SECRET`، `PHONE_HASH_SALT`، `SSE_POLL_SEC` (5)، `N8N_HEALTH_URL`، `SYSTEM_DEGRADED_MS`، `RETRY_ATTEMPTS`، `RETRY_MAX_WAIT_SEC`
+
+**ملاحظات تشغيل:** يجب تشغيل `pip install -r requirements.txt` (أُضيف `tenacity`) و`npm install` في `frontend/` (أُضيف `@tonconnect/ui` و`canvas-confetti`). قاعدة sudoers تسمح الآن أيضًا بـ `systemctl restart mt5-bridge` (يُعاد تثبيتها عبر `aw-update`). دالة `billing.auto_trade_allowed(user, volume)` جاهزة للاستدعاء قبل كل صفقة آلية، لكن كود الروبوت نفسه ليس في هذا الريبو.
+
 ## 6) دروس مُستفادة بصعوبة — لا تكرر نفس الأخطاء
 
 1. **حزمة `mt5linux` الحديثة (1.1.1) معطوبة مع Python الحديث**: تحتوي f-strings ممتدة على عدة أسطر (غير صالحة نحوياً إلا من Python 3.12+)، وبنيتها الداخلية تغيّرت بالكامل لتعتمد "container runtime" (Docker) بدل الاستدعاء المباشر. **الحل الذي نجح: تثبيت `mt5linux==0.1.9` تحديداً** على الجانبين (Wine وLinux)، مع `--no-deps` على جانب لينكس (لأن اعتمادياته القديمة `numpy==1.21.4` لا تدعم بايثون 3.14 الحديث). الصيغة الصحيحة للتشغيل في هذا الإصدار: **يُشغَّل من بايثون-لينكس** (وليس من داخل Wine!) هكذا: `python -m mt5linux "<مسار python.exe داخل Wine>" --host 0.0.0.0 -p <منفذ> -w wine -s <مجلد مؤقت>`. خدمة `mt5-bridge`/`mt5-monitor-bridge` في systemd يجب أن تُشغَّل كـ **root** (وليس `sudo -u aw`) لأن بيئة Wine (`WINEPREFIX=/root/.wine`) خاصة بـ root تحديداً — تشغيلها بمستخدم آخر يُنشئ بيئة Wine فارغة جديدة بلا MT5.

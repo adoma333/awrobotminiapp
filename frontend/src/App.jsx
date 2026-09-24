@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import logo from './assets/logo.png';
 import { messages } from './i18n';
 import { setupTelegram, tgLang, haptic, askWriteAccess, closeApp } from './telegram';
-import { errorCodeOf, getStatus, register } from './api';
+import { completeOnboarding, errorCodeOf, getStatus, openStatusStream, register } from './api';
 import Stepper from './components/Stepper';
 import LanguageStep from './components/LanguageStep';
 import ProfileStep from './components/ProfileStep';
@@ -15,6 +15,7 @@ import LegalPage from './components/LegalPage';
 import FAQ from './components/FAQ';
 import InterestCalculator from './components/InterestCalculator';
 import BillingHistory from './components/BillingHistory';
+import RewardsHub from './components/RewardsHub';
 import Onboarding from './components/Onboarding';
 import BottomNav from './components/BottomNav';
 import FeedbackButton from './components/FeedbackButton';
@@ -24,6 +25,8 @@ import { AppSkeleton } from './components/Skeleton';
 const ONBOARD_KEY = 'aw_onboarded';
 const EMPTY_MT5 = { login: '', password: '', server: '' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// زر "تجديد الآن" في تذكير التجديد يفتح التطبيق على ?renew=ton: شاشة الباقات + TON Connect مباشرة
+const RENEW_TON = new URLSearchParams(window.location.search).get('renew') === 'ton';
 
 export default function App() {
   const [lang, setLang] = useState(tgLang === 'ar' ? 'ar' : 'en');
@@ -36,6 +39,10 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [errorCode, setErrorCode] = useState('');
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [preferredReward, setPreferredReward] = useState(null); // جائزة اختارها من محفظة المكافآت
+  const [streaming, setStreaming] = useState(false); // بث SSE متصل = لا حاجة للاستعلام الدوري
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
 
   const t = messages[lang];
   const steps = useMemo(() => ['lang', 'profile', 'mt5'], []);
@@ -62,7 +69,10 @@ export default function App() {
       .then((s) => {
         setInfo(s);
         if (s.language) setLang(s.language);
-        if (s.status === 'approved') setPhase('dashboard');
+        if (s.status === 'approved') {
+          if (RENEW_TON) setView('plans');
+          setPhase('dashboard');
+        }
         else if (s.status === 'rejected' || s.status === 'pending') setPhase('status');
         else {
           // none / unlinked: يبدأ رحلة الربط (الدفع يأتي بعد الربط)
@@ -73,9 +83,25 @@ export default function App() {
       .catch(() => setPhase('flow'));
   }, []);
 
-  // ───────── استعلام دوري ─────────
+  // ───────── تحديث لحظي عبر SSE (الرصيد، الاشتراك/الدفع، المزامنة) ─────────
+  const started = phase !== 'loading';
+  useEffect(() => {
+    if (!started) return undefined;
+    return openStatusStream((s) => {
+      const ph = phaseRef.current;
+      if (ph === 'flow') {
+        setInfo((prev) => ({ ...prev, subscription: s.subscription })); // لا نقاطع رحلة الربط
+        return;
+      }
+      if (s.status && s.status !== 'none') setInfo(s);
+      if (ph === 'status' && s.status === 'approved') setPhase('dashboard');
+    }, setStreaming);
+  }, [started]);
+
+  // ───────── استعلام دوري (احتياطي فقط أثناء انقطاع البث) ─────────
   //   طلب معلّق (قديم): كل 4ث · اللوحة: كل دقيقة، وكل 5ث حتى تصل أول بيانات
   useEffect(() => {
+    if (streaming) return undefined;
     const st = info.status;
     let ms = null;
     if (phase === 'status' && st === 'pending') ms = 4000;
@@ -90,7 +116,7 @@ export default function App() {
         .catch(() => {});
     }, ms);
     return () => clearInterval(id);
-  }, [phase, info.status, Boolean(info.live)]);
+  }, [phase, info.status, Boolean(info.live), streaming]);
 
   // ───────── التسجيل ─────────
   async function finishLinked() {
@@ -187,6 +213,7 @@ export default function App() {
             onDone={() => {
               localStorage.setItem(ONBOARD_KEY, '1');
               setShowOnboarding(false);
+              completeOnboarding().catch(() => {}); // أول خطوة: بطاقة خدش الترحيب
             }}
           />
         </div>
@@ -245,6 +272,17 @@ export default function App() {
               onFaq={() => setView('faq')}
               onCalc={() => setView('calc')}
               onBilling={() => setView('billing')}
+              onRewards={() => setView('rewards')}
+            />
+          ) : view === 'rewards' ? (
+            <RewardsHub
+              t={t}
+              onBack={() => setView('main')}
+              onUse={(id) => {
+                setPreferredReward(id);
+                setView('plans');
+              }}
+              onRedeemed={() => refreshStatus().catch(() => {})}
             />
           ) : view === 'plans' ? (
             <Plans
@@ -252,12 +290,15 @@ export default function App() {
               lang={lang}
               mode="renew"
               sub={sub}
+              botUsername={info.bot_username}
+              autoTon={RENEW_TON}
+              preferredReward={preferredReward}
               refreshStatus={refreshStatus}
               onContinue={() => setView('main')}
               onBack={() => setView('main')}
             />
           ) : (
-            <Dashboard t={t} lang={lang} data={info} onRenew={() => setView('plans')} onSettings={() => setView('settings')} />
+            <Dashboard t={t} lang={lang} data={info} onRenew={() => setView('plans')} onSettings={() => setView('settings')} onRewards={() => setView('rewards')} />
           )}
         </div>
       )}

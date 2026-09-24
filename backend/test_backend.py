@@ -66,8 +66,10 @@ class Query:
     def limit(self, n):
         return Query(self.store, self.name, self.filters, n, self.order)
 
-    def order_by(self, field):
-        return Query(self.store, self.name, self.filters, self.lim, field)
+    def order_by(self, field, direction="ASCENDING"):
+        q = Query(self.store, self.name, self.filters, self.lim, field)
+        q.desc = direction == "DESCENDING"
+        return q
 
     def select(self, _fields):
         return self
@@ -92,7 +94,8 @@ class Query:
             if good:
                 rows.append(Snap(id_, d))
         if self.order:
-            rows.sort(key=lambda r: (r.to_dict().get(self.order) is None, r.to_dict().get(self.order)))
+            rows.sort(key=lambda r: (r.to_dict().get(self.order) is None, r.to_dict().get(self.order)),
+                      reverse=getattr(self, "desc", False))
         return rows[: self.lim] if self.lim else rows
 
     def stream(self):
@@ -129,6 +132,12 @@ class Doc:
 
     def delete(self):
         self._col().pop(self.id, None)
+
+    def create(self, data):
+        if self.id in self._col():
+            from rewards import AlreadyExists
+            raise AlreadyExists("exists")
+        self._col()[self.id] = _materialize(data)
 
 
 class Col(Query):
@@ -196,8 +205,11 @@ def ok(name, cond):
     assert cond, name
 
 
-def init_data(uid=42, token="123:TEST", age=0, lang="ar"):
-    user = json.dumps({"id": uid, "first_name": "Ali", "username": "ali_x", "language_code": lang})
+def init_data(uid=42, token="123:TEST", age=0, lang="ar", premium=False):
+    u = {"id": uid, "first_name": "Ali", "username": "ali_x", "language_code": lang}
+    if premium:
+        u["is_premium"] = True
+    user = json.dumps(u)
     p = {"auth_date": str(int(time.time()) - age), "user": user}
     chk = "\n".join(f"{k}={v}" for k, v in sorted(p.items()))
     sec = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
@@ -579,5 +591,219 @@ ok("تحديث الاسم والأفاتار", DB.store["users"]["90"]["nickname
 ok("لغة غير صالحة → 422", c.post("/api/profile", json={"init_data": init_data(90), "language": "fr"}).status_code == 422)
 ok("اسم قصير → 422", c.post("/api/profile", json={"init_data": init_data(90), "nickname": "x"}).status_code == 422)
 ok("مستخدم مجهول → 404", c.post("/api/profile", json={"init_data": init_data(91), "language": "en"}).status_code == 404)
+
+# ═════════ 13) الدفع عبر TON Connect ═════════
+import ton  # noqa: E402
+import rewards  # noqa: E402
+import reminders  # noqa: E402
+import heartbeat  # noqa: E402
+from collections import Counter  # noqa: E402
+
+ok("BOC التعليق مطابق لمكتبة TON المرجعية", ton.comment_payload("42-p1-1700000000") == "te6cckEBAQEAFgAAKAAAAAA0Mi1wMS0xNzAwMDAwMDAw+rFG6w==")
+reset(); add_package("p1", price_ton=8.0); add_package("noton"); add_user(42)
+ton.TON_WALLET = ""
+ok("TON غير مهيأ → 503", c.post("/api/payments/create-ton", json={"init_data": init_data(), "package_id": "p1"}).status_code == 503)
+ok("/api/packages يبلّغ ton_enabled", c.get("/api/packages").json()["ton_enabled"] is False)
+ton.TON_WALLET = "UQ_PROJECT_WALLET"
+r = c.post("/api/payments/create-ton", json={"init_data": init_data(), "package_id": "p1"})
+tx = r.json()
+ok("طلب TON: العنوان والمبلغ بالنانو والتعليق = order_id", r.status_code == 200 and tx["address"] == "UQ_PROJECT_WALLET" and tx["amount_nano"] == "8000000000" and tx["payload"] == ton.comment_payload(tx["order_id"]))
+ok("باقة بلا سعر TON → 400", c.post("/api/payments/create-ton", json={"init_data": init_data(), "package_id": "noton"}).status_code == 400)
+CHAIN = []
+ton.fetch_transactions = lambda limit=100: list(CHAIN)
+ok("لا معاملة على الشبكة → يبقى waiting", c.post("/api/payments/ton-check", json={"init_data": init_data(), "order_id": tx["order_id"]}).json()["status"] == "waiting")
+CHAIN.append({"hash": "h1", "lt": 1, "utime": 1, "source": "EQ_USER", "value": 7_000_000_000, "comment": tx["order_id"]})
+ok("مبلغ ناقص لا يفعّل", main.scan_ton_payments() == 0)
+CHAIN.append({"hash": "h2", "lt": 2, "utime": 2, "source": "EQ_USER", "value": 8_000_000_000, "comment": tx["order_id"]})
+ok("طلب مستخدم آخر → 404", c.post("/api/payments/ton-check", json={"init_data": init_data(7), "order_id": tx["order_id"]}).status_code == 404)
+r = c.post("/api/payments/ton-check", json={"init_data": init_data(), "order_id": tx["order_id"]})
+ok("معاملة مطابقة على الشبكة → يتفعّل الاشتراك", r.json()["status"] == "finished" and DB.store["users"]["42"]["subscription"]["status"] == "active" and DB.store["payments"][tx["order_id"]]["ton_tx_hash"] == "h2")
+e1 = DB.store["users"]["42"]["subscription"]["expires_at"]
+ok("فحص متكرر لا يمدّد مرتين", main.scan_ton_payments() == 0 and DB.store["users"]["42"]["subscription"]["expires_at"] == e1)
+hist = c.get("/api/billing/history", params={"init_data": init_data()})
+ok("سجل الفواتير يعرض TON ومعرّف المعاملة", hist.status_code == 200 and hist.json()["payments"][0]["currency"] == "TON" and hist.json()["payments"][0]["tx_id"] == "h2")
+# نفس المعاملة لا تفعّل طلبًا ثانيًا
+DB.store["payments"]["42-p1-2"] = {"uid": 42, "package_id": "p1", "method": "ton", "status": "waiting", "created_at": time.time(), "amount_nano": 1}
+CHAIN.append({"hash": "h2", "lt": 2, "utime": 2, "source": "EQ_USER", "value": 8_000_000_000, "comment": "42-p1-2"})
+ok("معاملة واحدة لا تفعّل طلبين", main.scan_ton_payments() == 0)
+DB.store["payments"]["old"] = {"uid": 42, "package_id": "p1", "method": "ton", "status": "waiting", "created_at": time.time() - 99999, "amount_nano": 1}
+main.scan_ton_payments()
+ok("طلب TON قديم → expired", DB.store["payments"]["old"]["status"] == "expired")
+
+ton.TON_WEBHOOK_SECRET = "tonsec"
+ok("webhook TON بلا سر → 401", c.post("/api/payments/ton-webhook", json={}).status_code == 401)
+reset(); add_package("p1", price_ton=8.0); add_user(42)
+tx = c.post("/api/payments/create-ton", json={"init_data": init_data(), "package_id": "p1"}).json()
+CHAIN[:] = [{"hash": "h9", "lt": 9, "utime": 9, "source": "EQ_U", "value": 8_000_000_000, "comment": tx["order_id"]}]
+r = c.post("/api/payments/ton-webhook?secret=tonsec", json={"tx_hash": "ignored"})
+inbox = list(DB.store["webhook_inbox"].values())
+ok("webhook TON: يُحفظ في الصندوق ويُفعَّل في الخلفية بعد التحقق على الشبكة", r.status_code == 200 and inbox[0]["processed"] and DB.store["payments"][tx["order_id"]]["status"] == "finished")
+ok("manifest TON Connect", c.get("/api/tonconnect-manifest.json").json()["url"] == "https://example.test")
+
+# ═════════ 14) NOWPayments داخل التطبيق + صندوق الإشعارات وإعادة المحاولة ═════════
+reset(); add_package("p1"); add_user(42)
+payments.create_invoice = lambda **kw: {"id": "inv77", "invoice_url": "https://nowpayments.io/pay/inv77"}
+r = c.post("/api/payments/create", json={"init_data": init_data(), "package_id": "p1"}).json()
+ok("بوابة مضمّنة: widget_url لـ iframe", r["widget_url"] == "https://nowpayments.io/embeds/payment-widget?iid=inv77")
+orig = main.process_nowpayments
+calls = {"n": 0}
+def flaky(data):
+    calls["n"] += 1
+    raise RuntimeError("firestore down")
+main.process_nowpayments = flaky
+np_post({"order_id": r["order_id"], "payment_status": "finished"})
+item_id, item = next(iter(DB.store["webhook_inbox"].items()))
+ok("فشل مؤقت: الإشعار محفوظ غير معالَج مع إعادة محاولة tenacity (3)", not item["processed"] and item["attempts"] == 1 and calls["n"] == 3)
+main.process_nowpayments = orig
+item["received_at"] = time.time() - 120
+main.retry_inbox()
+ok("المهمة الدورية تعيد المعالجة وتفعّل الاشتراك", DB.store["webhook_inbox"][item_id]["processed"] and DB.store["users"]["42"]["subscription"]["status"] == "active")
+
+import retry as retry_mod  # noqa: E402
+n = {"i": 0}
+@retry_mod.with_backoff(attempts=3, max_wait=0.01)
+def unstable():
+    n["i"] += 1
+    if n["i"] < 3:
+        raise retry_mod.RetryableError("503")
+    return "ok"
+ok("tenacity: تراجع أُسّي ثم نجاح", unstable() == "ok" and n["i"] == 3)
+
+# ═════════ 15) الفترة التجريبية المشروطة ═════════
+S = {**billing.DEFAULT_SETTINGS, "trial_enabled": True, "trial_days": 10, "trial_max_lot": 0.05}
+f = billing.trial_fields_on_first_link(S, {}, {"currency": "USC"}, "Exness-Real", 1000.0)
+ok("حساب سنت: تجربة مقيّدة بـ 3..7 أيام", f["trial"]["cent_account"] and f["trial_expires_at"] == 1000.0 + 7 * 86400)
+ok("التجربة عند أول ربط فقط", billing.trial_fields_on_first_link(S, {"trial_checked": True}, {"currency": "USC"}, "x", 1) == {})
+ok("معطّلة افتراضيًا", "trial" not in billing.trial_fields_on_first_link(billing.DEFAULT_SETTINGS, {}, {"currency": "USC"}, "x", 1))
+f2 = billing.trial_fields_on_first_link(S, {}, {"currency": "USD"}, "Exness-Real", 1000.0)
+u = {"trial_expires_at": f2["trial_expires_at"], "trial": f2["trial"]}
+ok("حساب عادي: لوت ضمن الحد مسموح", billing.auto_trade_allowed(u, 0.05, now=2000) == (True, "trial_lot"))
+ok("لوت أكبر من الحد مرفوض", billing.auto_trade_allowed(u, 0.1, now=2000) == (False, "lot_exceeds_trial_limit"))
+ok("بعد انتهاء trial_expires_at مرفوض", billing.auto_trade_allowed(u, 0.01, now=f2["trial_expires_at"] + 1) == (False, "trial_expired"))
+ok("الاشتراك الفعّال يسمح دائمًا", billing.auto_trade_allowed({"subscription": active_sub()}, 5)[0])
+reset(); add_user(42)
+DB.store["config"] = {"settings": {"trial_enabled": True}}
+FakeClient.mode = "ok"
+c.post("/api/register", json=BODY(server="Exness-MT5Cent"))
+ok("الربط الأول يسجّل trial_expires_at", DB.store["users"]["42"].get("trial_expires_at", 0) > time.time() + 2 * 86400)
+
+# ═════════ 16) تذكير التجديد ═════════
+reset(); SENT = []
+def rtg(method, **p):
+    SENT.append(p)
+    return {"ok": True}
+NOW = time.time()
+add_user(1, language="ar", subscription={"status": "active", "expires_at": NOW + 2.5 * 86400})
+add_user(2, language="en", subscription={"status": "active", "expires_at": NOW + 20 * 3600})
+add_user(3, subscription={"status": "active", "expires_at": NOW + 10 * 86400})
+ok("يرسل قبل 3 أيام وقبل 24 ساعة فقط", reminders.run_renewal_reminders(DB, rtg, "https://example.test", NOW) == 2)
+btn = SENT[0]["reply_markup"]["inline_keyboard"][0][0]
+ok("زر تجديد الآن يفتح تدفق TON", btn["web_app"]["url"] == "https://example.test/?renew=ton")
+ok("لا تكرار لنفس المرحلة", reminders.run_renewal_reminders(DB, rtg, "https://example.test", NOW + 60) == 0)
+ok("المستخدم 1 يصله تذكير 24 ساعة لاحقًا", reminders.run_renewal_reminders(DB, rtg, "https://example.test", NOW + 1.8 * 86400) == 1)
+DB.store["users"]["2"]["subscription"]["expires_at"] = NOW + 2 * 86400  # جدّد
+ok("التجديد يعيد ضبط التذكيرات", reminders.run_renewal_reminders(DB, rtg, "https://example.test", NOW) == 1)
+
+# ═════════ 17) Heartbeat ═════════
+clock = {"t": 0.0}; up = {"v": True}; notes, events, restarts = [], [], []
+hb = heartbeat.Heartbeat(notes.append, lambda k, d: events.append(k), probe=lambda: up["v"],
+                         restart=lambda: restarts.append(1) or True, clock=lambda: clock["t"], alert_after=15, restart_cooldown=120)
+hb.beat()
+up["v"] = False
+for t_ in (5, 10):
+    clock["t"] = t_; hb.beat()
+ok("انقطاع قصير (<15ث) بلا تنبيه", not notes and events == ["lost"])
+clock["t"] = 20; hb.beat()
+ok("بعد 15ث: تنبيه فوري + إعادة تشغيل + تسجيل", len(notes) == 1 and "🚨" in notes[0] and restarts == [1] and events == ["lost", "alert", "restart"])
+clock["t"] = 25; hb.beat()
+ok("لا تكرار للتنبيه ولا لإعادة التشغيل ضمن فترة التهدئة", len(notes) == 1 and restarts == [1])
+ok("اللقطة: down مع المدة", hb.snapshot()["status"] == "down" and hb.snapshot()["down_for_sec"] == 20)
+up["v"] = True; clock["t"] = 30; hb.beat()
+ok("التعافي يُبلَّغ ويُسجَّل", "✅" in notes[-1] and events[-1] == "recovered" and hb.snapshot()["status"] == "up")
+
+# ═════════ 18) Scratch & Win ═════════
+rng = __import__("random").Random(7)
+cnt = Counter(rewards.generate_scratch_prize(rng)["type"] for _ in range(100000))
+ok("مصفوفة الاحتمالات 60/25/10/4/1 (توزيع مرجّح)", all(abs(cnt[k] / 1000 - w) < 0.8 for k, w in rewards.CATEGORY_WEIGHTS.items()))
+ok("مجموع الأوزان 100", sum(w for w, _, _ in rewards.PRIZE_TABLE) == 100)
+ok("الخصومات 10/20/50 فقط", {p_["value"] for p_ in (rewards.generate_scratch_prize(rng) for _ in range(3000)) if p_["type"] == "discount"} == {10, 20, 50})
+
+reset(); add_user(42)
+r = c.post("/api/onboarding/complete", json={"init_data": init_data()})
+ok("إكمال التعريف يمنح بطاقة الترحيب", r.json()["card_id"] == "42_welcome" and DB.store["users"]["42"]["scratch_pending"] == ["42_welcome"])
+ok("لا بطاقة مكررة لنفس الحدث", c.post("/api/onboarding/complete", json={"init_data": init_data()}).json()["card_id"] is None and len(DB.store["scratch_cards"]) == 1)
+c.post("/api/register", json=BODY(server="Exness-MT5Trial16"))
+ok("ربط حساب تجريبي بعد التعريف لا يمنح بطاقة ثانية", len(DB.store["scratch_cards"]) == 1)
+ok("الحالة تُظهر عدد البطاقات", c.post("/api/status", json={"init_data": init_data()}).json()["scratch_pending"] == 1)
+
+reset(); add_user(1, referral_code="REF1"); add_user(50, referred_by="1")
+c.post("/api/register", json=BODY(50, login="5050"))
+ok("إحالة ناجحة تمنح المُحيل بطاقة", "1_referral_50" in DB.store["scratch_cards"] and "referral_50" in DB.store["users"]["1"]["achievements"])
+
+ok("سلسلة 7 أيام عمل (تتخطى العطلة)", rewards.streak_start(["2026-09-10", "2026-09-11", "2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18"]) == "2026-09-10")
+ok("انقطاع يكسر السلسلة", rewards.streak_start(["2026-09-09", "2026-09-11", "2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18"]) is None)
+
+reset(); add_user(42)
+rewards.grant_card(DB, 42, "welcome")
+r = c.post("/api/scratch/claim", json={"init_data": init_data()})
+ok("بلا توثيق هاتف ولا Premium → 403", r.status_code == 403 and r.json()["detail"] == "phone_verification_required")
+ok("لم تُولَّد أي جائزة لغير المؤهل", DB.store["scratch_cards"]["42_welcome"]["prize"] is None)
+W({"message": {"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "contact": {"user_id": 42, "phone_number": "+964 770 000 1111"}}})
+ok("مشاركة الرقم عبر البوت توثّق الحساب", DB.store["users"]["42"]["phone_verified"] is True)
+add_user(43)
+W({"message": {"chat": {"id": 43, "type": "private"}, "from": {"id": 43}, "contact": {"user_id": 43, "phone_number": "9647700001111"}}})
+ok("نفس الرقم لحساب آخر مرفوض", DB.store["users"]["43"]["phone_verified"] is False)
+W({"message": {"chat": {"id": 43, "type": "private"}, "from": {"id": 43}, "contact": {"user_id": 99, "phone_number": "111"}}})
+ok("رقم شخص آخر (user_id مختلف) يُتجاهل", DB.store["users"]["43"]["phone_verified"] is False)
+
+r = c.post("/api/scratch/claim", json={"init_data": init_data()}).json()
+card = DB.store["scratch_cards"]["42_welcome"]
+shown = json.loads(__import__("base64").urlsafe_b64decode(r["token"]))
+ok("الجائزة تُولَّد وتُخزَّن على الخادم وتُرسل مختومة", card["prize"] and shown["type"] == card["prize"]["type"] and hmac.new(main.REWARD_SECRET.encode(), r["token"].encode(), hashlib.sha256).hexdigest() == r["sig"])
+r2 = c.post("/api/scratch/claim", json={"init_data": init_data(), "card_id": "42_welcome"}).json()
+ok("طلب متكرر يعيد نفس الجائزة (لا إعادة سحب)", r2["token"] == r["token"])
+ok("Premium مؤهل بلا هاتف", c.post("/api/scratch/claim", json={"init_data": init_data(44, premium=True)}).json()["detail"] == "no_card")
+ok("بطاقة مستخدم آخر → 404", c.post("/api/scratch/claim", json={"init_data": init_data(44, premium=True), "card_id": "42_welcome"}).status_code == 404)
+card["prize"] = {"type": "discount", "value": 20}
+rv = c.post("/api/scratch/reveal", json={"init_data": init_data(), "card_id": "42_welcome"}).json()
+ok("الكشف: صلاحية بالساعات فقط", rv["status"] == "active" and abs(rv["expires_at"] - time.time() - rewards.REWARD_TTL_HOURS * 3600) < 5 and rewards.REWARD_TTL_HOURS <= 72)
+ok("الكشف يزيل البطاقة من المعلّقة", DB.store["users"]["42"]["scratch_pending"] == [])
+hub = c.get("/api/rewards", params={"init_data": init_data()}).json()
+ok("محفظة المكافآت: النوع والقيمة والانتهاء والحالة", hub["rewards"][0]["type"] == "discount" and hub["rewards"][0]["value"] == 20 and hub["rewards"][0]["status"] == "active" and hub["cards"] == [])
+
+add_package("p1", price_ton=10.0)
+payments.create_invoice = lambda **kw: CALLS.append(("np", kw)) or {"id": "inv5", "invoice_url": "https://np/inv5"}
+r = c.post("/api/payments/create", json={"init_data": init_data(), "package_id": "p1", "reward_id": "42_welcome"}).json()
+npkw = [p for m, p in CALLS if m == "np"][-1]
+ok("الخصم يُطبَّق تلقائيًا قبل إنشاء طلب NOWPayments", npkw["amount_usd"] == 23.2 and DB.store["payments"][r["order_id"]]["price_full"] == 29.0)
+ok("الجائزة لا تُعلَّم مستخدمة قبل نجاح الدفع", card.get("used") is False)
+tx = c.post("/api/payments/create-ton", json={"init_data": init_data(), "package_id": "p1", "reward_id": "42_welcome"}).json()
+ok("الخصم على TON Connect أيضًا", tx["amount_nano"] == "8000000000")
+np_post({"order_id": r["order_id"], "payment_status": "finished"})
+ok("بعد نجاح الدفع تُعلَّم مستخدمة", card["used"] is True and card["used_order"] == r["order_id"])
+ok("جائزة مستخدمة ترفض → 409", c.post("/api/payments/create-stars", json={"init_data": init_data(), "package_id": "p1", "reward_id": "42_welcome"}).status_code == 409)
+
+rewards.grant_card(DB, 42, "referral_77"); c.post("/api/scratch/claim", json={"init_data": init_data(), "card_id": "42_referral_77"})
+DB.store["scratch_cards"]["42_referral_77"]["prize"] = {"type": "free_days", "value": 5}
+c.post("/api/scratch/reveal", json={"init_data": init_data(), "card_id": "42_referral_77"})
+DB.store["scratch_cards"]["42_referral_77"]["expires_at"] = time.time() - 1
+r = c.post("/api/payments/create", json={"init_data": init_data(), "package_id": "p1", "reward_id": "42_referral_77"})
+ok("جائزة منتهية الصلاحية مرفوضة → 410", r.status_code == 410 and r.json()["detail"] == "reward_expired")
+DB.store["scratch_cards"]["42_referral_77"]["expires_at"] = time.time() + 3600
+before = DB.store["users"]["42"]["subscription"]["expires_at"]
+r = c.post("/api/payments/create-stars", json={"init_data": init_data(), "package_id": "p1", "reward_id": "42_referral_77"}).json()
+W({"message": {"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "successful_payment": {"invoice_payload": next(k for k, v in DB.store["payments"].items() if v.get("method") == "stars"), "telegram_payment_charge_id": "c9"}}})
+gain = (DB.store["users"]["42"]["subscription"]["expires_at"] - before) / 86400
+ok("أيام مجانية تُضاف بعد نجاح الدفع (30 + 5)", 34.9 < gain < 35.1 and DB.store["scratch_cards"]["42_referral_77"]["used"])
+
+rewards.grant_card(DB, 42, "streak7_2026-09-10"); c.post("/api/scratch/claim", json={"init_data": init_data(), "card_id": "42_streak7_2026-09-10"})
+DB.store["scratch_cards"]["42_streak7_2026-09-10"]["prize"] = {"type": "free_month", "value": 30}
+ok("شهر مجاني لا يُطبَّق على الدفع", c.post("/api/payments/create", json={"init_data": init_data(), "package_id": "p1", "reward_id": "42_streak7_2026-09-10"}).status_code == 404)
+c.post("/api/scratch/reveal", json={"init_data": init_data(), "card_id": "42_streak7_2026-09-10"})
+before = DB.store["users"]["42"]["subscription"]["expires_at"]
+ok("تفعيل الشهر المجاني مباشرة", c.post("/api/rewards/redeem", json={"init_data": init_data(), "reward_id": "42_streak7_2026-09-10"}).status_code == 200 and 29.9 < (DB.store["users"]["42"]["subscription"]["expires_at"] - before) / 86400 < 30.1)
+ok("ولا يُفعَّل مرتين", c.post("/api/rewards/redeem", json={"init_data": init_data(), "reward_id": "42_streak7_2026-09-10"}).status_code == 409)
+
+ok("حالة النظام: زمن استجابة عالٍ = degraded", main._timed_status(time.time() - 5)["status"] == "degraded" and main._timed_status(time.time())["status"] == "up")
 
 print("\nALL BACKEND CHECKS PASSED")

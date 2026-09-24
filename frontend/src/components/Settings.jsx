@@ -17,7 +17,7 @@ const fmtDate = (epoch, lang) =>
       })
     : '—';
 
-export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUnlinked, onLegal, onFaq, onCalc, onBilling }) {
+export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUnlinked, onLegal, onFaq, onCalc, onBilling, onRewards }) {
   const sub = data.subscription;
   const cfg = data.settings || {};
   const code = data.referral_code;
@@ -152,6 +152,10 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
           </button>
           <button type="button" className="row row-link" onClick={onCalc}>
             <span className="row-label">{t.calcLink}</span>
+            <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+          </button>
+          <button type="button" className="row row-link" onClick={onRewards}>
+            <span className="row-label">{t.rwLink}</span>
             <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
           </button>
           <button type="button" className="row row-link" onClick={onBilling}>

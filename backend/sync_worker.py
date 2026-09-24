@@ -96,6 +96,7 @@ def empty_stats():
         "week_key": None, "week_pnl": 0.0, "month_key": None, "month_pnl": 0.0,
         "best_trade": 0.0, "worst_trade": 0.0,
         "pnl_cum": 0.0, "pnl_peak": 0.0, "max_dd": 0.0,  # منحنى الأرباح المحققة لحساب أقصى تراجع
+        "trade_days": [],  # آخر أيام فيها تداول (لمكافأة 7 أيام متتالية)
     }
 
 
@@ -120,6 +121,7 @@ def apply_deals(stats, deals, tz, now_ts):
     """يضيف الصفقات الجديدة فقط إلى الإحصاءات التراكمية. آمن عند التكرار."""
     s = stats_defaults(stats)
     s["seen"] = list(s["seen"])
+    trade_days = set(s["trade_days"])
     today_key, week_key, month_key = period_keys(now_ts, tz)
     if s["day_key"] != today_key:  # يوم جديد: نصفّر عدّادات اليوم
         s.update(day_key=today_key, day_pnl=0.0, day_wins=0, day_losses=0)
@@ -141,6 +143,7 @@ def apply_deals(stats, deals, tz, now_ts):
                 s["withdrawals"] += -float(d["profit"])
         elif d["type"] in TRADE_TYPES:
             dk, wk, mk = period_keys(t, tz)
+            trade_days.add(dk)
             is_today = dk == today_key
             s["trading_pnl"] += amount
             if is_today:
@@ -170,6 +173,7 @@ def apply_deals(stats, deals, tz, now_ts):
             s["cursor"], s["seen"] = t, [ticket]
         else:
             s["seen"].append(ticket)
+    s["trade_days"] = sorted(trade_days)[-30:]
     return s
 
 
@@ -392,6 +396,11 @@ class Store:
     def update(self, uid, fields):
         self._users().document(str(uid)).update(fields)
 
+    def grant_card(self, uid, event):
+        import rewards
+
+        return rewards.grant_card(self.db, uid, event)
+
 
 class Notifier:
     def __init__(self):
@@ -399,15 +408,24 @@ class Notifier:
         self.channel = os.getenv("CHANNEL_ID")
         self.http = httpx.Client(timeout=15)
 
+    def _post(self, chat_id, text):
+        from retry import raise_for_retryable, with_backoff
+
+        @with_backoff()
+        def call():
+            return raise_for_retryable(self.http.post(
+                f"https://api.telegram.org/bot{self.token}/sendMessage",
+                json={"chat_id": chat_id, "text": text},
+            ))
+
+        return call()
+
     def _send(self, chat_id, text):
         if not (self.token and chat_id):
             return
         try:
-            self.http.post(
-                f"https://api.telegram.org/bot{self.token}/sendMessage",
-                json={"chat_id": chat_id, "text": text},
-            )
-        except httpx.HTTPError as e:
+            self._post(chat_id, text)  # إعادة محاولة بتراجع أُسّي على أعطال الشبكة و429/5xx
+        except Exception as e:  # noqa: BLE001
             log.warning("تعذّر إرسال إشعار: %s", e)
 
     def user(self, uid, text):
@@ -649,9 +667,24 @@ class Worker:
             },
         })
         job.next_due, job.fails, job.first_fail = now + delay, 0, 0.0
+        self.grant_streak_card(job.uid, new_stats)
         self.transient_streak = 0
         self.last_ok_ts = now
         log.info("✔ %s (%s) رصيد=%s", job.uid, mask(doc["mt5_login"]), live["balance"])
+
+    def grant_streak_card(self, uid, stats):
+        """بطاقة خدش عند التداول 7 أيام عمل متتالية (مرة لكل سلسلة: الحدث مفتاحه يوم بدايتها)."""
+        grant = getattr(self.store, "grant_card", None)
+        if not grant:
+            return
+        from rewards import streak_start
+
+        start = streak_start(stats.get("trade_days"))
+        if start:
+            try:
+                grant(uid, f"streak7_{start}")
+            except Exception as e:  # noqa: BLE001 — المكافأة لا تعطّل المزامنة أبدًا
+                log.warning("تعذّر منح بطاقة السلسلة لـ %s: %s", uid, e)
 
     def on_failure(self, job, doc, err):
         now = self.clock()

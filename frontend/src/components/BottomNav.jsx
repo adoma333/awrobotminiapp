@@ -4,6 +4,7 @@ import { haptic } from '../telegram';
 const ITEMS = [
   { view: 'main', label: 'navHome', icon: '🏠' },
   { view: 'plans', label: 'navPlans', icon: '💎' },
+  { view: 'rewards', label: 'navRewards', icon: '🎁' },
   { view: 'settings', label: 'navSettings', icon: '⚙️' },
 ];
 

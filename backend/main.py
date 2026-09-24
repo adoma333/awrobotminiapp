@@ -7,6 +7,7 @@ FastAPI + Firestore + Telegram Bot API
   POST /api/status            حالة طلب المستخدم (none / pending / approved / rejected)
   POST /api/telegram-webhook  ضغطات الأزرار في القناة + رد الأدمن بسبب الرفض
 """
+import asyncio
 import hashlib
 import hmac
 import json
@@ -24,10 +25,18 @@ from urllib.parse import parse_qsl
 import firebase_admin
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Request, Response, Depends
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response, Depends
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 import billing
 import payments
 import digest
+import heartbeat
+import reminders
+import rewards
+import ton
+from retry import RetryableError, raise_for_retryable, with_backoff
+from tenacity import retry, stop_after_attempt, wait_exponential
 from apscheduler.schedulers.background import BackgroundScheduler
 import secrets
 try:
@@ -103,14 +112,33 @@ def _watchdog():
 _scheduler = BackgroundScheduler(timezone="UTC")
 
 
+def notify_admins(text: str):
+    """تنبيه فوري لكل أدمن في الخاص (وللقناة إن لم يُضبط أي أدمن)."""
+    for chat in ADMIN_IDS or [CHANNEL_ID]:
+        tg("sendMessage", chat_id=chat, text=text)
+
+
+def record_system_event(kind: str, detail: dict):
+    try:
+        db.collection("system_events").document().set({"source": "mt5_heartbeat", "type": kind, "at": time.time(), **detail})
+    except Exception:  # noqa: BLE001
+        log.exception("system event not recorded")
+
+
 @asynccontextmanager
 async def lifespan(_app):
     threading.Thread(target=_watchdog, daemon=True, name="tg-watchdog").start()
+    heartbeat.start(notify_admins, record_system_event)
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "weekly"), "cron", day_of_week="mon", hour=9, id="digest_weekly")
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "monthly"), "cron", day=1, hour=9, id="digest_monthly")
+    _scheduler.add_job(retry_inbox, "interval", seconds=60, id="webhook_inbox_retry")
+    _scheduler.add_job(lambda: reminders.run_renewal_reminders(db, tg, WEBAPP_URL), "cron", hour=10, id="renewal_reminders")
+    if ton.configured():
+        _scheduler.add_job(scan_ton_payments, "interval", seconds=60, id="ton_scan")
     _scheduler.start()
     yield
     _scheduler.shutdown(wait=False)
+    heartbeat.stop()
 
 
 app = FastAPI(title="AW Mini App API", lifespan=lifespan)
@@ -125,11 +153,17 @@ TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 http = httpx.Client(timeout=15)
 
 
+@with_backoff()
+def _tg_call(method: str, params: dict) -> dict:
+    return raise_for_retryable(http.post(f"{TG_API}/{method}", json=params)).json()
+
+
 def tg(method: str, **params) -> dict:
-    """استدعاء Telegram Bot API. لا يرفع استثناء؛ يرجع {'ok': False} عند الفشل."""
+    """استدعاء Telegram Bot API مع إعادة محاولة بتراجع أُسّي على أعطال الشبكة و429/5xx.
+    لا يرفع استثناء؛ يرجع {'ok': False} عند الفشل النهائي."""
     try:
-        return http.post(f"{TG_API}/{method}", json=params).json()
-    except (httpx.HTTPError, ValueError) as e:
+        return _tg_call(method, params)
+    except (httpx.HTTPError, ValueError, RetryableError) as e:
         return {"ok": False, "description": str(e)}
 
 
@@ -327,6 +361,7 @@ def register(body: Registration):
             "report": None,
             "stats": None,  # إحصاءات حساب سابق (بعد فكّ ربط) يجب ألا تختلط بالحساب الجديد
             "sync": {"state": "new", "fails": 0, "first_fail": None, "last_error": None, "next_due": 0},
+            **billing.trial_fields_on_first_link(settings, previous, live, body.mt5.server, now_ts),
         },
         merge=True,
     )
@@ -338,6 +373,12 @@ def register(body: Registration):
         text=f"🟢 ربط تلقائي ناجح: <code>{uid}</code> · {body.mt5.login} · {body.mt5.server} · {account_type}",
         parse_mode="HTML",
     )
+    # بطاقات الخدش: الترحيب عند ربط حساب تجريبي، وبطاقة للمُحيل عند نجاح ربط من دعاه (مرة لكل صديق)
+    if account_type == "demo":
+        rewards.grant_card(db, uid, "welcome")
+    referrer = (previous or {}).get("referred_by")
+    if referrer and str(referrer) != str(uid):
+        rewards.grant_card(db, referrer, f"referral_{uid}")
     return {"status": "approved"}
 
 
@@ -362,6 +403,7 @@ def _subscription_info(d: dict | None):
         "remaining_days": max(0, math.ceil((exp - now) / 86400)),  # اسم بديل للتوافق
         "package_name_ar": sub.get("package_name_ar"),
         "package_name_en": sub.get("package_name_en"),
+        "package_id": sub.get("package_id"),
     }
 
 
@@ -386,7 +428,10 @@ def _public_settings() -> dict:
 
 @app.post("/api/status")
 def status(body: StatusRequest):
-    user = verify_init_data(body.init_data)
+    return build_status(verify_init_data(body.init_data))
+
+
+def build_status(user: dict) -> dict:
     settings = _public_settings()
     snap = user_ref(user["id"]).get()
     if not snap.exists:
@@ -403,6 +448,7 @@ def status(body: StatusRequest):
         "referral_code": d.get("referral_code") or billing.ensure_referral_code(db, user["id"]),
         "settings": settings,
         "bot_username": _bot_username(),
+        "scratch_pending": len(d.get("scratch_pending") or []),
     }
     if out["status"] == "approved":
         # لوحة الحساب: أرقام حساب المستخدم نفسه فقط (الهوية مؤكدة من initData)
@@ -415,6 +461,40 @@ def status(body: StatusRequest):
             sync={"state": sync.get("state", "new"), "last_ok": _epoch(sync.get("last_ok"))},
         )
     return out
+
+
+SSE_POLL_SEC = float(os.getenv("SSE_POLL_SEC", "5"))
+SSE_PING_SEC = 15
+
+
+@app.get("/api/stream")
+async def status_stream(init_data: str, request: Request):
+    """Server-Sent Events: يبث حالة الحساب والاشتراك (الدفع) والرصيد والمزامنة فور تغيّرها،
+    بنفس شكل /api/status، فلا تحتاج الواجهة لسحب الشاشة أو الاستعلام الدوري."""
+    user = verify_init_data(init_data)
+
+    async def events():
+        yield "retry: 3000\n\n"
+        last, last_sent = None, time.time()
+        while not await request.is_disconnected():
+            try:
+                data = await run_in_threadpool(build_status, user)
+                payload = json.dumps(data, default=str, sort_keys=True, ensure_ascii=False)
+                if payload != last:
+                    last, last_sent = payload, time.time()
+                    yield f"event: status\ndata: {payload}\n\n"
+                elif time.time() - last_sent >= SSE_PING_SEC:
+                    last_sent = time.time()
+                    yield ": ping\n\n"  # يبقي الاتصال حيًا عبر nginx (proxy_read_timeout)
+            except Exception:  # noqa: BLE001
+                log.exception("sse status error")
+            await asyncio.sleep(SSE_POLL_SEC)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ───────────────────────── Webhook تلجرام ─────────────────────────
@@ -662,6 +742,8 @@ def telegram_webhook(update: dict, x_telegram_bot_api_secret_token: str | None =
             msg = update["message"]
             if msg.get("successful_payment"):
                 handle_successful_payment(msg)
+            elif msg.get("contact"):
+                handle_contact(msg)
             else:
                 handle_private_message(msg)
     except Exception:
@@ -884,7 +966,7 @@ def admin_stats(admin_id: int = Depends(get_current_admin)):
 # ═══════════════════════════ الإعدادات والباقات (Admin) ═══════════════════════════
 @app.get("/api/packages")
 def public_packages():
-    return {"packages": billing.list_packages(db, active_only=True)}
+    return {"packages": billing.list_packages(db, active_only=True), "ton_enabled": ton.configured()}
 
 
 @app.get("/api/admin/settings")
@@ -924,10 +1006,108 @@ def admin_delete_package(pkg_id: str, admin_id: int = Depends(get_current_admin)
 
 
 
-# ═══════════════════════════ الدفع (NOWPayments) والاشتراك ═══════════════════════════
+# ═══════════════════════════ تفعيل الاشتراك (موحّد لكل وسائل الدفع) ═══════════════════════════
+PAID_MSG = "✅ تم تفعيل اشتراكك بنجاح!"
+_activation_lock = threading.Lock()  # webhook + فحص دوري + زر التحقق قد تصل معًا لنفس الطلب
+
+
+def activate_payment(order_id: str, extra: dict | None = None) -> bool:
+    """يفعّل الاشتراك لطلب دفع مؤكَّد ويعيد True إن فعّله الآن. آمن عند التكرار (idempotent)."""
+    with _activation_lock:
+        pay_ref = db.collection("payments").document(order_id)
+        snap = pay_ref.get()
+        if not snap.exists:
+            return False
+        pay = snap.to_dict()
+        if pay.get("status") == "finished":
+            return False
+        pkgs = {p["id"]: p for p in billing.list_packages(db)}
+        pkg = pkgs.get(pay["package_id"])
+        if not pkg:
+            return False
+        pkg["id"] = pay["package_id"]
+        billing.extend_subscription(db, pay["uid"], pkg)
+        if pay.get("bonus_days"):  # جائزة خدش "أيام مجانية" طُبّقت على هذا الطلب
+            billing._add_days(db, pay["uid"], int(pay["bonus_days"]))
+        if pay.get("reward_id"):  # الجائزة تُعلَّم مستخدمة بعد نجاح الدفع فقط
+            rewards.mark_used(db, pay["reward_id"], order_id)
+        settings = billing.get_settings(db)
+        if settings.get("referral_enabled"):
+            billing.grant_referral_bonus_if_eligible(db, pay["uid"], settings.get("referral_days", 7))
+        pay_ref.set({"status": "finished", "confirmed_at": time.time(), **(extra or {})}, merge=True)
+    tg("sendMessage", chat_id=pay["uid"], text=PAID_MSG)
+    return True
+
+
+# ═══════════════════════════ صندوق الـ webhooks الواردة (لا يضيع إشعار دفع) ═══════════════════════════
+INBOX = "webhook_inbox"
+INBOX_MAX_ATTEMPTS = 10
+
+
+def inbox_put(source: str, payload: dict) -> str:
+    """يحفظ الإشعار الوارد أولًا (قبل الرد 200) ثم يُعالَج في الخلفية."""
+    ref = db.collection(INBOX).document()
+    ref.set({"source": source, "payload": payload, "received_at": time.time(), "processed": False, "attempts": 0})
+    return ref.id
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=0.5, max=4), reraise=True)
+def _handle_inbox(source: str, payload: dict):
+    if source == "nowpayments":
+        process_nowpayments(payload)
+    elif source == "ton":
+        scan_ton_payments(raise_errors=True)
+
+
+def process_inbox_item(item_id: str):
+    ref = db.collection(INBOX).document(item_id)
+    snap = ref.get()
+    if not snap.exists:
+        return
+    item = snap.to_dict()
+    if item.get("processed"):
+        return
+    try:
+        _handle_inbox(item["source"], item.get("payload") or {})
+        ref.set({"processed": True, "processed_at": time.time()}, merge=True)
+    except Exception as e:  # noqa: BLE001 — يبقى في الصندوق وتعيده المهمة الدورية
+        log.exception("inbox item %s failed", item_id)
+        ref.set({"attempts": int(item.get("attempts") or 0) + 1, "last_error": str(e)[:300]}, merge=True)
+
+
+def retry_inbox():
+    """مهمة دورية: تعيد معالجة أي إشعار لم يكتمل (هبوط مؤقت لـ Firestore/toncenter...)."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    now = time.time()
+    for doc in db.collection(INBOX).where(filter=FieldFilter("processed", "==", False)).stream():
+        d = doc.to_dict() or {}
+        if int(d.get("attempts") or 0) < INBOX_MAX_ATTEMPTS and now - (d.get("received_at") or 0) > 30:
+            process_inbox_item(doc.id)
+
+
+# ═══════════════════════════ الدفع (NOWPayments) ═══════════════════════════
 class PaymentCreate(BaseModel):
     init_data: str
     package_id: str
+    reward_id: str | None = None  # جائزة خدش صالحة تُطبَّق تلقائيًا على المبلغ
+
+
+def checkout_reward(uid, reward_id) -> dict | None:
+    """يتحقق من جائزة الخدش قبل إنشاء طلب الدفع (منتهية/مستخدمة/ليست له → رفض)."""
+    if not reward_id:
+        return None
+    try:
+        return rewards.validate(db, uid, reward_id, rewards.CHECKOUT_TYPES)
+    except rewards.RewardError as e:
+        raise HTTPException(e.status, e.code)
+
+
+def reward_fields(card, reward_id, full_price) -> dict:
+    if not card:
+        return {}
+    _, bonus = rewards.apply_to_amount(card, full_price)
+    return {"reward_id": reward_id, "bonus_days": bonus, "price_full": full_price}
 
 
 @app.post("/api/payments/create")
@@ -937,13 +1117,17 @@ def create_payment(body: PaymentCreate):
     pkg = pkgs.get(body.package_id)
     if not pkg:
         raise HTTPException(404, "package_not_found")
+    card = checkout_reward(user["id"], body.reward_id)
+    amount_usd = pkg["price_usd"]
+    if card:
+        amount_usd = round(rewards.apply_to_amount(card, amount_usd)[0], 2)
 
     order_id = f"{user['id']}-{body.package_id}-{int(time.time())}"
     base = FRONTEND_ORIGIN if FRONTEND_ORIGIN != "*" else (WEBAPP_URL or "")
     try:
         inv = payments.create_invoice(
             order_id=order_id,
-            amount_usd=pkg["price_usd"],
+            amount_usd=amount_usd,
             description=f"AW Robot - {pkg.get('name_en') or pkg.get('name_ar')}",
             ipn_url=f"{base}/api/payments/nowpayments-webhook",
             success_url=f"{base}/?paid=1",
@@ -955,50 +1139,45 @@ def create_payment(body: PaymentCreate):
     db.collection("payments").document(order_id).set({
         "uid": user["id"],
         "package_id": body.package_id,
-        "amount_usd": pkg["price_usd"],
+        "amount_usd": amount_usd,
+        "method": "nowpayments",
         "status": "waiting",
         "created_at": time.time(),
         "invoice_id": inv.get("id"),
+        **reward_fields(card, body.reward_id, pkg["price_usd"]),
     })
-    return {"invoice_url": inv["invoice_url"], "order_id": order_id}
+    return {
+        "invoice_url": inv["invoice_url"],
+        "order_id": order_id,
+        "invoice_id": inv.get("id"),
+        # بوابة NOWPayments المضمّنة: تُعرض داخل الـ Mini App في iframe بدل متصفح خارجي
+        "widget_url": payments.widget_url(inv.get("id")) if inv.get("id") else None,
+    }
+
+
+def process_nowpayments(data: dict):
+    order_id = data.get("order_id")
+    pay_status = data.get("payment_status")
+    if not order_id:
+        return
+    pay_ref = db.collection("payments").document(order_id)
+    pay_snap = pay_ref.get()
+    if not pay_snap.exists or pay_snap.to_dict().get("status") == "finished":
+        return  # حماية من التكرار (idempotency)
+    if pay_status == "finished":
+        activate_payment(order_id, {"np_payment_id": data.get("payment_id")})
+    else:
+        pay_ref.set({"status": pay_status}, merge=True)
 
 
 @app.post("/api/payments/nowpayments-webhook")
-async def payments_webhook(request: Request):
+async def payments_webhook(request: Request, background: BackgroundTasks):
     raw = await request.body()
     sig = request.headers.get("x-nowpayments-sig", "")
     if not payments.verify_ipn_signature(raw, sig):
         raise HTTPException(401, "bad_signature")
-
-    data = json.loads(raw)
-    order_id = data.get("order_id")
-    pay_status = data.get("payment_status")
-    if not order_id:
-        return {"ok": True}
-
-    pay_ref = db.collection("payments").document(order_id)
-    pay_snap = pay_ref.get()
-    if not pay_snap.exists:
-        return {"ok": True}
-    pay = pay_snap.to_dict()
-
-    if pay.get("status") == "finished":
-        return {"ok": True}  # حماية من التكرار (idempotency)
-
-    pay_ref.set({"status": pay_status}, merge=True)
-
-    if pay_status == "finished":
-        pkgs = {p["id"]: p for p in billing.list_packages(db)}
-        pkg = pkgs.get(pay["package_id"])
-        if pkg:
-            pkg["id"] = pay["package_id"]
-            new_expiry = billing.extend_subscription(db, pay["uid"], pkg)
-            settings = billing.get_settings(db)
-            if settings.get("referral_enabled"):
-                billing.grant_referral_bonus_if_eligible(db, pay["uid"], settings.get("referral_days", 7))
-            pay_ref.set({"status": "finished", "confirmed_at": time.time()}, merge=True)
-            tg("sendMessage", chat_id=pay["uid"],
-               text="✅ تم تفعيل اشتراكك بنجاح! افتح التطبيق الآن لربط حساب MT5.")
+    item_id = await run_in_threadpool(inbox_put, "nowpayments", json.loads(raw))
+    background.add_task(process_inbox_item, item_id)
     return {"ok": True}
 
 
@@ -1018,10 +1197,145 @@ def admin_referrals(admin_id: int = Depends(get_current_admin)):
 
 
 
+
+# ═══════════════════════════ الدفع عبر محفظة TON (TON Connect) ═══════════════════════════
+class TonPaymentCreate(BaseModel):
+    init_data: str
+    package_id: str
+    reward_id: str | None = None
+
+
+@app.get("/api/tonconnect-manifest.json")
+def tonconnect_manifest(response: Response):
+    response.headers["Access-Control-Allow-Origin"] = "*"  # المحافظ تجلبه من نطاقاتها
+    base = WEBAPP_URL or ""
+    return {"url": base, "name": "AW Robot", "iconUrl": f"{base}/icon.png"}
+
+
+@app.post("/api/payments/create-ton")
+def create_ton_payment(body: TonPaymentCreate):
+    user = verify_init_data(body.init_data)
+    if not ton.configured():
+        raise HTTPException(503, "ton_not_configured")
+    pkgs = {p["id"]: p for p in billing.list_packages(db, active_only=True)}
+    pkg = pkgs.get(body.package_id)
+    if not pkg:
+        raise HTTPException(404, "package_not_found")
+    full = pkg.get("price_ton")
+    if not full:
+        raise HTTPException(400, "ton_not_configured_for_package")
+    card = checkout_reward(user["id"], body.reward_id)
+    price = round(rewards.apply_to_amount(card, full)[0], 4) if card else full
+
+    order_id = f"{user['id']}-{body.package_id}-{int(time.time())}"
+    nano = ton.to_nano(price)
+    db.collection("payments").document(order_id).set({
+        "uid": user["id"],
+        "package_id": body.package_id,
+        "amount_ton": price,
+        "amount_nano": nano,
+        "method": "ton",
+        "status": "waiting",
+        "created_at": time.time(),
+        **reward_fields(card, body.reward_id, full),
+    })
+    return {
+        "order_id": order_id,
+        "address": ton.TON_WALLET,
+        "amount_nano": str(nano),
+        "payload": ton.comment_payload(order_id),  # التعليق = order_id، به نطابق المعاملة على الشبكة
+        "valid_until": int(time.time()) + 600,
+    }
+
+
+def scan_ton_payments(only_order: str | None = None, raise_errors: bool = False) -> int:
+    """يطابق طلبات TON المنتظرة مع المعاملات الواردة الفعلية على الشبكة ويفعّل المؤكَّد منها."""
+    if not ton.configured():
+        return 0
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    now = time.time()
+    q = (
+        db.collection("payments")
+        .where(filter=FieldFilter("method", "==", "ton"))
+        .where(filter=FieldFilter("status", "==", "waiting"))
+    )
+    pending = []
+    for doc in q.stream():
+        p = doc.to_dict() or {}
+        if only_order and doc.id != only_order:
+            continue
+        if now - (p.get("created_at") or 0) > ton.TON_PAYMENT_WINDOW:
+            db.collection("payments").document(doc.id).set({"status": "expired"}, merge=True)
+            continue
+        pending.append((doc.id, p))
+    if not pending:
+        return 0
+    try:
+        txs = ton.fetch_transactions()
+    except ton.TonError as e:
+        log.warning("toncenter unavailable: %s", e)
+        if raise_errors:
+            raise
+        return 0
+
+    done = 0
+    for order_id, p in pending:
+        tx = ton.find_payment(txs, order_id, int(p.get("amount_nano") or 0))
+        if not tx:
+            continue
+        claim = db.collection("ton_txs").document(hashlib.sha256(tx["hash"].encode()).hexdigest())
+        if claim.get().exists:
+            continue  # معاملة واحدة لا تفعّل طلبين
+        claim.set({"order_id": order_id, "hash": tx["hash"], "at": now})
+        if activate_payment(order_id, {"ton_tx_hash": tx["hash"], "ton_sender": tx["source"]}):
+            done += 1
+    return done
+
+
+class TonCheck(BaseModel):
+    init_data: str
+    order_id: str
+
+
+@app.post("/api/payments/ton-check")
+def ton_check(body: TonCheck):
+    """تستدعيه الواجهة بعد إرسال المعاملة لتسريع التفعيل (المهمة الدورية تغطيه على أي حال)."""
+    user = verify_init_data(body.init_data)
+    ref = db.collection("payments").document(body.order_id)
+    snap = ref.get()
+    if not snap.exists or str(snap.to_dict().get("uid")) != str(user["id"]):
+        raise HTTPException(404, "order_not_found")
+    if snap.to_dict().get("status") != "finished":
+        scan_ton_payments(only_order=body.order_id)
+    return {"status": ref.get().to_dict().get("status")}
+
+
+@app.post("/api/payments/ton-webhook")
+async def ton_webhook(request: Request, background: BackgroundTasks):
+    """إشعار من مزوّد مراقبة شبكة TON (مثل TonAPI webhooks) بوصول معاملة لمحفظة المشروع.
+    محتواه لا يُصدَّق: نستخدمه فقط كمنبّه ثم نتحقق من المعاملة على الشبكة نفسها."""
+    auth = request.headers.get("authorization", "")
+    given = request.headers.get("x-webhook-secret") or request.query_params.get("secret") or (
+        auth[7:] if auth.lower().startswith("bearer ") else ""
+    )
+    if not ton.TON_WEBHOOK_SECRET or not hmac.compare_digest(given, ton.TON_WEBHOOK_SECRET):
+        raise HTTPException(401, "bad_secret")
+    raw = await request.body()
+    try:
+        payload = json.loads(raw or b"{}")
+    except ValueError:
+        payload = {}
+    item_id = await run_in_threadpool(inbox_put, "ton", payload if isinstance(payload, dict) else {})
+    background.add_task(process_inbox_item, item_id)
+    return {"ok": True}
+
+
 # ═══════════════════════════ الدفع عبر Telegram Stars ═══════════════════════════
 class StarsPaymentCreate(BaseModel):
     init_data: str
     package_id: str
+    reward_id: str | None = None
 
 
 @app.post("/api/payments/create-stars")
@@ -1031,9 +1345,11 @@ def create_stars_payment(body: StarsPaymentCreate):
     pkg = pkgs.get(body.package_id)
     if not pkg:
         raise HTTPException(404, "package_not_found")
-    stars = pkg.get("price_stars")
-    if not stars:
+    full = pkg.get("price_stars")
+    if not full:
         raise HTTPException(400, "stars_not_configured_for_package")
+    card = checkout_reward(user["id"], body.reward_id)
+    stars = max(1, int(round(rewards.apply_to_amount(card, full)[0]))) if card else full
 
     order_id = f"{user['id']}-{body.package_id}-{int(time.time())}"
     res = tg(
@@ -1055,6 +1371,7 @@ def create_stars_payment(body: StarsPaymentCreate):
         "method": "stars",
         "status": "waiting",
         "created_at": time.time(),
+        **reward_fields(card, body.reward_id, full),
     })
     return {"invoice_link": res["result"]}
 
@@ -1073,33 +1390,7 @@ def handle_pre_checkout(query: dict):
 
 def handle_successful_payment(msg: dict):
     sp = msg["successful_payment"]
-    order_id = sp.get("invoice_payload", "")
-    pay_ref = db.collection("payments").document(order_id)
-    pay_snap = pay_ref.get()
-    if not pay_snap.exists:
-        return
-    pay = pay_snap.to_dict()
-    if pay.get("status") == "finished":
-        return
-
-    pkgs = {p["id"]: p for p in billing.list_packages(db)}
-    pkg = pkgs.get(pay["package_id"])
-    if not pkg:
-        return
-    pkg["id"] = pay["package_id"]
-    billing.extend_subscription(db, pay["uid"], pkg)
-    settings = billing.get_settings(db)
-    if settings.get("referral_enabled"):
-        billing.grant_referral_bonus_if_eligible(db, pay["uid"], settings.get("referral_days", 7))
-    pay_ref.set(
-        {
-            "status": "finished",
-            "confirmed_at": time.time(),
-            "telegram_payment_charge_id": sp.get("telegram_payment_charge_id"),
-        },
-        merge=True,
-    )
-    tg("sendMessage", chat_id=pay["uid"], text="✅ تم تفعيل اشتراكك بنجاح! افتح التطبيق الآن لربط حساب MT5.")
+    activate_payment(sp.get("invoice_payload", ""), {"telegram_payment_charge_id": sp.get("telegram_payment_charge_id")})
 
 
 
@@ -1188,6 +1479,106 @@ def submit_feedback(body: FeedbackRequest):
     return {"ok": True}
 
 
+# ═══════════════════════════ بطاقات الخدش والمكافآت (Scratch & Win) ═══════════════════════════
+REWARD_SECRET = os.getenv("REWARD_SECRET", WEBHOOK_SECRET)
+REWARD_LABEL = {
+    "slippage_insurance": "رصيد تداول / تأمين انزلاق ${v}",
+    "funded_challenge": "دخول تحدي حساب ممول ${v}",
+}
+
+
+def _reward_http(fn, *args, **kw):
+    try:
+        return fn(*args, **kw)
+    except rewards.RewardError as e:
+        raise HTTPException(e.status, e.code)
+
+
+class InitOnly(BaseModel):
+    init_data: str
+
+
+class ScratchClaim(BaseModel):
+    init_data: str
+    card_id: str | None = None
+
+
+class RewardAction(BaseModel):
+    init_data: str
+    reward_id: str
+
+
+@app.post("/api/onboarding/complete")
+def onboarding_complete(body: InitOnly):
+    """إكمال شاشات التعريف: أول خطوة تمنح بطاقة الترحيب (مرة واحدة، مشتركة مع ربط حساب تجريبي)."""
+    user = verify_init_data(body.init_data)
+    user_ref(user["id"]).set({"onboarded_at": time.time()}, merge=True)
+    card = rewards.grant_card(db, user["id"], "welcome")
+    return {"ok": True, "card_id": card}
+
+
+@app.post("/api/scratch/claim")
+def scratch_claim(body: ScratchClaim):
+    """يولّد جائزة البطاقة على الخادم فقط ويخزّنها في Firestore ثم يعيدها مختومة للعرض."""
+    user = verify_init_data(body.init_data)
+    return _reward_http(rewards.claim, db, user, body.card_id, REWARD_SECRET)
+
+
+@app.post("/api/scratch/reveal")
+def scratch_reveal(body: ScratchClaim):
+    """الواجهة كشفت أكثر من 50%: تبدأ صلاحية الجائزة (بالساعات)."""
+    user = verify_init_data(body.init_data)
+    if not body.card_id:
+        raise HTTPException(422, "card_id_required")
+    was_new = (db.collection(rewards.CARDS).document(body.card_id).get().to_dict() or {}).get("status") != "revealed"
+    reward = _reward_http(rewards.reveal, db, user["id"], body.card_id)
+    if was_new and reward["type"] in rewards.MANUAL_TYPES:  # جوائز يسلّمها الأدمن يدويًا
+        label = REWARD_LABEL[reward["type"]].format(v=reward["value"])
+        tg("sendMessage", chat_id=CHANNEL_ID, parse_mode="HTML",
+           text=f"🎁 جائزة خدش تحتاج تسليمًا يدويًا: {label}\nللمستخدم <code>{user['id']}</code> (البطاقة {escape(body.card_id)})")
+    return reward
+
+
+@app.get("/api/rewards")
+def rewards_hub(init_data: str):
+    """محفظة المكافآت: بطاقات لم تُكشف + الجوائز (النوع، القيمة، الانتهاء، حالة الاستخدام)."""
+    user = verify_init_data(init_data)
+    snap = user_ref(user["id"]).get()
+    d = (snap.to_dict() or {}) if snap.exists else {}
+    out = rewards.list_rewards(db, user["id"])
+    out["phone_verified"] = bool(d.get("phone_verified") or user.get("is_premium"))
+    out["ttl_hours"] = rewards.REWARD_TTL_HOURS
+    return out
+
+
+@app.post("/api/rewards/redeem")
+def rewards_redeem(body: RewardAction):
+    """جائزة "شهر مجاني": تُفعَّل مباشرة بلا دفع (مع رفض المنتهية أو المستخدمة)."""
+    user = verify_init_data(body.init_data)
+    card = _reward_http(rewards.validate, db, user["id"], body.reward_id, rewards.REDEEM_TYPES)
+    rewards.mark_used(db, body.reward_id, None)
+    new_expiry = billing._add_days(db, user["id"], int(card["prize"]["value"]))
+    return {"ok": True, "expires_at": new_expiry}
+
+
+def handle_contact(msg: dict):
+    """رقم الهاتف من requestContact في الـ Mini App: يُقبل فقط إن كان رقم المرسل نفسه."""
+    contact, sender = msg["contact"], msg.get("from", {}).get("id")
+    if not sender or contact.get("user_id") != sender or not contact.get("phone_number"):
+        return
+    ok = rewards.verify_phone(db, sender, contact["phone_number"])
+    tg("sendMessage", chat_id=sender,
+       text="✅ تم توثيق رقمك. عد للتطبيق لكشف بطاقتك." if ok else "⚠️ هذا الرقم مستخدم لحساب آخر.")
+
+
+SYSTEM_DEGRADED_MS = int(os.getenv("SYSTEM_DEGRADED_MS", "1500"))  # زمن استجابة أعلى من هذا = degraded
+
+
+def _timed_status(t0) -> dict:
+    ms = round((time.time() - t0) * 1000)
+    return {"status": "degraded" if ms > SYSTEM_DEGRADED_MS else "up", "latency_ms": ms}
+
+
 @app.get("/api/system/status")
 def system_status(admin_id: int = Depends(get_current_admin)):
     """فحص صحة الخدمات الخلفية: Firestore، جسر MT5 (heartbeat)، وتكامل n8n إن وُجد."""
@@ -1197,7 +1588,7 @@ def system_status(admin_id: int = Depends(get_current_admin)):
     t0 = time.time()
     try:
         db.collection("config").document("settings").get()
-        services["firestore"] = {"status": "up", "latency_ms": round((time.time() - t0) * 1000)}
+        services["firestore"] = _timed_status(t0)
     except Exception as e:  # noqa: BLE001
         services["firestore"] = {"status": "down", "error": str(e)[:200]}
 
@@ -1207,12 +1598,24 @@ def system_status(admin_id: int = Depends(get_current_admin)):
     t0 = time.time()
     try:
         with socket.create_connection((bridge_host, bridge_port), timeout=2) as _s:
-            services["mt5_bridge"] = {"status": "up", "latency_ms": round((time.time() - t0) * 1000)}
+            services["mt5_bridge"] = _timed_status(t0)
     except OSError as e:
         services["mt5_bridge"] = {"status": "down", "error": str(e)[:200]}
 
-    # تكامل n8n: غير موجود حاليًا في المشروع
-    services["n8n"] = {"status": "not_configured"}
+    # ترمنال الروبوت: آخر نبضة من مراقب الـ heartbeat الدائم
+    services["mt5_robot"] = heartbeat.snapshot()
+
+    # تكامل n8n: يُفحص فقط إن ضُبط N8N_HEALTH_URL
+    n8n_url = os.getenv("N8N_HEALTH_URL", "").strip()
+    if not n8n_url:
+        services["n8n"] = {"status": "not_configured"}
+    else:
+        t0 = time.time()
+        try:
+            res = http.get(n8n_url, timeout=5)
+            services["n8n"] = _timed_status(t0) if res.status_code < 500 else {"status": "down", "error": f"HTTP {res.status_code}"}
+        except httpx.HTTPError as e:
+            services["n8n"] = {"status": "down", "error": str(e)[:200]}
 
     order = {"up": 0, "degraded": 1, "not_configured": 2, "down": 3}
     overall = max((s["status"] for s in services.values()), key=lambda s: order.get(s, 1))
@@ -1235,6 +1638,8 @@ def billing_history(init_data: str):
         pkg = pkgs.get(p.get("package_id"), {})
         if p.get("method") == "stars" or p.get("amount_stars"):
             amount, currency = p.get("amount_stars"), "XTR"
+        elif p.get("method") == "ton":
+            amount, currency = p.get("amount_ton"), "TON"
         else:
             amount, currency = p.get("amount_usd"), "USD"
         rows.append({
@@ -1245,6 +1650,7 @@ def billing_history(init_data: str):
             "plan_name_ar": pkg.get("name_ar"),
             "plan_name_en": pkg.get("name_en"),
             "status": p.get("status"),
-            "tx_id": p.get("telegram_payment_charge_id") or p.get("invoice_id") or doc.id,
+            "tx_id": (p.get("telegram_payment_charge_id") or p.get("ton_tx_hash") or p.get("np_payment_id")
+                      or p.get("invoice_id") or doc.id),
         })
     return {"payments": rows}
