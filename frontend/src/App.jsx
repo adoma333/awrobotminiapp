@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import logo from './assets/logo.png';
+import logo from './assets/logo-wordmark.png';
 import { messages } from './i18n';
 import { setupTelegram, tgLang, haptic, askWriteAccess, closeApp } from './telegram';
 import { completeOnboarding, errorCodeOf, getStatus, openStatusStream, register } from './api';
@@ -20,6 +20,7 @@ import Onboarding from './components/Onboarding';
 import BottomNav from './components/BottomNav';
 import Analytics from './components/Analytics';
 import Referral from './components/Referral';
+import TermsRisks from './components/TermsRisks';
 import NetworkBanner from './components/NetworkBanner';
 import { AppSkeleton } from './components/Skeleton';
 
@@ -40,6 +41,8 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [errorCode, setErrorCode] = useState('');
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [termsOk, setTermsOk] = useState(false); // موافقة Terms & Risks قبل الربط
+  const [showTerms, setShowTerms] = useState(false);
   const [preferredReward, setPreferredReward] = useState(null); // جائزة اختارها من محفظة المكافآت
   const [streaming, setStreaming] = useState(false); // بث SSE متصل = لا حاجة للاستعلام الدوري
   const phaseRef = useRef(phase);
@@ -161,6 +164,7 @@ export default function App() {
         language: lang,
         profile: { nickname: profile.nickname.trim(), avatar: profile.avatar },
         mt5: { login: mt5.login.trim(), password: mt5.password, server: mt5.server.trim() },
+        terms_accepted: termsOk,
       });
       await finishLinked();
     } catch (e) {
@@ -210,13 +214,12 @@ export default function App() {
     <main className="app" dir={t.dir}>
       <NetworkBanner t={t} />
       {isHero ? (
-        <header className="brand is-hero">
+        <header className="brand is-hero" dir="ltr">
           <img src={logo} alt="AW" />
         </header>
       ) : (
-        <header className="app-bar">
-          <img src={logo} alt="" />
-          <span>AW Robot</span>
+        <header className="app-bar" dir="ltr">
+          <img src={logo} alt="AW Robot" />
         </header>
       )}
 
@@ -235,7 +238,21 @@ export default function App() {
         </div>
       )}
 
-      {phase === 'flow' && !showOnboarding && (
+      {phase === 'flow' && !showOnboarding && showTerms && (
+        <div className="stage">
+          <TermsRisks
+            t={t}
+            lang={lang}
+            onBack={() => setShowTerms(false)}
+            onAgree={() => {
+              setTermsOk(true);
+              setShowTerms(false);
+            }}
+          />
+        </div>
+      )}
+
+      {phase === 'flow' && !showOnboarding && !showTerms && (
         <>
           {steps.length > 1 && <Stepper step={idx + 1} total={steps.length} />}
           <div key={step} className="stage">
@@ -251,6 +268,9 @@ export default function App() {
                 submitting={submitting}
                 errorCode={errorCode}
                 onSubmit={submit}
+                termsOk={termsOk}
+                setTermsOk={setTermsOk}
+                onOpenTerms={() => setShowTerms(true)}
                 onBack={idx > 0 ? () => go(-1) : undefined}
               />
             )}

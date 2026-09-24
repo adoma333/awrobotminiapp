@@ -123,8 +123,12 @@ export async function getPackages() {
     await sleep(400);
     return {
       packages: [
-        { id: 'p1', name_ar: 'شهري', name_en: 'Monthly', price_usd: 29, duration_days: 30, price_stars: 1500, price_ton: 8 },
-        { id: 'p2', name_ar: 'ربع سنوي', name_en: 'Quarterly', price_usd: 69, duration_days: 90, price_stars: null },
+        { id: 'p1', name_ar: 'AW Starter', name_en: 'AW Starter', price_usd: 19, duration_days: 30, price_ton: 5.43, tagline_ar: 'مناسب للمبتدئين', tagline_en: 'Great for beginners',
+          features_ar: ['مدة الاشتراك 30 يومًا', 'مناسب للمبتدئين', 'تشغيل آلي كامل للخدمة'], features_en: ['30-day subscription', 'Great for beginners', 'Fully automated operation'] },
+        { id: 'p2', name_ar: 'AW Pro', name_en: 'AW Pro', price_usd: 129, duration_days: 30, price_ton: 36.86, price_stars: 6500, featured: true, tagline_ar: 'الأكثر طلبًا', tagline_en: 'Most popular',
+          features_ar: ['مدة الاشتراك 30 يومًا', 'نماذج تشغيل متعددة', 'إمكانية تشغيل وإيقاف النموذج', 'خدمة دعم ذكية عبر شات AI'], features_en: ['30-day subscription', 'Multiple trading models', 'Start / stop the model anytime', 'Smart AI chat support'] },
+        { id: 'p3', name_ar: 'AW Premium', name_en: 'AW Premium', price_usd: 449, duration_days: 90, price_ton: 128.29, tagline_ar: 'للمحترفين', tagline_en: 'For professionals',
+          features_ar: ['مدة الاشتراك 90 يومًا', 'إمكانية ربط حسابين تداول', 'إمكانية تشغيل وإيقاف النموذج', 'إعدادات تحكم متقدمة', 'خدمة دعم ذكية عبر شات AI'], features_en: ['90-day subscription', 'Link two trading accounts', 'Start / stop the model anytime', 'Advanced control settings', 'Smart AI chat support'] },
       ],
       ton_enabled: true,
     };
@@ -165,6 +169,7 @@ export async function checkTonPayment(orderId) {
 }
 
 export async function register(payload) {
+  // payload.terms_accepted: موافقة Terms & Risks (يرفض الخادم الربط بدونها)
   if (DEV_MOCK) {
     await sleep(3500);
     mock.approved = true;
@@ -268,4 +273,58 @@ export async function getAnalytics() {
     return { referrals: { invited: 12, linked: 8, paid: 5, conversion_pct: 66.7 } };
   }
   return request('GET', `/api/analytics?init_data=${encodeURIComponent(initData)}`);
+}
+
+// ───────── بوابة العملات الرقمية المخصّصة ─────────
+export async function getCurrencies() {
+  if (DEV_MOCK) {
+    return { currencies: [
+      { code: 'usdttrc20', symbol: 'USDT', network: 'TRON (TRC20)' },
+      { code: 'usdtbsc', symbol: 'USDT', network: 'BNB Smart Chain (BEP20)' },
+      { code: 'ton', symbol: 'TON', network: 'TON' },
+      { code: 'btc', symbol: 'BTC', network: 'Bitcoin' },
+    ] };
+  }
+  return request('GET', '/api/payments/currencies');
+}
+
+export async function createCryptoPayment(packageId, rewardId, payCurrency) {
+  if (DEV_MOCK) {
+    await sleep(500);
+    mock.subAt = Date.now() + 20000;
+    return {
+      order_id: 'dev-np', amount_usd: 129, payment_id: 1, pay_address: 'TQ4hQv9cVx7sX2Y1nP8mJrD5Gk3LwE6Fa1', pay_amount: 129.42,
+      pay_currency: payCurrency, payin_extra_id: payCurrency === 'ton' ? '482913' : null, network: 'TRON (TRC20)',
+      expires_at: new Date(Date.now() + 20 * 60000).toISOString(),
+    };
+  }
+  return request('POST', '/api/payments/create', {
+    init_data: initData, package_id: packageId, reward_id: rewardId || null, pay_currency: payCurrency,
+  });
+}
+
+export async function paymentStatus(orderId) {
+  if (DEV_MOCK) return { status: mock.subAt && Date.now() > mock.subAt - 10000 ? 'confirming' : 'waiting' };
+  return request('POST', '/api/payments/status', { init_data: initData, order_id: orderId });
+}
+
+// يرفع صورتي القصة والمنشور ويعيد روابط عامة (قصة تلجرام + صفحة مشاركة بمعاينة كاملة)
+export async function createShare(storyB64, postB64, caption) {
+  if (DEV_MOCK) {
+    await sleep(400);
+    return { id: 'dev', story_url: '', post_url: '', page_url: 'https://example.com/p/dev' };
+  }
+  return request('POST', '/api/share/create', { init_data: initData, story: storyB64, post: postB64, caption });
+}
+
+export async function getLeaderboard() {
+  if (DEV_MOCK) {
+    await sleep(300);
+    const names = ['Omar Al-Rashid', 'Layla Haddad', 'Yousef Nasser', 'Sara Mansour', 'Karim Aziz', 'Noor Khalil', 'Tariq Saleh', 'Mira Fares'];
+    const rows = names.map((n, i) => ({ id: `sim${i}`, name: n, avatar: i % 2 ? 'girl' : 'boy', pct: 31.4 - i * 3.3, delta: i % 3 ? 0.6 : -0.4, simulated: true, tier: ['master', 'diamond', 'platinum', 'platinum', 'gold', 'gold', 'gold', 'silver'][i] }));
+    rows.splice(4, 0, { id: 'me', name: 'Ahmed', avatar: 'boy', pct: 18.9, delta: 0, simulated: false, you: true });
+    rows.forEach((r, i) => { r.rank = i + 1; });
+    return { week: '2026-W39', rows, me: rows[4], total: rows.length, has_simulated: true };
+  }
+  return request('GET', `/api/leaderboard?init_data=${encodeURIComponent(initData)}`);
 }

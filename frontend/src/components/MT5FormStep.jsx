@@ -24,7 +24,7 @@ function Verifying({ t, secs }) {
   );
 }
 
-export default function MT5FormStep({ t, mt5, setMt5, submitting, errorCode, onSubmit, onBack }) {
+export default function MT5FormStep({ t, mt5, setMt5, submitting, errorCode, onSubmit, onBack, termsOk, setTermsOk, onOpenTerms }) {
   const [secs, setSecs] = useState(0);
   useEffect(() => {
     if (!submitting) {
@@ -38,7 +38,7 @@ export default function MT5FormStep({ t, mt5, setMt5, submitting, errorCode, onS
   if (submitting) return <Verifying t={t} secs={secs} />;
 
   const loginInvalid = mt5.login !== '' && !LOGIN_RE.test(mt5.login);
-  const valid = LOGIN_RE.test(mt5.login) && mt5.password.length > 0 && mt5.server.trim().length >= 2;
+  const valid = LOGIN_RE.test(mt5.login) && mt5.password.length > 0 && mt5.server.trim().length >= 2 && termsOk;
 
   return (
     <section className="step">
@@ -68,6 +68,17 @@ export default function MT5FormStep({ t, mt5, setMt5, submitting, errorCode, onS
         value={mt5.server}
         onChange={(v) => setMt5({ ...mt5, server: v })}
       />
+
+      <div className={`consent ${termsOk ? 'is-on' : ''}`}>
+        <label className="consent-check">
+          <input type="checkbox" checked={termsOk} onChange={(e) => setTermsOk(e.target.checked)} />
+          <span>{t.termsConsent}</span>
+        </label>
+        <button type="button" className="consent-link" onClick={onOpenTerms}>
+          Terms &amp; Risks
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+        </button>
+      </div>
 
       {errorCode && (
         <p className="banner-error" role="alert">

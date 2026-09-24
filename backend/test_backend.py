@@ -266,6 +266,7 @@ BODY = lambda uid=42, **kw: {  # noqa: E731
     "init_data": init_data(uid), "language": "ar",
     "profile": {"nickname": "Ahmed", "avatar": "boy"},
     "mt5": {"login": kw.get("login", "51234567"), "password": "pw", "server": kw.get("server", "Exness-Real21")},
+    "terms_accepted": kw.get("terms", True),
 }
 W = lambda upd, s="sekret": c.post("/api/telegram-webhook", json=upd, headers={"X-Telegram-Bot-Api-Secret-Token": s})  # noqa: E731
 
@@ -597,10 +598,12 @@ import ton  # noqa: E402
 import rewards  # noqa: E402
 import reminders  # noqa: E402
 import heartbeat  # noqa: E402
+import leaderboard  # noqa: E402
 from collections import Counter  # noqa: E402
 
 ok("BOC التعليق مطابق لمكتبة TON المرجعية", ton.comment_payload("42-p1-1700000000") == "te6cckEBAQEAFgAAKAAAAAA0Mi1wMS0xNzAwMDAwMDAw+rFG6w==")
-reset(); add_package("p1", price_ton=8.0); add_package("noton"); add_user(42)
+reset(); add_package("p1"); add_user(42)
+ton.usd_rate = lambda: 3.625  # 29$ ÷ 3.625 = 8 TON
 ton.TON_WALLET = ""
 ok("TON غير مهيأ → 503", c.post("/api/payments/create-ton", json={"init_data": init_data(), "package_id": "p1"}).status_code == 503)
 ok("/api/packages يبلّغ ton_enabled", c.get("/api/packages").json()["ton_enabled"] is False)
@@ -608,7 +611,10 @@ ton.TON_WALLET = "UQ_PROJECT_WALLET"
 r = c.post("/api/payments/create-ton", json={"init_data": init_data(), "package_id": "p1"})
 tx = r.json()
 ok("طلب TON: العنوان والمبلغ بالنانو والتعليق = order_id", r.status_code == 200 and tx["address"] == "UQ_PROJECT_WALLET" and tx["amount_nano"] == "8000000000" and tx["payload"] == ton.comment_payload(tx["order_id"]))
-ok("باقة بلا سعر TON → 400", c.post("/api/payments/create-ton", json={"init_data": init_data(), "package_id": "noton"}).status_code == 400)
+ok("/api/packages: سعر TON متغيّر من سعر السوق", c.get("/api/packages").json()["packages"][0]["price_ton"] == 8.0)
+ton.usd_rate = lambda: None
+ok("سعر TON غير متاح → 503", c.post("/api/payments/create-ton", json={"init_data": init_data(), "package_id": "p1"}).status_code == 503)
+ton.usd_rate = lambda: 3.625
 CHAIN = []
 ton.fetch_transactions = lambda limit=100: list(CHAIN)
 ok("لا معاملة على الشبكة → يبقى waiting", c.post("/api/payments/ton-check", json={"init_data": init_data(), "order_id": tx["order_id"]}).json()["status"] == "waiting")
@@ -632,7 +638,7 @@ ok("طلب TON قديم → expired", DB.store["payments"]["old"]["status"] == "
 
 ton.TON_WEBHOOK_SECRET = "tonsec"
 ok("webhook TON بلا سر → 401", c.post("/api/payments/ton-webhook", json={}).status_code == 401)
-reset(); add_package("p1", price_ton=8.0); add_user(42)
+reset(); add_package("p1"); add_user(42)
 tx = c.post("/api/payments/create-ton", json={"init_data": init_data(), "package_id": "p1"}).json()
 CHAIN[:] = [{"hash": "h9", "lt": 9, "utime": 9, "source": "EQ_U", "value": 8_000_000_000, "comment": tx["order_id"]}]
 r = c.post("/api/payments/ton-webhook?secret=tonsec", json={"tx_hash": "ignored"})
@@ -771,7 +777,7 @@ ok("الكشف يزيل البطاقة من المعلّقة", DB.store["users"]
 hub = c.get("/api/rewards", params={"init_data": init_data()}).json()
 ok("محفظة المكافآت: النوع والقيمة والانتهاء والحالة", hub["rewards"][0]["type"] == "discount" and hub["rewards"][0]["value"] == 20 and hub["rewards"][0]["status"] == "active" and hub["cards"] == [])
 
-add_package("p1", price_ton=10.0)
+add_package("p1"); ton.usd_rate = lambda: 2.9  # 29$ = 10 TON
 payments.create_invoice = lambda **kw: CALLS.append(("np", kw)) or {"id": "inv5", "invoice_url": "https://np/inv5"}
 r = c.post("/api/payments/create", json={"init_data": init_data(), "package_id": "p1", "reward_id": "42_welcome"}).json()
 npkw = [p for m, p in CALLS if m == "np"][-1]
@@ -872,5 +878,83 @@ units.update({"mt5-monitor-bridge": "failed", "aw-sync": "active"})
 ok("خدمة الجسر failed = down", main._monitor_bridge_when_closed("refused")["status"] == "down")
 units["mt5-monitor-bridge"] = "activating"
 ok("قيد التشغيل = degraded", main._monitor_bridge_when_closed("refused")["status"] == "degraded")
+
+# ═════════ 22) الموافقة على Terms & Risks ═════════
+reset(); add_user(42)
+r = c.post("/api/register", json=BODY(terms=False))
+ok("الربط بلا موافقة على الشروط → 400 terms_required", r.status_code == 400 and r.json()["detail"] == "terms_required")
+c.post("/api/register", json=BODY())
+ok("الموافقة تُحفظ بنسختها ووقتها", DB.store["users"]["42"]["terms"]["version"] == main.TERMS_VERSION)
+
+# ═════════ 23) الباقات بالمزايا + البوابة المخصّصة للعملات الرقمية ═════════
+reset()
+W({"message": {"chat": {"id": 555, "type": "private"}, "from": {"id": 555}, "text": "/admin"}})
+txt = CALLS[-1][1]["text"]
+c.post("/api/admin/verify", json={"token": txt.split("token=")[1].split("\n")[0].strip(), "code": txt.split("<code>")[1].split("</code>")[0]})
+ok("استيراد الباقات المقترحة", len(c.post("/api/admin/packages/seed").json()["created"]) == 3)
+ok("الاستيراد لا يكرر", c.post("/api/admin/packages/seed").json()["created"] == [])
+pk = {p["name_en"]: p for p in c.get("/api/packages").json()["packages"]}
+ok("مزايا وبيانات الباقة", pk["AW Pro"]["price_usd"] == 129 and pk["AW Pro"]["featured"] and "نماذج تشغيل متعددة" in pk["AW Pro"]["features_ar"] and pk["AW Premium"]["duration_days"] == 90)
+pid = pk["AW Starter"]["id"]
+c.put(f"/api/admin/packages/{pid}", json={"features_ar": "ميزة 1\nميزة 2\n", "tagline_ar": "جديد"})
+ok("تعديل المزايا من لوحة الأدمن (سطر لكل ميزة)", DB.store["packages"][pid]["features_ar"] == ["ميزة 1", "ميزة 2"])
+c.post("/api/admin/logout")
+
+add_user(42)
+seen = {}
+def fake_direct(**kw):
+    seen.update(kw)
+    return {"payment_id": 777, "pay_address": "TXYZ", "pay_amount": 19.2, "pay_currency": kw["pay_currency"], "payin_extra_id": None}
+payments.create_direct_payment = fake_direct
+r = c.post("/api/payments/create", json={"init_data": init_data(), "package_id": pid, "pay_currency": "usdttrc20"}).json()
+ok("بوابة مخصّصة: عنوان ومبلغ وشبكة", r["pay_address"] == "TXYZ" and r["pay_amount"] == 19.2 and r["network"] == "TRON (TRC20)" and seen["amount_usd"] == 19)
+order = r["order_id"]
+payments.get_payment = lambda pid_: {"payment_status": "confirming"}
+ok("حالة الدفع من NOWPayments", c.post("/api/payments/status", json={"init_data": init_data(), "order_id": order}).json()["status"] == "confirming")
+ok("حالة طلب مستخدم آخر → 404", c.post("/api/payments/status", json={"init_data": init_data(7), "order_id": order}).status_code == 404)
+DB.store["payments"][order]["np_checked_at"] = 0
+payments.get_payment = lambda pid_: {"payment_status": "finished"}
+ok("اكتمال الدفع يفعّل الاشتراك", c.post("/api/payments/status", json={"init_data": init_data(), "order_id": order}).json()["status"] == "finished" and DB.store["users"]["42"]["subscription"]["status"] == "active")
+def too_low(**kw): raise payments.PaymentError("amount_too_low")
+payments.create_direct_payment = too_low
+ok("مبلغ أقل من الحد الأدنى للعملة → 400 amount_too_low", c.post("/api/payments/create", json={"init_data": init_data(), "package_id": pid, "pay_currency": "btc"}).json()["detail"] == "amount_too_low")
+ok("قائمة العملات", any(x["code"] == "usdttrc20" for x in c.get("/api/payments/currencies").json()["currencies"]))
+
+# ═════════ 24) مشاركة القصص والمنشورات ═════════
+import base64 as _b64  # noqa: E402
+main.MEDIA_DIR = tempfile.mkdtemp()
+main._BOT_USERNAME["v"] = "awbot"
+reset(); add_user(42, referral_code="ABC123")
+JPG = _b64.b64encode(b"\xff\xd8\xff\xe0" + b"0" * 200).decode()
+r = c.post("/api/share/create", json={"init_data": init_data(), "story": JPG, "post": JPG, "caption": "ربحت <b>+12%</b>\nانضم"}).json()
+ok("رفع القصة والمنشور يعيد روابط عامة", r["story_url"].startswith("https://example.test/api/share/img/") and r["page_url"].endswith(r["id"]))
+img = c.get(r["story_url"].replace("https://example.test", ""))
+ok("الصورة متاحة للعامة (لـ Telegram Stories)", img.status_code == 200 and img.headers["content-type"] == "image/jpeg")
+page = c.get(r["page_url"].replace("https://example.test", "")).text
+ok("صفحة المنشور بوسوم Open Graph ووصف آمن", 'og:image" content="https://example.test/api/share/img/' in page and "&lt;b&gt;" in page and "<b>+12%" not in page and "t.me/awbot?start=ABC123" in page)
+ok("ليست JPEG → 422", c.post("/api/share/create", json={"init_data": init_data(), "story": _b64.b64encode(b"GIF89a").decode(), "post": JPG}).status_code == 422)
+ok("مسار صورة غير صالح → 404", c.get("/api/share/img/..%2Fmain.py").status_code == 404)
+DB.store["users"]["42"]["share_quota"] = {time.strftime("%Y-%m-%d", time.gmtime()): 30}
+ok("حد يومي للمشاركات", c.post("/api/share/create", json={"init_data": init_data(), "story": JPG, "post": JPG}).status_code == 429)
+
+# ═════════ 25) ترتيب الأسبوع ═════════
+reset()
+add_user(42, status="approved", nickname="Ahmed Ali", avatar="boy", report={"weekly_growth_pct": 12.5})
+add_user(43, status="approved", nickname="Sara", report={"weekly_growth_pct": 30.0})
+add_user(44, status="approved", nickname="NoData")
+DB.store["config"] = {"settings": {"leaderboard_sim": False}}
+lb = c.get("/api/leaderboard", params={"init_data": init_data()}).json()
+ok("المستخدمون الحقيقيون فقط وترتيب فعلي", [r["name"] for r in lb["rows"]] == ["Sara", "Ahmed"] and lb["me"]["rank"] == 2 and not lb["has_simulated"])
+DB.store["config"] = {"settings": {"leaderboard_sim": True, "leaderboard_sim_count": 12}}
+lb = c.get("/api/leaderboard", params={"init_data": init_data()}).json()
+sims = [r for r in lb["rows"] if r["simulated"]]
+ok("منافسو المحاكاة معلّمون simulated=true بأسماء وصور", lb["total"] == 14 and len(sims) == 12 and all(r["name"] and r["avatar"] in ("boy", "girl") for r in sims))
+ok("ترتيب المستخدم محسوب بين الجميع", lb["me"]["rank"] == 1 + sum(1 for r in lb["rows"] if r["pct"] > 12.5))
+before = {b["id"]: b["pct"] for b in DB.store["leaderboard"]["sim"]["bots"]}
+leaderboard.tick(DB, 12, rng=__import__("random").Random(3))
+after = {b["id"]: b["pct"] for b in DB.store["leaderboard"]["sim"]["bots"]}
+ok("السباق: الأرقام تتحرك كل دورة", before != after)
+leaderboard.tick(DB, 12, now=time.time() + 8 * 86400)
+ok("تصفير أسبوعي", all(b["pct"] < 3 for b in DB.store["leaderboard"]["sim"]["bots"]))
 
 print("\nALL BACKEND CHECKS PASSED")

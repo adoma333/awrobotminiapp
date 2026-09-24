@@ -159,3 +159,7 @@ table.list td select { width: auto; }
   .mobile-nav { overflow-x: auto; justify-content: flex-start; }
   .mobile-nav button { flex: none; padding: 4px 12px; white-space: nowrap; }
 }
+.grid-form label textarea {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); padding: 8px 10px; font-family: inherit; resize: vertical;
+}

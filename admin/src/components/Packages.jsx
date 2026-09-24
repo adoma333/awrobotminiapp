@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 
-const EMPTY = { name_ar: "", name_en: "", price_usd: "", price_stars: "", price_ton: "", duration_days: 30, sort_order: 0, active: true };
+const EMPTY = {
+  name_ar: "", name_en: "", price_usd: "", price_stars: "", duration_days: 30, sort_order: 0, active: true, featured: false,
+  tagline_ar: "", tagline_en: "", features_ar: "", features_en: "",
+};
+const lines = (v) => (Array.isArray(v) ? v.join("\n") : v || "");
 const numOrNull = (v) => (v === "" || v === null || v === undefined ? null : Number(v));
 
 /** إدارة الباقات: الأسعار بالدولار (NOWPayments) والنجوم وTON، المدة، الترتيب والتفعيل. */
@@ -23,10 +27,14 @@ export default function Packages() {
       name_en: edit.name_en.trim(),
       price_usd: Number(edit.price_usd),
       price_stars: numOrNull(edit.price_stars),
-      price_ton: numOrNull(edit.price_ton),
       duration_days: Number(edit.duration_days),
       sort_order: Number(edit.sort_order) || 0,
       active: Boolean(edit.active),
+      featured: Boolean(edit.featured),
+      tagline_ar: edit.tagline_ar || "",
+      tagline_en: edit.tagline_en || "",
+      features_ar: lines(edit.features_ar),
+      features_en: lines(edit.features_en),
     };
     try {
       if (edit.id) await api.updatePackage(edit.id, data);
@@ -36,6 +44,16 @@ export default function Packages() {
       load();
     } catch (err) {
       setMsg(`❌ ${err.detail || "تعذّر الحفظ"}`);
+    }
+  }
+
+  async function seed() {
+    try {
+      const r = await api.seedPackages();
+      setMsg(r.created.length ? `✅ أُضيفت ${r.created.length} باقات` : "الباقات المقترحة موجودة مسبقًا");
+      load();
+    } catch {
+      setMsg("❌ تعذّر الاستيراد");
     }
   }
 
@@ -52,6 +70,7 @@ export default function Packages() {
         <h1>الباقات</h1>
         <div className="row-gap">
           {msg && <span className="muted">{msg}</span>}
+          <button onClick={seed}>استيراد الباقات المقترحة</button>
           <button className="primary" onClick={() => setEdit({ ...EMPTY })}>+ باقة جديدة</button>
         </div>
       </div>
@@ -64,11 +83,18 @@ export default function Packages() {
             <label>الاسم بالإنجليزية<input required {...f("name_en")} /></label>
             <label>السعر ($)<input className="mono" type="number" required min="0" step="0.01" {...f("price_usd")} /></label>
             <label>السعر بالنجوم (اختياري)<input className="mono" type="number" min="1" step="1" {...f("price_stars")} /></label>
-            <label>السعر بـ TON (اختياري)<input className="mono" type="number" min="0" step="0.01" {...f("price_ton")} /></label>
             <label>المدة (أيام)<input className="mono" type="number" required min="1" {...f("duration_days")} /></label>
             <label>الترتيب<input className="mono" type="number" {...f("sort_order")} /></label>
+            <label>وصف قصير بالعربية<input {...f("tagline_ar")} placeholder="مثل: الأكثر طلبًا" /></label>
+            <label>وصف قصير بالإنجليزية<input {...f("tagline_en")} placeholder="e.g. Most popular" /></label>
           </div>
+          <div className="grid-form">
+            <label>المزايا بالعربية (سطر لكل ميزة)<textarea rows={5} value={lines(edit.features_ar)} onChange={(e) => setEdit({ ...edit, features_ar: e.target.value })} /></label>
+            <label>المزايا بالإنجليزية (سطر لكل ميزة)<textarea rows={5} value={lines(edit.features_en)} onChange={(e) => setEdit({ ...edit, features_en: e.target.value })} /></label>
+          </div>
+          <p className="muted">سعر TON يُحسب تلقائيًا من السعر بالدولار حسب سعر TON الحالي في السوق.</p>
           <label className="check"><input type="checkbox" checked={edit.active} onChange={(e) => setEdit({ ...edit, active: e.target.checked })} /> ظاهرة للمستخدمين</label>
+          <label className="check"><input type="checkbox" checked={edit.featured} onChange={(e) => setEdit({ ...edit, featured: e.target.checked })} /> مميّزة (شارة "الأكثر طلبًا")</label>
           <div className="row-gap">
             <button className="primary" type="submit">حفظ</button>
             <button type="button" onClick={() => setEdit(null)}>إلغاء</button>
@@ -81,7 +107,7 @@ export default function Packages() {
         <div className="scrollx">
           <table className="list keep">
             <thead>
-              <tr><th>الباقة</th><th>$</th><th>⭐</th><th>TON</th><th>المدة</th><th>الحالة</th><th /></tr>
+              <tr><th>الباقة</th><th>$</th><th>⭐</th><th>المزايا</th><th>المدة</th><th>الحالة</th><th /></tr>
             </thead>
             <tbody>
               {rows.map((p) => (
@@ -89,9 +115,12 @@ export default function Packages() {
                   <td>{p.name_ar} · <span className="muted">{p.name_en}</span></td>
                   <td className="mono">{p.price_usd}</td>
                   <td className="mono">{p.price_stars ?? "—"}</td>
-                  <td className="mono">{p.price_ton ?? "—"}</td>
+                  <td className="mono">{(p.features_ar || []).length}</td>
                   <td className="mono">{p.duration_days}</td>
-                  <td><span className={`badge ${p.active === false ? "neutral" : "approved"}`}>{p.active === false ? "مخفية" : "ظاهرة"}</span></td>
+                  <td>
+                    <span className={`badge ${p.active === false ? "neutral" : "approved"}`}>{p.active === false ? "مخفية" : "ظاهرة"}</span>
+                    {p.featured && <span className="badge pending" style={{ marginInlineStart: 6 }}>مميّزة</span>}
+                  </td>
                   <td className="row-gap">
                     <button onClick={() => setEdit({ ...EMPTY, ...p })}>تعديل</button>
                     <button className="danger-ghost" onClick={() => remove(p)}>حذف</button>

@@ -17,6 +17,9 @@ DEFAULT_SETTINGS = {
     "trial_enabled": False,
     "trial_days": 3,          # بين 3 و7
     "trial_max_lot": 0.01,    # 0 = لا تجربة للحسابات العادية (سنت فقط)
+    # ترتيب الأسبوع: منافسون محاكاة (بشارة "محاكاة" دائمًا) لتنشيط السباق
+    "leaderboard_sim": True,
+    "leaderboard_sim_count": 12,
 }
 
 _SETTINGS_DOC = ("config", "settings")
@@ -67,6 +70,16 @@ def list_packages(db, active_only=False):
     return rows
 
 
+def _features(v) -> list:
+    """قائمة مزايا الباقة: تقبل قائمة أو نصًا (سطر لكل ميزة)."""
+    items = v.splitlines() if isinstance(v, str) else list(v or [])
+    return [str(x).strip() for x in items if str(x).strip()][:12]
+
+
+TEXT_FIELDS = ("tagline_ar", "tagline_en")
+LIST_FIELDS = ("features_ar", "features_en")
+
+
 def create_package(db, data: dict) -> str:
     ref = db.collection("packages").document()
     ref.set(
@@ -78,16 +91,42 @@ def create_package(db, data: dict) -> str:
             "active": bool(data.get("active", True)),
             "sort_order": int(data.get("sort_order", 0)),
             "price_stars": int(data["price_stars"]) if data.get("price_stars") else None,
-            "price_ton": float(data["price_ton"]) if data.get("price_ton") else None,
+            "featured": bool(data.get("featured", False)),
+            **{k: str(data.get(k) or "").strip() for k in TEXT_FIELDS},
+            **{k: _features(data.get(k)) for k in LIST_FIELDS},
         }
     )
     return ref.id
 
 
 def update_package(db, pkg_id: str, patch: dict):
-    allowed = {"name_ar", "name_en", "price_usd", "price_stars", "price_ton", "duration_days", "active", "sort_order"}
-    clean = {k: v for k, v in patch.items() if k in allowed}
+    allowed = {"name_ar", "name_en", "price_usd", "price_stars", "duration_days", "active", "sort_order", "featured",
+               *TEXT_FIELDS, *LIST_FIELDS}
+    clean = {k: (_features(v) if k in LIST_FIELDS else v) for k, v in patch.items() if k in allowed}
     db.collection("packages").document(pkg_id).update(clean)
+
+
+# باقات مقترحة يمكن استيرادها بضغطة من لوحة الأدمن ثم تعديلها بالكامل
+DEFAULT_PACKAGES = [
+    {"name_ar": "AW Starter", "name_en": "AW Starter", "price_usd": 19, "duration_days": 30, "sort_order": 1,
+     "tagline_ar": "مناسب للمبتدئين", "tagline_en": "Great for beginners",
+     "features_ar": ["مدة الاشتراك 30 يومًا", "مناسب للمبتدئين", "تشغيل آلي كامل للخدمة"],
+     "features_en": ["30-day subscription", "Great for beginners", "Fully automated operation"]},
+    {"name_ar": "AW Pro", "name_en": "AW Pro", "price_usd": 129, "duration_days": 30, "sort_order": 2, "featured": True,
+     "tagline_ar": "الأكثر طلبًا", "tagline_en": "Most popular",
+     "features_ar": ["مدة الاشتراك 30 يومًا", "نماذج تشغيل متعددة", "إمكانية تشغيل وإيقاف النموذج", "خدمة دعم ذكية عبر شات AI"],
+     "features_en": ["30-day subscription", "Multiple trading models", "Start / stop the model anytime", "Smart AI chat support"]},
+    {"name_ar": "AW Premium", "name_en": "AW Premium", "price_usd": 449, "duration_days": 90, "sort_order": 3,
+     "tagline_ar": "للمحترفين", "tagline_en": "For professionals",
+     "features_ar": ["مدة الاشتراك 90 يومًا", "إمكانية ربط حسابين تداول", "إمكانية تشغيل وإيقاف النموذج", "إعدادات تحكم متقدمة", "خدمة دعم ذكية عبر شات AI"],
+     "features_en": ["90-day subscription", "Link two trading accounts", "Start / stop the model anytime", "Advanced control settings", "Smart AI chat support"]},
+]
+
+
+def seed_packages(db) -> list:
+    """يضيف الباقات المقترحة غير الموجودة (بالاسم الإنجليزي) ويعيد معرّفاتها."""
+    have = {p.get("name_en") for p in list_packages(db)}
+    return [create_package(db, p) for p in DEFAULT_PACKAGES if p["name_en"] not in have]
 
 
 def delete_package(db, pkg_id: str):

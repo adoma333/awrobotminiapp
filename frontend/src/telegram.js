@@ -88,3 +88,19 @@ export function requestContact() {
     }
   });
 }
+
+// نشر قصة تلجرام (Bot API 7.8+). mediaUrl يجب أن يكون رابط https عامًا. يرجع false إن لم يتوفر.
+export function shareToStory(mediaUrl, text, widget) {
+  if (!tg?.shareToStory) return false;
+  const params = { text: (text || '').slice(0, 200) };
+  if (widget && tg.initDataUnsafe?.user?.is_premium) params.widget_link = widget; // الرابط داخل القصة لمشتركي Premium فقط
+  tg.shareToStory(mediaUrl, params);
+  return true;
+}
+
+// تنزيل ملف إلى جهاز المستخدم من داخل تلجرام (Bot API 8.0+). يرجع false إن لم يتوفر.
+export function downloadFile(url, fileName) {
+  if (!tg?.downloadFile) return false;
+  tg.downloadFile({ url, file_name: fileName });
+  return true;
+}
