@@ -33,8 +33,9 @@ AREAS = [
     ("/api/admin/ceo", "ceo"), ("/api/admin/rewards", "rewards"), ("/api/admin/packages", "packages"),
     ("/api/admin/settings", "settings"), ("/api/admin/leaderboard", "settings"), ("/api/admin/servers", "settings"),
     ("/api/admin/staff", "staff"), ("/api/admin/audit", "audit"), ("/api/system/status", "system"),
+    ("/api/admin/support/accounts", "settings"),  # حسابات تلجرام الحقيقية: المالك والمدير فقط
     ("/api/admin/support", "support"), ("/api/admin/errors", "support"), ("/api/admin/notifications", "notifications"),
-    ("/api/admin/announcements", "notifications"), ("/api/admin/media", "notifications"), ("/api/admin/ton", "ton"),
+    ("/api/admin/announcements", "notifications"), ("/api/admin/growth", "packages"), ("/api/admin/export", "settings"), ("/api/admin/media", "notifications"), ("/api/admin/ton", "ton"),
 ]
 OPEN_PATHS = {"/api/admin/verify", "/api/admin/logout", "/api/admin/me"}
 
@@ -109,7 +110,7 @@ def parse_device(ua: str) -> dict:
     return {"os": os_, "browser": browser, "model": model, "type": "mobile" if mobile else "desktop"}
 
 
-SECRET_KEYS = {"token", "code", "password", "mt5_password", "photo", "story", "post", "secret", "support_bot_token", "boc"}
+SECRET_KEYS = {"token", "code", "password", "mt5_password", "photo", "story", "post", "secret", "support_bot_token", "boc", "api_hash", "gemini_api_key", "session"}
 
 
 def summarize_body(raw: bytes, limit: int = 1500) -> str:
@@ -153,6 +154,10 @@ ACTION_LABEL = [
     (r"^PUT /api/admin/staff$", "إضافة/تعديل عضو فريق"),
     (r"^DELETE /api/admin/staff/", "إزالة عضو فريق"),
     (r"^PUT /api/admin/support/config$", "تعديل إعدادات الدعم"),
+    (r"^POST /api/admin/support/accounts$", "إضافة حساب دعم (طلب رمز)"),
+    (r"^POST /api/admin/support/accounts/[^/]+/verify$", "تأكيد دخول حساب دعم"),
+    (r"^PUT /api/admin/support/accounts/", "تعديل حساب دعم"),
+    (r"^DELETE /api/admin/support/accounts/", "حذف حساب دعم"),
     (r"^POST /api/admin/support/tickets/[^/]+/reply$", "رد على تذكرة دعم"),
     (r"^POST /api/admin/support/tickets/[^/]+/status$", "تغيير حالة تذكرة"),
     (r"^POST /api/admin/support/kb$", "إضافة لقاعدة المعرفة"),
@@ -166,8 +171,21 @@ ACTION_LABEL = [
     (r"^POST /api/admin/ton/otp$", "طلب رمز تحقق TON"),
     (r"^POST /api/admin/ton/execute$", "تنفيذ عملية TON"),
     (r"^POST /api/admin/ton/transfer-result$", "نتيجة تحويل TON"),
+    (r"^POST /api/admin/growth/coupons$", "حفظ كوبون حملة"),
+    (r"^DELETE /api/admin/growth/coupons/", "حذف كوبون"),
+    (r"^POST /api/admin/growth/gifts$", "إنشاء رابط هدية"),
+    (r"^DELETE /api/admin/growth/gifts/", "حذف رابط هدية"),
+    (r"^POST /api/admin/growth/campaigns$", "حفظ حملة"),
+    (r"^DELETE /api/admin/growth/campaigns/", "حذف حملة"),
+    (r"^PUT /api/admin/growth/automations/", "تعديل قاعدة أتمتة"),
+    (r"^DELETE /api/admin/growth/automations/", "حذف قاعدة أتمتة"),
+    (r"^POST /api/admin/growth/automations/run$", "تشغيل الأتمتة يدويًا"),
+    (r"^POST /api/admin/packages/private$", "إرسال باقة خاصة لمستخدم"),
     (r"^POST /api/admin/logout$", "تسجيل خروج"),
     (r"^LOGIN", "تسجيل دخول"),
+    (r"^EXPORT /api/admin/export/users", "تصدير بيانات المستخدمين"),
+    (r"^EXPORT /api/admin/export/payments", "تصدير المدفوعات"),
+    (r"^EXPORT /api/admin/export/tickets", "تصدير التذاكر"),
 ]
 
 

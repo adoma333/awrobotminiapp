@@ -1,39 +1,48 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import logo from './assets/logo-wordmark.png';
-import { messages } from './i18n';
+import { fill, messages } from './i18n';
 import { setupTelegram, tgLang, haptic, askWriteAccess, closeApp, openExternal } from './telegram';
-import { completeOnboarding, errorCodeOf, getAnnouncement, getNotifications, getStatus, markAnnouncementSeen, openStatusStream, register } from './api';
+import { claimGift, completeOnboarding, errorCodeOf, trackCampaign, getAnnouncement, getNotifications, getStatus, markAnnouncementSeen, openStatusStream, register } from './api';
 import { openSupport, setSupportConfig, setSupportPage } from './support';
 import Stepper from './components/Stepper';
 import LanguageStep from './components/LanguageStep';
 import ProfileStep from './components/ProfileStep';
-import Plans from './components/Plans';
 import MT5FormStep from './components/MT5FormStep';
 import StatusScreen from './components/StatusScreen';
 import Dashboard from './components/Dashboard';
-import Settings from './components/Settings';
-import LegalPage from './components/LegalPage';
-import FAQ from './components/FAQ';
-import InterestCalculator from './components/InterestCalculator';
-import BillingHistory from './components/BillingHistory';
-import RewardsHub from './components/RewardsHub';
 import Onboarding from './components/Onboarding';
 import BottomNav from './components/BottomNav';
-import Analytics from './components/Analytics';
-import Referral from './components/Referral';
-import TermsRisks from './components/TermsRisks';
 import NetworkBanner from './components/NetworkBanner';
 import { AppSkeleton } from './components/Skeleton';
 import TopBar from './components/TopBar';
 import ErrorCenter, { ErrorBoundary } from './components/ErrorCenter';
 import WhatsNew from './components/WhatsNew';
-import Notifications from './components/Notifications';
+import { useToast } from './components/Toast';
+import useAppUpdate from './hooks/useAppUpdate';
+
+// الصفحات الثقيلة تُحمَّل عند فتحها فقط (حجم أول تحميل أصغر وأسرع)
+const Plans = lazy(() => import('./components/Plans'));
+const Settings = lazy(() => import('./components/Settings'));
+const LegalPage = lazy(() => import('./components/LegalPage'));
+const FAQ = lazy(() => import('./components/FAQ'));
+const InterestCalculator = lazy(() => import('./components/InterestCalculator'));
+const BillingHistory = lazy(() => import('./components/BillingHistory'));
+const RewardsHub = lazy(() => import('./components/RewardsHub'));
+const Analytics = lazy(() => import('./components/Analytics'));
+const Referral = lazy(() => import('./components/Referral'));
+const TermsRisks = lazy(() => import('./components/TermsRisks'));
+const Notifications = lazy(() => import('./components/Notifications'));
 
 const ONBOARD_KEY = 'aw_onboarded';
 const EMPTY_MT5 = { login: '', password: '', server: '' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // زر "تجديد الآن" في تذكير التجديد يفتح التطبيق على ?renew=ton: شاشة الباقات + TON Connect مباشرة
-const RENEW_TON = new URLSearchParams(window.location.search).get('renew') === 'ton';
+const QS = new URLSearchParams(window.location.search);
+const RENEW_TON = QS.get('renew') === 'ton';
+// ?view=plans: من رسائل البوت (باقة خاصة، عروض الاسترجاع) تفتح شاشة الباقات مباشرة
+const OPEN_PLANS = RENEW_TON || QS.get('view') === 'plans';
+// startapp=gift_<code> رابط هدية · startapp=c_<slug> رابط حملة تسويقية
+const START_PARAM = String(window.Telegram?.WebApp?.initDataUnsafe?.start_param || QS.get('startapp') || '');
 
 export default function App() {
   const [lang, setLang] = useState(tgLang === 'ar' ? 'ar' : 'en');
@@ -53,10 +62,17 @@ export default function App() {
   const [unread, setUnread] = useState(0); // شارة 🔔
   const [ann, setAnn] = useState(null); // نافذة "ما الجديد"
   const annAsked = useRef(false);
+  const startHandled = useRef(false);
+  const busyRef = useRef(false);
+  const notify = useToast();
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
 
   const t = messages[lang];
+  // لا إعادة تحميل تلقائية للتحديث أثناء الربط أو الدفع
+  busyRef.current = submitting || view === 'plans' || (phase === 'flow' && step === 'mt5');
+  const update = useAppUpdate(busyRef);
+  const maint = info.settings?.maintenance ? (lang === 'ar' ? info.settings.maintenance_ar : info.settings.maintenance_en) || t.maintenanceMsg : '';
   // الاسم والصورة والنوع تُطلب مرة واحدة فقط (أول فتح): بعد فكّ الربط يعود مباشرة لربط الحساب
   const [returning, setReturning] = useState(false);
   const steps = useMemo(() => (returning ? ['mt5'] : ['lang', 'profile', 'mt5']), [returning]);
@@ -113,6 +129,24 @@ export default function App() {
     return s;
   }, []);
 
+  // ───────── روابط الهدايا والحملات (startapp) ─────────
+  useEffect(() => {
+    if (startHandled.current || phase === 'loading' || !START_PARAM) return;
+    startHandled.current = true;
+    const claim = (code) =>
+      claimGift(code)
+        .then((r) => {
+          haptic.success();
+          notify(fill(t[`gift_${r.type}`] || t.gift_days, { v: r.value }), 'success', 5000);
+          refreshStatus().catch(() => {});
+        })
+        .catch((e) => notify(t[`gift_err_${e.detail}`] || t.gift_err_gift_not_found, 'error', 4500));
+    if (START_PARAM.startsWith('gift_')) claim(START_PARAM.slice(5));
+    else if (START_PARAM.startsWith('c_')) {
+      trackCampaign(START_PARAM.slice(2)).then((r) => r?.gift_code && claim(r.gift_code)).catch(() => {});
+    }
+  }, [phase, t, notify, refreshStatus]);
+
   // ───────── التحميل الأول: نقرّر أين يبدأ المستخدم ─────────
   useEffect(() => {
     getStatus()
@@ -120,7 +154,7 @@ export default function App() {
         setInfo(s);
         if (s.language) setLang(s.language);
         if (s.status === 'approved') {
-          if (RENEW_TON) setView('plans');
+          if (OPEN_PLANS) setView('plans');
           setPhase('dashboard');
         }
         else if (s.status === 'rejected' || s.status === 'pending') setPhase('status');
@@ -264,7 +298,20 @@ export default function App() {
       ) : (
         <TopBar t={t} showBell={phase === 'dashboard'} unread={unread} onBell={() => setView('notifications')} />
       )}
+      {maint && (
+        <div className="maint-banner" role="status">
+          <b>{t.maintenanceTitle}</b>
+          <span>{maint}</span>
+        </div>
+      )}
+      {update.ready && (
+        <button type="button" className="update-banner" onClick={update.apply}>
+          <span>{t.updateReady}</span>
+          <b>{t.updateNow}</b>
+        </button>
+      )}
       <ErrorBoundary t={t}>
+      <Suspense fallback={<div className="loader" role="status" aria-label={t.loading} />}>
 
       {phase === 'loading' && <AppSkeleton />}
 
@@ -389,6 +436,7 @@ export default function App() {
         </div>
       )}
 
+      </Suspense>
       </ErrorBoundary>
       {phase === 'dashboard' && <BottomNav t={t} view={view} onSelect={setView} />}
       <ErrorCenter t={t} />

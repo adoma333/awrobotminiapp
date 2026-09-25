@@ -104,8 +104,36 @@ export const api = {
   tonExecute: (otp_id, code) => request("/ton/execute", { method: "POST", body: JSON.stringify({ otp_id, code }) }),
   tonTransferResult: (data) => request("/ton/transfer-result", { method: "POST", body: JSON.stringify(data) }),
   tonLog: () => request("/ton/log"),
+  // حسابات تلجرام الحقيقية للدعم (احتياطية بالأولوية)
+  supportAccounts: () => request("/support/accounts"),
+  addSupportAccount: (data) => request("/support/accounts", { method: "POST", body: JSON.stringify(data) }),
+  verifySupportAccount: (id, code, password) =>
+    request(`/support/accounts/${encodeURIComponent(id)}/verify`, { method: "POST", body: JSON.stringify({ code, password }) }),
+  updateSupportAccount: (id, patch) => request(`/support/accounts/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }),
+  deleteSupportAccount: (id) => request(`/support/accounts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  // النمو والتسويق
+  funnel: (campaign) => request(`/growth/funnel${campaign ? `?campaign=${encodeURIComponent(campaign)}` : ""}`),
+  coupons: () => request("/growth/coupons"),
+  saveCoupon: (data) => request("/growth/coupons", { method: "POST", body: JSON.stringify(data) }),
+  deleteCoupon: (code) => request(`/growth/coupons/${encodeURIComponent(code)}`, { method: "DELETE" }),
+  gifts: () => request("/growth/gifts"),
+  saveGift: (data) => request("/growth/gifts", { method: "POST", body: JSON.stringify(data) }),
+  deleteGift: (code) => request(`/growth/gifts/${encodeURIComponent(code)}`, { method: "DELETE" }),
+  campaigns: () => request("/growth/campaigns"),
+  saveCampaign: (data) => request("/growth/campaigns", { method: "POST", body: JSON.stringify(data) }),
+  deleteCampaign: (slug) => request(`/growth/campaigns/${encodeURIComponent(slug)}`, { method: "DELETE" }),
+  automations: () => request("/growth/automations"),
+  saveAutomation: (id, data) => request(`/growth/automations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteAutomation: (id) => request(`/growth/automations/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  runAutomations: () => request("/growth/automations/run", { method: "POST" }),
+  privatePackage: (data) => request("/packages/private", { method: "POST", body: JSON.stringify(data) }),
+  leaderboardScriptPreview: (script, interval_sec) =>
+    request("/leaderboard/script/preview", { method: "POST", body: JSON.stringify({ script, interval_sec }) }),
   // تنبيهات فورية
   alerts: (since) => request(`/alerts?since=${since || 0}`),
 };
+
+// تصدير CSV (يفتح في Excel): رابط تنزيل مباشر بجلسة الأدمن الحالية
+export const exportUrl = (kind) => `${BASE}/export/${kind}`;
 
 export { ApiError };

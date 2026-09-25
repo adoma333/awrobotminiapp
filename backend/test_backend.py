@@ -788,7 +788,7 @@ add_package("p1"); ton.usd_rate = lambda: 2.9  # 29$ = 10 TON
 payments.create_invoice = lambda **kw: CALLS.append(("np", kw)) or {"id": "inv5", "invoice_url": "https://np/inv5"}
 r = c.post("/api/payments/create", json={"init_data": init_data(), "package_id": "p1", "reward_id": "42_welcome"}).json()
 npkw = [p for m, p in CALLS if m == "np"][-1]
-ok("الخصم يُطبَّق تلقائيًا قبل إنشاء طلب NOWPayments", npkw["amount_usd"] == 23.2 and DB.store["payments"][r["order_id"]]["price_full"] == 29.0)
+ok("الخصم يُطبَّق تلقائيًا قبل إنشاء طلب NOWPayments (دولار صحيح بلا كسور)", npkw["amount_usd"] == 23 and DB.store["payments"][r["order_id"]]["price_full"] == 29.0)
 ok("الجائزة لا تُعلَّم مستخدمة قبل نجاح الدفع", card.get("used") is False)
 tx = c.post("/api/payments/create-ton", json={"init_data": init_data(), "package_id": "p1", "reward_id": "42_welcome"}).json()
 ok("الخصم على TON Connect أيضًا", tx["amount_nano"] == "8000000000")
@@ -1132,29 +1132,32 @@ ok("رد أولي فوري: رقم التذكرة + الوقت المتوقع", 
 ok("بلا مساعد ذكي ولا إجابة: تحويل للبشري", support.get_ticket(DB, t42["id"])["status"] == "escalated")
 
 from types import SimpleNamespace as NS  # noqa: E402
-support.ai_available = lambda: True
+support.ai_available = lambda *a: True
 SCRIPT = []
 def fake_llm(cfg, system, messages):
     SCRIPT_SEEN.append(messages)
     return SCRIPT.pop(0)
 SCRIPT_SEEN = []
 support.llm = fake_llm
-tool = lambda name, inp, id_="tu1": NS(type="tool_use", name=name, input=inp, id=id_)  # noqa: E731
-txt = lambda t_: NS(type="text", text=t_)  # noqa: E731
+tool = lambda name, inp, id_="tu1": {"functionCall": {"name": name, "args": inp}, "thoughtSignature": "sig-" + id_}  # noqa: E731
+txt = lambda t_: {"text": t_}  # noqa: E731
+G = lambda *parts: {"role": "model", "parts": list(parts)}  # noqa: E731 — محتوى مرشّح Gemini
 add_user(46, status="approved", language="en", sync={"state": "error", "fails": 3}, mt5_password="SECRET-PW", mt5_login="99887766")
-SCRIPT[:] = [NS(stop_reason="tool_use", content=[tool("get_user_context", {}, "a"), tool("run_auto_fix", {"action": "resync_account", "reason": "sync error"}, "b")]),
-             NS(stop_reason="end_turn", content=[txt("I've re-synced your account. Data will refresh in a few minutes.")])]
+SCRIPT[:] = [G(tool("get_user_context", {}, "a"), tool("run_auto_fix", {"action": "resync_account", "reason": "sync error"}, "b")),
+             G(txt("I've re-synced your account. Data will refresh in a few minutes."))]
 CALLS.clear()
 W({"message": {"chat": {"id": 46, "type": "private"}, "from": {"id": 46, "language_code": "en"}, "text": "My data is not updating"}})
 t46 = support.open_ticket_for(DB, 46)
 ok("المساعد: يقرأ بيانات المستخدم وينفّذ إصلاحًا مسموحًا", DB.store["users"]["46"]["sync"]["state"] == "new")
+ok("Gemini: نتيجة الأدوات تعود كـ functionResponse مع حفظ thoughtSignature", any(
+    c_["role"] == "user" and "functionResponse" in c_["parts"][0] for c_ in SCRIPT_SEEN[-1]) and any(
+    c_["role"] == "model" and c_["parts"][0].get("thoughtSignature") for c_ in SCRIPT_SEEN[-1]))
 ok("الإصلاح الآلي مسجَّل", any(x["action"] == "resync_account" and x["uid"] == "46" for x in DB.store["auto_fix_log"].values()))
 ok("سياق المساعد لا يكشف كلمة المرور ولا رقم الحساب كاملًا", "SECRET-PW" not in json.dumps(SCRIPT_SEEN, default=str) and "99887766" not in json.dumps(support.user_context(DB, 46)))
 ok("الرد بلغة المستخدم + زر موظف", any(p_.get("text", "").startswith("I've re-synced") and "reply_markup" in p_ for m_, p_ in CALLS))
 ok("إصلاح خارج القائمة البيضاء مرفوض", support.run_fix(DB, 46, "extend_subscription")["reason"] == "not_allowed")
 ok("reset_stuck_link لا يلمس حسابًا غير عالق", support.run_fix(DB, 46, "reset_stuck_link")["ok"] is False)
-SCRIPT[:] = [NS(stop_reason="tool_use", content=[tool("mark_resolved", {"summary": "resync fixed it"})]),
-             NS(stop_reason="end_turn", content=[txt("Great, glad it's fixed!")])]
+SCRIPT[:] = [G(tool("mark_resolved", {"summary": "resync fixed it"})), G(txt("Great, glad it's fixed!"))]
 CALLS.clear()
 W({"message": {"chat": {"id": 46, "type": "private"}, "from": {"id": 46, "language_code": "en"}, "text": "yes it works now thanks"}})
 ok("الحل + إشعار الحالة + طلب التقييم", support.get_ticket(DB, t46["id"])["status"] == "resolved"
@@ -1164,7 +1167,7 @@ W({"callback_query": {"id": "q1", "from": {"id": 46}, "data": f"csat:{t46['id']}
 ok("تقييم الرضا محفوظ", support.get_ticket(DB, t46["id"])["csat"]["score"] == 5)
 
 DB.store.setdefault("config", {})["support"] = {"escalation_threshold": 2, "support_chat_id": "9001"}; support.invalidate()
-SCRIPT[:] = [NS(stop_reason="end_turn", content=[txt("Try restarting the app.")]), NS(stop_reason="end_turn", content=[txt("Try again later.")])]
+SCRIPT[:] = [G(txt("Try restarting the app.")), G(txt("Try again later."))]
 for m in ("app crashes", "still crashes"):
     W({"message": {"chat": {"id": 47, "type": "private"}, "from": {"id": 47, "language_code": "en"}, "text": m}})
 CALLS.clear()
@@ -1187,10 +1190,107 @@ CALLS.clear()
 for _ in range(4):
     W({"message": {"chat": {"id": 49, "type": "private"}, "from": {"id": 49, "language_code": "ar"}, "text": "سبام"}})
 ok("حماية من السبام: تنبيه واحد فقط", sum(1 for m_, p_ in CALLS if m_ == "sendMessage" and "رسائل كثيرة" in p_.get("text", "")) == 1)
-support.ai_available = lambda: False
+
+# تأكيد نعم/لا قبل إلغاء الربط (من الشات)
+support._RL.clear(); DB.store["config"]["support"] = {"escalation_threshold": 5}; support.invalidate()
+add_user(51, status="approved", language="ar", mt5_login="77441234", mt5_server="Exness-Real9", last_unlink_at=0)
+support.llm = fake_llm
+SCRIPT[:] = [G(tool("request_confirmation", {"action": "unlink_account", "question": "هل تريد إلغاء ربط حسابك ***234 على Exness-Real9؟"})),
+             G(txt("سأطلب تأكيدك أولًا."))]
+CALLS.clear()
+W({"message": {"chat": {"id": 51, "type": "private"}, "from": {"id": 51, "language_code": "ar"}, "text": "الغي ربط حسابي"}})
+t51 = support.open_ticket_for(DB, 51)
+ok("طلب إجراء حساس → سؤال تأكيد بأزرار نعم/لا، بلا تنفيذ", t51["pending_action"]["action"] == "unlink_account" and DB.store["users"]["51"]["status"] == "approved"
+   and any("act:" in json.dumps(p_.get("reply_markup", {})) for m_, p_ in CALLS))
+W({"callback_query": {"id": "q9", "from": {"id": 51}, "data": f"act:{t51['id']}:yes", "message": {"chat": {"id": 51}, "message_id": 1}}})
+ok("بعد «نعم»: تنفيذ فعلي + رسالة نتيجة واضحة ببيانات الحساب", DB.store["users"]["51"]["status"] == "unlinked"
+   and any("تم إلغاء ربط" in p_.get("text", "") and "•••••234" in p_.get("text", "") for m_, p_ in CALLS))
+ok("التنفيذ بعد التأكيد مسجّل", any(x["action"] == "unlink_account" and x["by"] == "user_confirmed" for x in DB.store["auto_fix_log"].values()))
+add_user(52, status="approved", language="ar", mt5_login="55667788", mt5_server="Exness-Real9")
+SCRIPT[:] = [G(tool("request_confirmation", {"action": "relink_account", "question": "هل تريد ربط حساب جديد بدل الحالي؟"})), G(txt("."))]
+W({"message": {"chat": {"id": 52, "type": "private"}, "from": {"id": 52, "language_code": "ar"}, "text": "أريد ربط حساب جديد"}})
+W({"message": {"chat": {"id": 52, "type": "private"}, "from": {"id": 52, "language_code": "ar"}, "text": "لا"}})
+ok("«لا» يلغي بلا أي تغيير", DB.store["users"]["52"]["status"] == "approved")
+SCRIPT[:] = [G(tool("request_confirmation", {"action": "relink_account", "question": "هل تريد ربط حساب جديد بدل الحالي؟"})), G(txt("."))]
+W({"message": {"chat": {"id": 52, "type": "private"}, "from": {"id": 52, "language_code": "ar"}, "text": "أريد ربط حساب جديد"}})
+CALLS.clear()
+W({"message": {"chat": {"id": 52, "type": "private"}, "from": {"id": 52, "language_code": "ar"}, "text": "نعم"}})
+ok("إعادة الربط: فكّ الحالي + رابط التطبيق (لا بيانات دخول في الشات)", DB.store["users"]["52"]["status"] == "unlinked"
+   and any("start=relink" in json.dumps(p_, ensure_ascii=False) for m_, p_ in CALLS))
+CALLS.clear()
+FakeClient.mode = "ok"
+r = c.post("/api/register", json=BODY(52, login="99001122", server="Exness-MT5Trial16"))
+ok("بعد الربط من التطبيق: تأكيد في الشات ببيانات الحساب الجديد", r.status_code == 200
+   and any("تم ربط الحساب الجديد" in p_.get("text", "") and "•••••122" in p_.get("text", "") for m_, p_ in CALLS))
+
+# حسابات تلجرام الحقيقية + التحويل الاحتياطي
+import asyncio as _aio  # noqa: E402
+import support_accounts  # noqa: E402
+SENT_BY = []
+class FakeTg:
+    broken = set()
+    def __init__(self, session, api_id, api_hash):
+        self.session_str, self.api_id = session, api_id
+        self.session = NS(save=lambda: f"sess-{api_id}")
+    async def connect(self): pass
+    async def disconnect(self): pass
+    async def send_code_request(self, phone): return NS(phone_code_hash="hash1")
+    async def sign_in(self, phone=None, code=None, phone_code_hash=None, password=None):
+        if code == "00000": raise type("PhoneCodeInvalidError", (Exception,), {})()
+        if self.api_id == 2222 and not password: raise type("SessionPasswordNeededError", (Exception,), {})()
+    async def is_user_authorized(self):
+        if self.api_id in FakeTg.broken: raise type("UserDeactivatedBanError", (Exception,), {})()
+        return True
+    async def get_me(self):
+        if self.api_id in FakeTg.broken: raise type("UserDeactivatedBanError", (Exception,), {})()
+        return NS(username=f"aw_support_{self.api_id}", id=self.api_id)
+    async def get_input_entity(self, x): return x
+    async def send_message(self, to, text):
+        if self.api_id in FakeTg.broken: raise type("UserDeactivatedBanError", (Exception,), {})()
+        SENT_BY.append((self.api_id, to, text))
+support_accounts.CLIENT_FACTORY["fn"] = FakeTg
+support_accounts.MANAGER["m"] = None
+main._telethon_ok = lambda: True
+r1 = c.post("/api/admin/support/accounts", json={"phone": "+966500000001", "api_id": 1111, "api_hash": "a" * 32, "priority": 1}).json()
+ok("رمز خاطئ مرفوض", c.post(f"/api/admin/support/accounts/{r1['id']}/verify", json={"code": "00000"}).status_code == 422)
+ok("الحساب الرئيسي يُفعّل بعد الرمز", c.post(f"/api/admin/support/accounts/{r1['id']}/verify", json={"code": "12345"}).status_code == 200)
+r2 = c.post("/api/admin/support/accounts", json={"phone": "+966500000002", "api_id": 2222, "api_hash": "b" * 32, "priority": 2}).json()
+ok("التحقق بخطوتين يُطلب", c.post(f"/api/admin/support/accounts/{r2['id']}/verify", json={"code": "12345"}).json()["detail"] == "password_required")
+ok("الاحتياطي جاهز بعد كلمة التحقق", c.post(f"/api/admin/support/accounts/{r2['id']}/verify", json={"password": "pw"}).status_code == 200)
+acc = c.get("/api/admin/support/accounts").json()
+ok("حساب واحد فعّال (الأعلى أولوية) والجلسة مشفّرة", acc["active_username"] == "aw_support_1111" and acc["account_mode"]
+   and DB.store["support_accounts"][r1["id"]]["session"].startswith("enc:") and "api_hash" not in json.dumps(acc))
+st = c.post("/api/status", json={"init_data": init_data()}).json()["settings"]
+ok("سماعة الدعم تفتح الحساب الحقيقي", st["support_url"] == "https://t.me/aw_support_1111" and st["support_mode"] == "account")
+m_ = support_accounts.MANAGER["m"]
+support.ai_available = lambda *a: False
+m_.call(m_.incoming(NS(id=61, username="user61", access_hash=9, lang_code="en"), "how do I change language"))
+_aio.run(_aio.sleep(0))
+ok("رسالة للحساب الحقيقي → الرد يصدر منه فقط", any(a_ == 1111 and to == 61 for a_, to, _t in SENT_BY)
+   and not any(p_.get("chat_id") in (61, "61") for m2, p_ in CALLS if m2 == "sendMessage"))
+FakeTg.broken.add(1111); SENT_BY.clear()
+support.deliver(support.get_config(DB), "account", 61, "follow-up")
+ok("تعطل الرئيسي → تحويل تلقائي للاحتياطي والرد يصدر منه", any(a_ == 2222 and _t == "follow-up" for a_, to, _t in SENT_BY)
+   and DB.store["support_accounts"][r1["id"]]["status"] == "failed" and support.ACCOUNT["username"] == "aw_support_2222")
+ok("تنبيه الأدمن بالتحويل", any("تحويل تلقائي" in (p_.get("text") or "") for m2, p_ in CALLS if m2 == "sendMessage"))
+ok("البوت يوجّه لحساب الدعم بدل الرد بنفسه", (W({"message": {"chat": {"id": 62, "type": "private"}, "from": {"id": 62}, "text": "help"}}) or True)
+   and "aw_support_2222" in json.dumps(CALLS[-1][1]))
+FakeTg.broken.add(2222)
+support.deliver(support.get_config(DB), "account", 61, "nobody")
+ok("لا حساب سليم: لا يُرسل من أي مصدر آخر (ينتظر في الصندوق)", ("61" not in json.dumps([p_ for m2, p_ in CALLS[-3:]])) and any(t_ == "nobody" for u_, t_ in support.OUTBOX))
+FakeTg.broken.clear()
+c.put(f"/api/admin/support/accounts/{r1['id']}", json={"reset": True})
+ok("إعادة تفعيل الحساب بعد إصلاحه + إرسال المعلّق منه", support.ACCOUNT["username"] == "aw_support_1111")
+for aid_ in (r1["id"], r2["id"]):
+    c.delete(f"/api/admin/support/accounts/{aid_}")
+ok("حذف كل الحسابات يعيد وضع البوت", not support.account_mode())
+support.OUTBOX.clear()
+support.ai_available = lambda *a: False
 
 g = c.get("/api/admin/support/config").json()
-ok("الأدمن: System Prompt افتراضي كامل + التوكن لا يُعاد", g["prompt_is_default"] and "escalate_to_human" in g["system_prompt"] and "support_bot_token" not in g)
+ok("الأدمن: System Prompt افتراضي كامل + التوكن لا يُعاد", g["prompt_is_default"] and "escalate_to_human" in g["system_prompt"] and "support_bot_token" not in g and "gemini_api_key" not in g)
+ok("مفتاح Gemini يُحفظ مشفّرًا ولا يُعاد", c.put("/api/admin/support/config", json={"gemini_api_key": "AIza" + "x" * 35}).json()["has_gemini_key"]
+   and DB.store["config"]["support"]["gemini_api_key"].startswith("enc:") and support.api_key(support.get_config(DB)) == "AIza" + "x" * 35)
 ok("توكن غير صالح مرفوض", c.put("/api/admin/support/config", json={"support_bot_token": "abc"}).status_code == 422)
 r = c.put("/api/admin/support/config", json={"support_bot_token": "123456:" + "A" * 35, "support_phone": "+966 50 000 0000"})
 ok("بوت دعم مستقل: ضبط webhook + اسم البوت", r.status_code == 200 and r.json()["has_bot_token"] and any(m_ == "setWebhook" and p_["url"].endswith("/api/support-webhook") for m_, p_ in CALLS))
@@ -1259,6 +1359,159 @@ admin_access.invalidate(); admin_login(555); c.put("/api/admin/staff", json={"id
 admin_login(7777)
 ok("صلاحيات: الدعم يرى التذاكر ولا يلمس محفظة TON", c.get("/api/admin/support/tickets").status_code == 200 and c.get("/api/admin/ton/overview").status_code == 403)
 ok("صلاحيات: الدعم لا يرسل إشعارات", c.post("/api/admin/notifications/broadcast", json={"target": "all", "title_ar": "x"}).status_code == 403)
+c.post("/api/admin/logout")
+
+# ═════════ 34) النمو: كوبونات، هدايا، حملات، أتمتة، قمع، إحالة متدرّجة، باقات خاصة، صيانة، تصدير ═════════
+import growth  # noqa: E402
+reset(); admin_access.invalidate(); support.invalidate(); support_accounts.MANAGER["m"] = None; support.ACCOUNT.update(send=None, username=None)
+admin_login(555)
+add_package("p1")
+add_user(42, status="approved", language="ar", nickname="Ahmed Ali")
+payments.create_invoice = lambda **kw: CALLS.append(("np", kw)) or {"id": "inv9", "invoice_url": "https://np/inv9"}
+ok("كوبون: إنشاء من اللوحة", c.post("/api/admin/growth/coupons", json={"code": "black20", "type": "discount", "value": 20, "max_uses": 1, "valid_hours": 48}).status_code == 200)
+red = c.post("/api/coupons/redeem", json={"init_data": init_data(), "code": "BLACK20"}).json()
+ok("استرداد الكوبون → مكافأة في المحفظة", red["type"] == "discount" and DB.store["scratch_cards"][red["reward_id"]]["prize"]["value"] == 20)
+ok("مرة واحدة لكل مستخدم", c.post("/api/coupons/redeem", json={"init_data": init_data(), "code": "BLACK20"}).status_code == 409)
+add_user(43, status="approved")
+ok("حد الاستخدامات", c.post("/api/coupons/redeem", json={"init_data": init_data(43), "code": "BLACK20"}).json()["detail"] == "coupon_exhausted")
+CALLS.clear()
+c.post("/api/payments/create", json={"init_data": init_data(), "package_id": "p1", "reward_id": red["reward_id"]})
+ok("الكوبون يُطبَّق في الدفع تلقائيًا", [p_ for m_, p_ in CALLS if m_ == "np"][-1]["amount_usd"] == 23)
+ok("المبلغ المعروض للعملات المستقرة بلا كسور", payments.display_amount("usdttrc20", "12.000850", 1.0) == "12"
+   and payments.display_amount("usdttrc20", "12.4", 1.0) == "12.40" and payments.display_amount("btc", "0.000123400", 1.0) == "0.0001234")
+DB.store["payments"]["np1"] = {"uid": 42, "package_id": "p1", "status": "waiting", "amount_usd": 12, "method": "nowpayments",
+                               "np_payment_id": "5001", "np_pay": {"pay_amount": 12.00085}, "created_at": time.time()}
+main.process_nowpayments({"order_id": "np1", "payment_status": "partially_paid", "actually_paid": 12, "pay_amount": 12.00085})
+ok("دفع المبلغ المعروض (12) يُقبل ضمن الهامش", DB.store["payments"]["np1"]["status"] == "finished" and DB.store["payments"]["np1"]["accepted_partial"])
+DB.store["payments"]["np2"] = {"uid": 42, "package_id": "p1", "status": "waiting", "amount_usd": 12, "method": "nowpayments",
+                               "np_payment_id": "5002", "np_pay": {"pay_amount": 12}, "created_at": time.time()}
+main.process_nowpayments({"order_id": "np2", "payment_status": "partially_paid", "actually_paid": 10, "pay_amount": 12})
+ok("دفع ناقص فعلًا لا يُقبل", DB.store["payments"]["np2"]["status"] == "partially_paid")
+payments.get_payment = lambda pid: {"payment_status": "finished", "actually_paid": 12, "pay_amount": 12}
+main.reconcile_nowpayments()
+ok("المطابقة الدورية تفعّل الدفعات حتى لو ضاع الـ webhook", DB.store["payments"]["np2"]["status"] == "finished")
+c.put("/api/admin/settings", json={"np_payout_address": "TXyz1234567890abcdefghijkLMNOP", "np_payout_currency": "usdttrc20"})
+_seen_np = {}
+_pspec = _ilu.spec_from_file_location("payments_real", os.path.join(os.path.dirname(os.path.abspath(__file__)), "payments.py"))
+_pay_real = _ilu.module_from_spec(_pspec); _pspec.loader.exec_module(_pay_real)
+payments.create_direct_payment = _pay_real.create_direct_payment
+_pay_real._np = lambda method, path, body=None: (_seen_np.update(body or {}) or NS(status_code=201, json=lambda: {"payment_id": "p9", "pay_address": "TAddr", "pay_amount": 23.0004, "pay_currency": "usdttrc20"}))
+rr = c.post("/api/payments/create", json={"init_data": init_data(), "package_id": "p1", "pay_currency": "usdttrc20"}).json()
+ok("تحويل تلقائي لمحفظتك المحددة + مبلغ معروض بلا كسور", _seen_np.get("payout_address") == "TXyz1234567890abcdefghijkLMNOP" and rr["display_amount"] == "23")
+
+g = c.post("/api/admin/growth/gifts", json={"type": "days", "value": 5, "max_claims": 10, "title": "هدية الإطلاق"}).json()
+ok("رابط هدية: رابط البوت جاهز", g["bot_link"].endswith(f"start=gift_{g['id']}"))
+CALLS.clear()
+W({"message": {"chat": {"id": 44, "type": "private"}, "from": {"id": 44, "language_code": "ar"}, "text": f"/start gift_{g['id']}"}})
+ok("فتح رابط الهدية يمنح الأيام تلقائيًا", DB.store["users"]["44"]["subscription"]["expires_at"] > time.time() + 4 * 86400
+   and any("5 يوم" in (p_.get("text") or "") for m_, p_ in CALLS))
+ok("الهدية مرة واحدة", c.post("/api/gifts/claim", json={"init_data": init_data(44), "code": g["id"]}).json()["detail"] == "already_claimed")
+
+c.post("/api/admin/growth/campaigns", json={"slug": "fb-sept", "name": "فيسبوك سبتمبر", "source": "facebook", "gift_code": g["id"]})
+W({"message": {"chat": {"id": 45, "type": "private"}, "from": {"id": 45, "language_code": "en"}, "text": "/start c_fb-sept"}})
+ok("رابط الحملة: نسب المستخدم + نقرة + هدية الحملة", DB.store["users"]["45"]["campaign"] == "fb-sept"
+   and DB.store["campaigns"]["fb-sept"]["clicks"] == 1 and DB.store["users"]["45"]["subscription"]["expires_at"] > time.time())
+W({"message": {"chat": {"id": 45, "type": "private"}, "from": {"id": 45}, "text": "/start c_other"}})
+ok("أول لمسة فقط", DB.store["users"]["45"]["campaign"] == "fb-sept")
+DB.store["payments"]["x1"] = {"uid": 45, "status": "finished", "amount_usd": 129.0, "method": "nowpayments"}
+DB.store["users"]["45"]["status"] = "approved"
+camp = [r_ for r_ in c.get("/api/admin/growth/campaigns").json()["rows"] if r_["id"] == "fb-sept"][0]
+ok("قمع الحملة: فتح ← ربط ← دفع + الإيرادات", camp["funnel"]["opened"] == 1 and camp["funnel"]["paid"] == 1 and camp["funnel"]["revenue_usd"] == 129.0)
+fn = c.get("/api/admin/growth/funnel").json()
+ok("القمع العام ونقاط التسرب", fn["opened"] >= 4 and fn["dropoff"]["linked_not_paid"] >= 1 and c.get("/api/admin/ceo").json()["funnel"]["paid"] >= 1)
+
+# الأتمتة: ربط ولم يشترك منذ يوم
+DB.store["users"]["42"]["decided_at"] = time.time() - 2 * 86400
+DB.store["users"]["42"].pop("subscription", None)
+auto = c.get("/api/admin/growth/automations").json()
+ok("قواعد الاسترجاع الافتراضية موقوفة حتى يفعّلها الأدمن", {r_["id"] for r_ in auto["rows"]} >= {"winback_linked", "winback_expired"} and not any(r_["enabled"] for r_ in auto["rows"]))
+rule = [r_ for r_ in auto["rows"] if r_["id"] == "winback_linked"][0]
+c.put("/api/admin/growth/automations/winback_linked", json={**rule, "enabled": True})
+CALLS.clear()
+ok("تشغيل الأتمتة: رسالة + عرض خاص", c.post("/api/admin/growth/automations/run").json()["sent"] >= 1
+   and any("Ahmed" in (p_.get("text") or "") and "10%" in (p_.get("text") or "") for m_, p_ in CALLS)
+   and any(k.startswith("42_auto_winback_linked") for k in DB.store["scratch_cards"]))
+CALLS.clear()
+c.post("/api/admin/growth/automations/run")
+ok("لا تكرار لنفس المستخدم في نفس الدورة", not any(p_.get("chat_id") in (42, "42") for m_, p_ in CALLS if m_ == "sendMessage"))
+ok("سجل الأتمتة", len(c.get("/api/admin/growth/automations").json()["log"]) >= 1)
+
+# الإحالة المتدرّجة
+c.put("/api/admin/settings", json={"referral_enabled": True, "referral_days": 7, "referral_tiers": [{"min": 0, "days": 7}, {"min": 2, "days": 20}]})
+add_user(100, status="approved", referral_paid_count=2)
+add_user(101, status="approved", referred_by="100")
+DB.store["payments"]["r1"] = {"uid": 101, "package_id": "p1", "status": "waiting", "amount_usd": 29.0, "method": "nowpayments"}
+main.activate_payment("r1")
+ok("المُحيل في المستوى الثاني يحصل على 20 يومًا", DB.store["users"]["100"]["referral_earned_days"] == 20 and DB.store["users"]["100"]["referral_paid_count"] == 3)
+st_ = c.get("/api/referral/stats", params={"init_data": init_data(100)}).json()
+ok("لوحة أرباح الإحالة للمستخدم", st_["earned_days"] == 20 and st_["tier"]["days"] == 20 and st_["next"] is None)
+ok("مستويات غير صالحة مرفوضة", c.put("/api/admin/settings", json={"referral_tiers": [{"min": 3, "days": 5}]}).status_code == 422)
+
+# باقة خاصة لمستخدم واحد
+CALLS.clear()
+pp = c.post("/api/admin/packages/private", json={"uid": "42", "name_ar": "عرض VIP", "price_usd": 49, "duration_days": 10, "offer_hours": 24}).json()
+mine = [p_["id"] for p_ in c.get("/api/packages", params={"init_data": init_data()}).json()["packages"]]
+others = [p_["id"] for p_ in c.get("/api/packages", params={"init_data": init_data(43)}).json()["packages"]]
+ok("الباقة الخاصة تظهر لصاحبها فقط + إشعار", pp["id"] in mine and pp["id"] not in others and pp["id"] not in [p_["id"] for p_ in c.get("/api/packages").json()["packages"]]
+   and any(n_["kind"] == "broadcast" and n_["uid"] == "42" for n_ in DB.store["notifications"].values()))
+ok("غير صاحبها لا يستطيع شراءها", c.post("/api/payments/create", json={"init_data": init_data(43), "package_id": pp["id"]}).status_code == 404)
+r = c.post("/api/payments/create", json={"init_data": init_data(), "package_id": pp["id"]}).json()
+main.activate_payment(r["order_id"])
+ok("لمرة واحدة: تختفي بعد الشراء", pp["id"] not in [p_["id"] for p_ in c.get("/api/packages", params={"init_data": init_data()}).json()["packages"]])
+
+# وضع الصيانة
+c.put("/api/admin/settings", json={"maintenance": True})
+ok("الصيانة توقف الدفع والتسجيل وتظهر للتطبيق", c.post("/api/payments/create", json={"init_data": init_data(), "package_id": "p1"}).status_code == 503
+   and c.post("/api/register", json=BODY(46)).status_code == 503 and c.post("/api/status", json={"init_data": init_data()}).json()["settings"]["maintenance"])
+c.put("/api/admin/settings", json={"maintenance": False})
+
+# التصدير
+ex = c.get("/api/admin/export/users")
+ok("تصدير CSV (Excel) + تسجيله في السجل", ex.status_code == 200 and ex.text.startswith("﻿") and "telegram_id" in ex.text
+   and c.get("/api/admin/audit").json()["rows"][0]["action"] == "تصدير بيانات المستخدمين")
+ok("تصدير المدفوعات والتذاكر", c.get("/api/admin/export/payments").status_code == 200 and c.get("/api/admin/export/tickets").status_code == 200)
+c.post("/api/admin/logout")
+
+# ═════════ 35) المراقبة الخارجية + إصلاح جسر MT5 ═════════
+import uptime_monitor  # noqa: E402
+uptime_monitor.STATE = os.path.join(tempfile.mkdtemp(), "state.json")
+SENTU = []
+t0 = 1_000_000.0
+uptime_monitor.run(t0, {"api": (False, "ConnectionRefused")}, SENTU.append)
+ok("فحص فاشل واحد لا يُنبّه (إعادة تشغيل عادية)", SENTU == [])
+uptime_monitor.run(t0 + 60, {"api": (False, "ConnectionRefused")}, SENTU.append)
+ok("فحصان متتاليان → تنبيه فوري", len(SENTU) == 1 and "تعطّل" in SENTU[0] and "الـ API" in SENTU[0])
+uptime_monitor.run(t0 + 120, {"api": (False, "x")}, SENTU.append)
+ok("لا تكرار قبل 30 دقيقة", len(SENTU) == 1)
+uptime_monitor.run(t0 + 60 + 1801, {"api": (False, "x")}, SENTU.append)
+ok("تذكير كل 30 دقيقة ما دام متوقفًا", len(SENTU) == 2 and "ما زال" in SENTU[1])
+uptime_monitor.run(t0 + 2000, {"api": (True, "HTTP 200")}, SENTU.append)
+ok("رسالة التعافي", len(SENTU) == 3 and "عاد للعمل" in SENTU[2])
+rows_ = sync_worker.read_rows([NS(login=5, balance=1.5)], ("login", "balance"))
+ok("قراءة صفوف MT5 بلا اتصال بعيد (الطريق الآمن)", rows_ == [{"login": 5, "balance": 1.5}])
+class _FakeConn:
+    def __init__(self): self.namespace = {}
+    def eval(self, expr): return eval(expr, {}, self.namespace)
+ok("بناء الصفوف على الجهة البعيدة (بلا pickle لكائنات MT5)", sync_worker.read_rows([NS(login=7, balance=2.0)], ("login", "balance"), _FakeConn()) == [{"login": 7, "balance": 2.0}])
+
+# ═════════ 36) معادلات حركة المتصدرين + شكل نافذة التحديثات ═════════
+import lbscript  # noqa: E402
+reset(); admin_login(555)
+ok("معادلة غير آمنة مرفوضة", c.put("/api/admin/leaderboard", json={"script": "__import__('os').system('x')"}).status_code == 422)
+pv = c.post("/api/admin/leaderboard/script/preview", json={"script": "base * (1 + 0.1 * wave(86400, i / n))", "interval_sec": 3600}).json()
+ok("معاينة المعادلة على أسبوع", len(pv["names"]) == 8 and len(pv["series"][0]) > 50)
+c.put("/api/admin/leaderboard", json={"enabled": True, "dynamic": True, "script_enabled": True, "script": "base * 2",
+                                      "profiles": [{"name": "S1", "base_usd": 100}, {"name": "S2", "base_usd": 50}]})
+leaderboard.tick(DB, leaderboard.get_config(DB), now=time.time())
+leaderboard.tick(DB, leaderboard.get_config(DB), now=time.time(), force=True)
+ok("المعادلة تتحكم بالحركة فعليًا", [b["usd"] for b in DB.store["leaderboard"]["sim"]["bots"]] == [200.0, 100.0])
+c.put("/api/admin/leaderboard", json={"script": "cur / (rank - rank)"})
+leaderboard.tick(DB, leaderboard.get_config(DB), now=time.time(), force=True)
+ok("خطأ حسابي لا يُسقط الترتيب", all(b["usd"] >= 0 for b in DB.store["leaderboard"]["sim"]["bots"]))
+announcements.seed_default(DB)
+r = c.put("/api/admin/announcements/launch", json={"style": {"accent": "#22c55e", "width": 520, "position": "center", "radius": 12, "evil": "x"}})
+ok("شكل النافذة قابل للتحكم ويُتحقق منه", r.status_code == 200 and r.json()["style"]["accent"] == "#22c55e" and r.json()["style"]["position"] == "center" and "evil" not in r.json()["style"])
+ok("لون غير صالح مرفوض", c.put("/api/admin/announcements/launch", json={"style": {"bg": "red;}"}}).status_code == 422)
 c.post("/api/admin/logout")
 
 print("\nALL BACKEND CHECKS PASSED")

@@ -1,21 +1,20 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ErrorNote from './ErrorNote';
+import PageHead from './PageHead';
 import {
-  checkTonPayment, createCryptoPayment, createStarsPayment, createTonPayment, getCurrencies, getPackages, getRewards,
+  checkTonPayment, createCryptoPayment, createStarsPayment, createTonPayment, getCurrencies, getPackages, getRewards, redeemCoupon,
 } from '../api';
 import { fill } from '../i18n';
 import { haptic, openExternal, openInvoice } from '../telegram';
 import { payWithTon } from '../ton';
 import walletIcon from '../assets/icons/wallet.webp';
-import coinIcon from '../assets/icons/coin.webp';
+import coinIcon from '../assets/icons/crypto.webp';
+import starsIcon from '../assets/icons/stars.webp';
 import { bestCheckoutReward, countdown, prizeLabel } from '../rewards';
 import CryptoPay from './CryptoPay';
 
 import { amount as price, fmtDate } from '../format';
 
-const BackIcon = () => (
-  <svg className="chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
-);
 const Check = () => (
   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10" /></svg>
 );
@@ -70,12 +69,34 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
   const [msg, setMsg] = useState('');
   const [waiting, setWaiting] = useState(null); // { startExpiry, tonOrder? }
   const [paid, setPaid] = useState(false);
+  const [couponOpen, setCouponOpen] = useState(false);
+  const [coupon, setCoupon] = useState('');
+  const [couponMsg, setCouponMsg] = useState('');
+  const [couponId, setCouponId] = useState(null); // كوبون حملة استُرد الآن يُفضَّل على غيره
 
   const loadReward = useCallback(() => {
     getRewards()
-      .then((r) => setReward(bestCheckoutReward(r.rewards, preferredReward)))
+      .then((r) => setReward(bestCheckoutReward(r.rewards, couponId || preferredReward)))
       .catch(() => setReward(null));
-  }, [preferredReward]);
+  }, [preferredReward, couponId]);
+
+  async function applyCoupon(e) {
+    e?.preventDefault();
+    const code = coupon.trim().toUpperCase();
+    if (code.length < 3) return;
+    setCouponMsg('');
+    try {
+      const r = await redeemCoupon(code);
+      haptic.success();
+      setCouponId(r.reward_id);
+      setCoupon('');
+      setCouponOpen(false);
+      setCouponMsg(fill(t.couponOk, { v: r.type === 'discount' ? `${r.value}%` : fill(t.couponDays, { n: r.value }) }));
+    } catch (err) {
+      haptic.error();
+      setCouponMsg(t[`coupon_${err.detail}`] || t.coupon_coupon_not_found);
+    }
+  }
   useEffect(loadReward, [loadReward]);
 
   const load = useCallback(() => {
@@ -273,6 +294,7 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
     const usd = discounted(p.price_usd);
     return (
       <section className="step checkout">
+        <PageHead t={t} onBack={() => { setSelected(null); setPickCoin(false); setMsg(''); }} />
         <h1>{t.checkoutTitle}</h1>
         <div className="checkout-summary">
           <div>
@@ -322,25 +344,18 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
 
           {allow.stars && p.price_stars ? (
             <button type="button" className="pay-method" disabled={!!busy} onClick={() => payStars(p)}>
-              <span className="pm-icon pm-star" aria-hidden="true">★</span>
+              <img src={starsIcon} alt="" className="pm-icon" />
               <span className="pm-body">
                 <b>{t.payStarsTitle}</b>
                 <small>{t.starsPerks}</small>
               </span>
-              <span className="pm-amount" dir="ltr">{busy === 'stars' ? '…' : `${price(discounted(p.price_stars, true))} ⭐`}</span>
+              <span className="pm-amount" dir="ltr">{busy === 'stars' ? '…' : <>{price(discounted(p.price_stars, true))} <img src={starsIcon} alt="" className="cur-ic" /></>}</span>
             </button>
           ) : null}
         </div>
 
         {msg && <ErrorNote t={t} kind="operation" code={`pay_${msg}`}>{t[msg]}</ErrorNote>}
         <p className="muted small-note">{t.paySecure}</p>
-
-        <div className="actions">
-          <button type="button" className="btn ghost" onClick={() => { setSelected(null); setPickCoin(false); setMsg(''); }}>
-            <BackIcon />
-            <span>{t.back}</span>
-          </button>
-        </div>
       </section>
     );
   }
@@ -348,6 +363,7 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
   // ───────── بطاقات الباقات ─────────
   return (
     <section className="step">
+      <PageHead t={t} onBack={onBack} />
       <h1>{mode === 'renew' && sub ? t.renewTitle : t.plansTitle}</h1>
       <p className="sub">{t.plansSub}</p>
 
@@ -359,6 +375,18 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
         </div>
       )}
       {rewardChip}
+      <div className="coupon-box">
+        {couponOpen ? (
+          <form className="coupon-form" onSubmit={applyCoupon}>
+            <input dir="ltr" autoFocus maxLength={20} value={coupon} placeholder={t.couponPh}
+              onChange={(e) => setCoupon(e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase())} />
+            <button type="submit" className="btn soft small" disabled={coupon.trim().length < 3}><span>{t.couponApply}</span></button>
+          </form>
+        ) : (
+          <button type="button" className="link coupon-toggle" onClick={() => setCouponOpen(true)}>{t.couponHave}</button>
+        )}
+        {couponMsg && <p className={`coupon-msg ${couponId ? 'ok' : 'bad'}`} role="status">{couponMsg}</p>}
+      </div>
 
       {packages === null && !loadError && <div className="loader" role="status" aria-label={t.loading} />}
       {loadError && (
@@ -372,8 +400,8 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
       {packages && packages.length > 0 && (
         <div className="plans">
           {packages.map((p) => (
-            <article className={`plan ${p.featured ? 'is-featured' : ''}`} key={p.id}>
-              {p.featured && <span className="plan-badge">{tagline(p) || t.mostPopular}</span>}
+            <article className={`plan ${p.featured ? 'is-featured' : ''} ${p.private_uid ? 'is-private' : ''}`} key={p.id}>
+              {p.featured && <span className="plan-badge">{p.private_uid ? t.privateBadge : tagline(p) || t.mostPopular}</span>}
               <div className="plan-head">
                 <div>
                   <h2 className="plan-name" dir="ltr">{name(p)}</h2>
@@ -384,7 +412,10 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
                   <strong>${price(discounted(p.price_usd))}</strong>
                 </div>
               </div>
-              <div className="plan-meta">{fill(t.perDays, { n: p.duration_days })}</div>
+              <div className="plan-meta">
+                {fill(t.perDays, { n: p.duration_days })}
+                {p.private_uid && p.offer_expires_at ? <span className="plan-expiry"> · {countdown(t, p.offer_expires_at, Date.now() / 1000)}</span> : null}
+              </div>
               {features(p).length > 0 && (
                 <ul className="plan-features">
                   {features(p).map((f) => (
@@ -400,12 +431,6 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
         </div>
       )}
 
-      <div className="actions">
-        <button type="button" className="btn ghost" onClick={onBack}>
-          <BackIcon />
-          <span>{t.back}</span>
-        </button>
-      </div>
     </section>
   );
 }

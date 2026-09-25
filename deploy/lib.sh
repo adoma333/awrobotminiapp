@@ -62,8 +62,12 @@ install_units() {
   local t="$APP_DIR/deploy/templates"
   render "$t/aw-backend.service.tpl" > /etc/systemd/system/aw-backend.service
   render "$t/aw-sync.service.tpl" > /etc/systemd/system/aw-sync.service
+  # مراقبة خارجية كل دقيقة (تنبيه تلجرام إن توقف الـ API أو المزامنة أو جسر MT5)
+  render "$t/aw-uptime.service.tpl" > /etc/systemd/system/aw-uptime.service
+  render "$t/aw-uptime.timer.tpl" > /etc/systemd/system/aw-uptime.timer
   rm -rf /etc/systemd/system/aw-backend.service.d /etc/systemd/system/aw-sync.service.d
   systemctl daemon-reload
+  systemctl enable --now aw-uptime.timer >/dev/null 2>&1 || warn "تعذّر تفعيل مؤقّت المراقبة aw-uptime"
 }
 
 install_sudoers() { # يسمح لمستخدم التطبيق بتشغيل/إطفاء جسر المراقبة، وبإعادة تشغيل جسر الروبوت فقط (heartbeat)
@@ -134,7 +138,7 @@ tune_nginx() { # مهلة 180ث للـ API + حد حجم الطلب 6MB (رفع 
     f=$(grep -l 'location /api/' /etc/nginx/sites-enabled/* 2>/dev/null | head -1)
   fi
   [ -n "$f" ] || return 0
-  grep -q 'proxy_read_timeout' "$f" && grep -q 'client_max_body_size' "$f" && return 0
+  grep -q 'proxy_read_timeout' "$f" && grep -q 'client_max_body_size' "$f" && grep -q 'version.json' "$f" && return 0
   cp "$f" "$f.aw-bak"
   python3 - "$f" <<'PY' || { cp "$f.aw-bak" "$f"; warn "تعذّر تعديل إعداد nginx"; return 0; }
 import re, sys
@@ -148,10 +152,17 @@ if "proxy_read_timeout" not in s:
 if "client_max_body_size" not in s:
     add += "        client_max_body_size 6m;\n"
 s = s[:m.end()] + add + s[m.end():]
+if "version.json" not in s:  # التحديثات تصل فورًا: الصفحة ورقم النسخة بلا تخزين مؤقت
+    k = re.search(r"\n(\s*)location / \{", s)
+    if k:
+        ind = k.group(1)
+        block = (f"\n{ind}location = /index.html {{ add_header Cache-Control \"no-cache, must-revalidate\"; }}"
+                 f"\n{ind}location = /version.json {{ add_header Cache-Control \"no-store\"; }}")
+        s = s[:k.start()] + block + s[k.start():]
 open(p, "w").write(s)
 PY
   if [ -n "${NGINX_CONF_OVERRIDE:-}" ] || { nginx -t >/dev/null 2>&1 && systemctl reload nginx; }; then
-    ok "إعداد nginx للـ API محدَّث (مهلة 180ث · حجم 6MB)"
+    ok "إعداد nginx محدَّث (مهلة 180ث · حجم 6MB · التحديثات فورية بلا تخزين مؤقت)"
   else
     cp "$f.aw-bak" "$f"
     warn "إعداد nginx الجديد غير صالح، أعدت الأصلي"

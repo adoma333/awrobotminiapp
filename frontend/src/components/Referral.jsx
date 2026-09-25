@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { createShare, getAnalytics } from '../api';
+import { createShare, getAnalytics, getReferralStats } from '../api';
 import { fill } from '../i18n';
 import { copyText, downloadFile, haptic, openExternal, openTelegramLink, shareToStory } from '../telegram';
 import { renderPost, renderStory } from '../story';
@@ -14,6 +14,7 @@ import xIcon from '../assets/icons/twitter.svg';
 import fbIcon from '../assets/icons/facebook.svg';
 import igIcon from '../assets/icons/instagram.svg';
 import ttIcon from '../assets/icons/tiktok.svg';
+import AnimIcon from './AnimIcon';
 
 const toB64 = (blob) =>
   new Promise((resolve, reject) => {
@@ -41,8 +42,10 @@ export default function Referral({ t, lang, data }) {
   const linked = refs?.linked ?? 0;
   const tier = tierFor(linked);
 
+  const [earn, setEarn] = useState(null); // مكافآت الإحالة المتدرّجة (أيام مكتسبة + الشريحة)
   useEffect(() => {
     getAnalytics().then((x) => setRefs(x.referrals)).catch(() => setRefs(null));
+    getReferralStats().then(setEarn).catch(() => setEarn(null));
   }, []);
   useEffect(() => () => {
     if (media) {
@@ -176,7 +179,7 @@ export default function Referral({ t, lang, data }) {
       </div>
 
       <div className="section tier-card">
-        <img src={tier.cur.img} alt="" className="tier-badge" />
+        <AnimIcon name={tier.cur.key} src={tier.cur.img} className="tier-badge" />
         <div className="motivate-body">
           <h2>{t[`tier_${tier.cur.key}`]}</h2>
           {tier.next && <div className="progress"><span style={{ width: `${tier.progress * 100}%` }} /></div>}
@@ -186,12 +189,41 @@ export default function Referral({ t, lang, data }) {
       <div className="tier-strip">
         {TIERS.map((x) => (
           <div key={x.key} className={`tier-step ${linked >= x.min ? 'on' : ''}`}>
-            <img src={x.img} alt="" />
+            <AnimIcon name={x.key} src={x.img} />
             <span>{t[`tier_${x.key}`]}</span>
             <bdi dir="ltr">{x.min}+</bdi>
           </div>
         ))}
       </div>
+
+      {earn && (
+        <div className="section ref-earn">
+          <h2>{t.refEarnTitle}</h2>
+          <div className="kpis three">
+            <div className="kpi"><span className="kpi-label">{t.refEarnPaid}</span><strong className="kpi-value" dir="ltr">{earn.paid}</strong></div>
+            <div className="kpi"><span className="kpi-label">{t.refEarnDays}</span><strong className="kpi-value" dir="ltr">{earn.earned_days}</strong></div>
+            <div className="kpi"><span className="kpi-label">{t.refEarnPer}</span><strong className="kpi-value" dir="ltr">{earn.tier?.days ?? '—'}</strong></div>
+          </div>
+          {earn.next ? (
+            <>
+              <div className="progress">
+                <span style={{ width: `${Math.max(0, Math.min(1, (earn.paid - (earn.tier?.min || 0)) / Math.max(1, earn.next.min - (earn.tier?.min || 0)))) * 100}%` }} />
+              </div>
+              <p className="sub">{fill(t.refEarnNext, { n: earn.left, d: earn.next.days })}</p>
+            </>
+          ) : (
+            <p className="sub">{t.refEarnTop}</p>
+          )}
+          <ol className="ref-tiers">
+            {(earn.tiers || []).map((x) => (
+              <li key={x.min} className={earn.paid >= x.min ? 'on' : ''}>
+                <bdi dir="ltr">{x.min}+</bdi>
+                <span>{fill(t.refEarnTierRow, { d: x.days })}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
 
       <div className="kpis three">
         <div className="kpi"><span className="kpi-label">{t.refInvited}</span><strong className="kpi-value" dir="ltr">{refs?.invited ?? '—'}</strong></div>

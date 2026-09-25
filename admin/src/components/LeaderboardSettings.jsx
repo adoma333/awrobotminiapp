@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api";
+import ScriptEditor from "./ScriptEditor";
 
 const TIERS = [
   ["bronze", "برونزي"], ["silver", "فضي"], ["gold", "ذهبي"], ["platinum", "بلاتيني"], ["diamond", "ماسي"], ["master", "أسطوري"],
@@ -69,10 +70,12 @@ export default function LeaderboardSettings() {
   const [msg, setMsg] = useState("");
   const [photoMap, setPhotoMap] = useState({}); // اسم الملف → رابط الصورة المرفوعة
   const [busy, setBusy] = useState(false);
+  const [meta, setMeta] = useState({}); // قوالب ومساعدة محرر المعادلات + آخر خطأ تشغيل
 
   useEffect(() => {
     api.leaderboard().then((c) => {
-      const { default_profiles: d, ...rest } = c;
+      const { default_profiles: d, script_presets: presets, script_vars: vars, script_funcs: funcs, script_error: error, ...rest } = c;
+      setMeta({ presets, vars, funcs, error });
       setDefaults(d || []);
       setCfg(rest);
       setSaved(sig(rest));
@@ -133,6 +136,7 @@ export default function LeaderboardSettings() {
       const { default_profiles: _d, ...c } = await api.saveLeaderboard(body);
       setCfg(c);
       setSaved(sig(c));
+      setMeta((m) => ({ ...m, error: null }));
       setMsg("✅ تم التأكيد والحفظ");
     } catch (e) {
       setMsg(`❌ ${e.detail || "تعذّر الحفظ"}`);
@@ -167,6 +171,9 @@ export default function LeaderboardSettings() {
         <label>الفاصل بين كل حركة (دقيقة)<input className="mono" type="number" min="1" max="1440" value={Math.round(cfg.interval_sec / 60)} onChange={(e) => set({ interval_sec: Math.max(60, num(e.target.value) * 60) })} disabled={!cfg.dynamic} /></label>
         <label>أقصى ابتعاد عن القيمة الأساسية (±%)<input className="mono" type="number" min="0" max="60" value={cfg.volatility_pct} onChange={(e) => set({ volatility_pct: num(e.target.value) })} disabled={!cfg.dynamic} /></label>
       </div>
+      <h3>محرك الحركة المتقدم (معادلة برمجية)</h3>
+      <ScriptEditor value={cfg.script} onChange={(v) => set({ script: v })} enabled={Boolean(cfg.script_enabled)} onToggle={(v) => set({ script_enabled: v })}
+        intervalSec={cfg.interval_sec} meta={meta} />
       <h3>نطاقات توليد القيمة الأساسية (للأسماء بلا قيمة مُدخلة — تُولَّد مرة واحدة وتثبت)</h3>
       <div className="grid-form">
         <label>عدد النخبة المتصدرة<input className="mono" type="number" min="0" max="10" value={cfg.elite_count} onChange={(e) => set({ elite_count: num(e.target.value) })} /></label>

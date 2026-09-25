@@ -10,6 +10,7 @@ announcements/{id}:
   version: يزيد عند "إعادة العرض للجميع" فيُعاد عرضها حتى لمن شاهدها.
 حالة كل مستخدم: users.announce_seen.{id} = {at, count, version, dismissed}.
 """
+import re
 import time
 
 COL = "announcements"
@@ -61,7 +62,11 @@ DEFAULT = {
     "cta_action": "close",
     "cta_url": "",
     "version": 1,
+    # الشكل (يُتحكَّم به من المعاينة الحية في لوحة التحكم)
+    "style": {"accent": "#ff8a00", "accent2": "#ff5a00", "bg": "#0e0b09", "text": "#f5efe8", "width": 460,
+              "position": "bottom", "radius": 26, "blur": 4},
 }
+STYLE_KEYS = {"accent", "accent2", "bg", "text", "width", "position", "radius", "blur"}
 TEXT_FIELDS = ("badge_ar", "badge_en", "title_ar", "title_en", "subtitle_ar", "subtitle_en", "body_ar", "body_en",
                "footnote_ar", "footnote_en", "cta_label_ar", "cta_label_en")
 
@@ -101,6 +106,23 @@ def clean(patch: dict, current: dict | None = None) -> dict:
             rows.append({"icon": f.get("icon") if f.get("icon") in ICONS else "check",
                          **{k: str(f.get(k) or "")[:300] for k in ("title_ar", "title_en", "text_ar", "text_en")}})
         out["features"] = rows
+    if "style" in patch:
+        st = {**DEFAULT["style"], **(cur.get("style") or {})}
+        for k, v in (patch["style"] or {}).items():
+            if k not in STYLE_KEYS:
+                continue
+            if k in ("accent", "accent2", "bg", "text"):
+                if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(v or "")):
+                    raise ValueError(f"style.{k} must be #RRGGBB")
+                st[k] = str(v)
+            elif k == "position":
+                if v not in ("bottom", "center"):
+                    raise ValueError("style.position invalid")
+                st[k] = v
+            else:
+                lim = {"width": (300, 760), "radius": (0, 40), "blur": (0, 12)}[k]
+                st[k] = max(lim[0], min(lim[1], int(v)))
+        out["style"] = st
     merged = {**cur, **out}
     if merged["ends_at"] and merged["starts_at"] and merged["ends_at"] <= merged["starts_at"]:
         raise ValueError("ends_at must be after starts_at")

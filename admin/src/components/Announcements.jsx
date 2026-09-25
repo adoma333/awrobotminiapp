@@ -5,6 +5,9 @@ const FREQ = { once: "مرة واحدة فقط", every_open: "عند كل دخو
 const AUD = { all: "كل المستخدمين", active: "الاشتراك فعّال", expired: "الاشتراك منتهٍ", no_sub: "بلا اشتراك", unlinked: "غير مربوطين", linked: "مربوطون" };
 const CTA = { close: "إغلاق النافذة", plans: "فتح الباقات", support: "فتح الدعم", url: "رابط خارجي" };
 const ICON_LABEL = { bolt: "⚡ تنفيذ", chart: "📈 أداء", shield: "🛡 أمان", cloud: "☁ سحابة", headset: "🎧 دعم", bell: "🔔 إشعارات", trophy: "🏆 ترتيب", gift: "🎁 مكافأة", star: "⭐ نجمة", wallet: "👛 محفظة", globe: "🌐 لغات", check: "✓ عام" };
+const DEFAULT_STYLE = { accent: "#ff8a00", accent2: "#ff5a00", bg: "#0e0b09", text: "#f5efe8", width: 460, position: "bottom", radius: 26, blur: 4 };
+const DEVICES = { phone_s: ["هاتف صغير", 360, 640], phone: ["هاتف", 390, 780], phone_l: ["هاتف كبير", 430, 860], tablet: ["تابلت", 768, 900] };
+const EMOJI = { bolt: "⚡", chart: "📈", shield: "🛡", cloud: "☁", headset: "🎧", bell: "🔔", trophy: "🏆", gift: "🎁", star: "⭐", wallet: "👛", globe: "🌐", check: "✓" };
 const toLocal = (ts) => (ts ? new Date(ts * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "");
 const fromLocal = (v) => (v ? Math.floor(new Date(v).getTime() / 1000) : 0);
 
@@ -101,8 +104,10 @@ function Editor({ a, setA, icons, canWrite, onSave, msg, onClose }) {
   return (
     <>
       <div className="overlay" onClick={onClose} />
-      <aside className="sheet wide">
+      <aside className="sheet wide ann-editor">
         <div className="sheet-head"><h2>{a.id ? "تعديل النافذة" : "نافذة جديدة"}</h2><button onClick={onClose}>إغلاق</button></div>
+        <div className="ann-split">
+        <div className="ann-form">
         <label className="check"><input type="checkbox" checked={!!a.enabled} onChange={set("enabled")} disabled={!canWrite} />مفعّلة (تظهر للمستخدمين)</label>
         <h3>الظهور</h3>
         <div className="grid-form">
@@ -153,7 +158,94 @@ function Editor({ a, setA, icons, canWrite, onSave, msg, onClose }) {
           </div>
         )}
         {msg && <p className={msg.startsWith("✗") ? "error-text" : "muted"}>{msg}</p>}
+        </div>
+        <Preview a={a} setStyle={(patch) => setA({ ...a, style: { ...DEFAULT_STYLE, ...(a.style || {}), ...patch } })} canWrite={canWrite} />
+        </div>
       </aside>
     </>
+  );
+}
+
+// ───────────── المعاينة الحية + التحكم الكامل بالشكل ─────────────
+function Preview({ a, setStyle, canWrite }) {
+  const [lang, setLang] = useState("ar");
+  const [device, setDevice] = useState("phone");
+  const st = { ...DEFAULT_STYLE, ...(a.style || {}) };
+  const [, dw, dh] = DEVICES[device];
+  const L = (k) => a[`${k}_${lang}`] || a[`${k}_${lang === "ar" ? "en" : "ar"}`] || "";
+  const C = (k, label) => (
+    <label className="color-field">{label}
+      <span><input type="color" value={st[k]} onChange={(e) => setStyle({ [k]: e.target.value })} disabled={!canWrite} /><code>{st[k]}</code></span>
+    </label>
+  );
+  const R = (k, label, min, max) => (
+    <label>{label} <b className="mono">{st[k]}</b>
+      <input type="range" min={min} max={max} value={st[k]} onChange={(e) => setStyle({ [k]: Number(e.target.value) })} disabled={!canWrite} />
+    </label>
+  );
+  const center = st.position === "center";
+  return (
+    <div className="ann-preview">
+      <div className="row-gap">
+        <div className="tabs">
+          {Object.entries(DEVICES).map(([k, [l]]) => <button key={k} className={`tab ${device === k ? "active" : ""}`} onClick={() => setDevice(k)}>{l}</button>)}
+        </div>
+        <div className="tabs">
+          <button className={`tab ${lang === "ar" ? "active" : ""}`} onClick={() => setLang("ar")}>ع</button>
+          <button className={`tab ${lang === "en" ? "active" : ""}`} onClick={() => setLang("en")}>EN</button>
+        </div>
+      </div>
+      <p className="muted">اسحب الزاوية السفلية للإطار لتغيير حجم الشاشة. المعاينة تتحدث فورًا مع كل تعديل.</p>
+      <div className="ann-device" style={{ width: dw, height: Math.min(dh, 720) }}>
+        <div className="ann-screen" dir={lang === "ar" ? "rtl" : "ltr"}>
+          <div className="ann-app-mock"><span /><span /><span /><span /></div>
+          <div className="ann-backdrop" style={{ alignItems: center ? "center" : "flex-end", padding: center ? 12 : 0, backdropFilter: `blur(${st.blur}px)`, WebkitBackdropFilter: `blur(${st.blur}px)` }}>
+            <div className="ann-sheet" style={{
+              maxWidth: st.width, color: st.text, borderColor: `${st.accent}38`,
+              borderRadius: center ? st.radius : `${st.radius}px ${st.radius}px 0 0`,
+              background: `radial-gradient(120% 60% at 50% 0%, ${st.accent}29, transparent 60%), ${st.bg}`,
+            }}>
+              <span className="ann-x">✕</span>
+              {a.image ? <img className="ann-hero-img" src={a.image} alt="" /> : (
+                <div className="ann-hero" style={{ background: `linear-gradient(135deg, ${st.accent}, ${st.accent2})`, boxShadow: `0 12px 40px ${st.accent}59` }}>⚡</div>
+              )}
+              {L("badge") && <span className="ann-badge" style={{ color: st.accent, borderColor: `${st.accent}47` }}>{L("badge")}</span>}
+              <h2>{L("title") || (lang === "ar" ? "عنوان النافذة" : "Window title")}</h2>
+              {L("subtitle") && <p className="ann-sub">{L("subtitle")}</p>}
+              {(a.features || []).length > 0 && (
+                <ul className="ann-feats">
+                  {a.features.map((f, i) => (
+                    <li key={i}>
+                      <span className="ann-ic" style={{ color: st.accent, background: `${st.accent}1f` }}>{EMOJI[f.icon] || "✓"}</span>
+                      <div><b>{f[`title_${lang}`] || f.title_en || f.title_ar}</b>{(f[`text_${lang}`] || f.text_en) && <p>{f[`text_${lang}`] || f.text_en}</p>}</div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {L("body") && <p className="ann-body">{L("body")}</p>}
+              <div className="ann-cta" style={{ background: `linear-gradient(135deg, ${st.accent}, ${st.accent2})` }}>{L("cta_label") || (lang === "ar" ? "إغلاق" : "Close")}</div>
+              {a.allow_dismiss && <div className="ann-never">☐ {lang === "ar" ? "لا تظهر مرة أخرى" : "Don't show again"}</div>}
+              {L("footnote") && <p className="ann-foot">{L("footnote")}</p>}
+            </div>
+          </div>
+        </div>
+      </div>
+      <h3>الشكل</h3>
+      <div className="grid-form">
+        {C("accent", "اللون الرئيسي")}{C("accent2", "اللون الثانوي (التدرج)")}{C("bg", "الخلفية")}{C("text", "النص")}
+      </div>
+      <div className="grid-form">
+        {R("width", "أقصى عرض (px)", 300, 760)}
+        {R("radius", "استدارة الزوايا", 0, 40)}
+        {R("blur", "تمويه الخلفية", 0, 12)}
+        <label>الموضع
+          <select value={st.position} onChange={(e) => setStyle({ position: e.target.value })} disabled={!canWrite}>
+            <option value="bottom">من الأسفل (Bottom sheet)</option>
+            <option value="center">في المنتصف (Modal)</option>
+          </select>
+        </label>
+      </div>
+      {canWrite && <div><button onClick={() => setStyle({ ...DEFAULT_STYLE })}>استعادة الشكل الافتراضي</button></div>}
+    </div>
   );
 }

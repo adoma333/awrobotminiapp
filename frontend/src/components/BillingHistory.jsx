@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
+import PageHead from './PageHead';
 import ErrorNote from './ErrorNote';
 import { getBillingHistory } from '../api';
 import { amount, fmtDate } from '../format';
+import starsIcon from '../assets/icons/stars.webp';
 
 const STATUS_LABEL = {
   finished: { ar: 'مكتمل', en: 'Finished' },
@@ -24,13 +26,7 @@ export default function BillingHistory({ t, lang, onBack }) {
 
   return (
     <section className="dash">
-      <div className="settings-head">
-        <button type="button" className="btn ghost" onClick={onBack}>
-          <svg className="chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
-          <span>{t.back}</span>
-        </button>
-        <h1>{t.billTitle}</h1>
-      </div>
+      <PageHead t={t} title={t.billTitle} onBack={onBack} />
 
       <div className="section">
         {error && <ErrorNote t={t} kind="operation" code="billing_load_failed">{t.billError}</ErrorNote>}
@@ -43,7 +39,7 @@ export default function BillingHistory({ t, lang, onBack }) {
               <li key={row.order_id} className="bill-item">
                 <div className="bill-top">
                   <strong className="bill-plan">{(lang === 'ar' ? row.plan_name_ar : row.plan_name_en) || '—'}</strong>
-                  <span className="bill-amount" dir="ltr">{row.currency === 'USD' ? `$${amount(row.amount)}` : `${amount(row.amount)} ${row.currency === 'XTR' ? '⭐' : row.currency}`}</span>
+                  <span className="bill-amount" dir="ltr">{row.currency === 'USD' ? `$${amount(row.amount)}` : row.currency === 'XTR' ? <>{amount(row.amount)} <img src={starsIcon} alt="Stars" className="cur-ic" /></> : `${amount(row.amount)} ${row.currency}`}</span>
                 </div>
                 <div className="bill-meta">
                   <span>{fmtDate(row.date, lang)}</span>

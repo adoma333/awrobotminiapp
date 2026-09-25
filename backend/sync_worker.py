@@ -271,15 +271,27 @@ def mt5_lock(timeout=None):
         os.close(fd)
 
 
-def read_rows(objs, keys):
-    """يقرأ الحقول المطلوبة فقط. يحاول جلب القائمة دفعة واحدة عبر rpyc لتسريعها."""
-    try:
-        from rpyc.utils.classic import obtain
+def read_rows(objs, keys, conn=None):
+    """يقرأ الحقول المطلوبة فقط.
 
-        objs = obtain(objs)
-    except Exception:
-        pass
+    مع اتصال rpyc: نبني صفوفًا من قيم بسيطة (أرقام/نصوص) على جهة Wine نفسها ثم ننقلها دفعة واحدة.
+    سابقًا كان obtain() يحاول pickle كائنات AccountInfo/TradeDeal (namedtuple من مكتبة MetaTrader5)
+    فيفشل على الجهة البعيدة بـ PicklingError ويملأ السجل، ثم نقرأ كل حقل برحلة شبكة مستقلة (بطيء)."""
+    keys = tuple(keys)
+    if conn is not None:
+        try:
+            from rpyc.utils.classic import obtain
+
+            conn.namespace["_aw_objs"] = objs
+            rows = obtain(conn.eval(f"[tuple(getattr(o, k, 0) for k in {keys!r}) for o in (_aw_objs or ())]"))
+            return [dict(zip(keys, r)) for r in rows]
+        except Exception as e:  # noqa: BLE001 — نرجع للقراءة الآمنة حقلًا حقلًا
+            log.debug("remote row build failed: %r", e)
     return [{k: getattr(o, k, 0) for k in keys} for o in objs]
+
+
+def _conn_of(mt5):
+    return getattr(mt5, "_MetaTrader5__conn", None)
 
 
 class Mt5Client:
@@ -327,7 +339,7 @@ class Mt5Client:
             if info is None:
                 code, msg = mt5.last_error()
                 raise Mt5Error(code, msg, "transient")
-            acc = read_rows([info], ACCOUNT_KEYS)[0]
+            acc = read_rows([info], ACCOUNT_KEYS, _conn_of(mt5))[0]
             if int(acc["login"]) != int(login):  # لا نقبل بيانات حساب آخر أبدًا
                 raise Mt5Error(-1, "terminal is on a different account", "transient")
 
@@ -340,7 +352,7 @@ class Mt5Client:
                 if code != 1:
                     raise Mt5Error(code, msg, "transient")
                 raw = ()
-            return {"account": acc, "deals": read_rows(raw, DEAL_KEYS)}
+            return {"account": acc, "deals": read_rows(raw, DEAL_KEYS, _conn_of(mt5))}
         except Mt5Error:
             raise
         except Exception as e:

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import PageHead from './PageHead';
 import Icon from './Icon';
 import { getNotifications, markNotificationsRead } from '../api';
 import { timeAgo } from '../format';
@@ -27,13 +28,7 @@ export default function Notifications({ t, lang, onBack, onRead }) {
   const items = data?.items || [];
   return (
     <section className="dash">
-      <div className="settings-head">
-        <button type="button" className="btn ghost" onClick={onBack}>
-          <svg className="chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
-          <span>{t.back}</span>
-        </button>
-        <h1>{t.notifTitle}</h1>
-      </div>
+      <PageHead t={t} title={t.notifTitle} onBack={onBack} />
       {failed && <p className="note warn">{t.notifErr}</p>}
       {!data && !failed && <div className="notif-skel" aria-hidden="true"><span /><span /><span /></div>}
       {data && items.length === 0 && (

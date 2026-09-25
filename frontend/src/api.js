@@ -150,7 +150,7 @@ export async function getPackages() {
       ton_enabled: true,
     };
   }
-  return request('GET', '/api/packages');
+  return request('GET', `/api/packages${initData ? `?init_data=${encodeURIComponent(initData)}` : ''}`);
 }
 
 export async function createPayment(packageId, rewardId) {
@@ -434,4 +434,32 @@ export async function reportError(e) {
     page: String(e.page || '').slice(0, 60), online: navigator.onLine, ua: navigator.userAgent.slice(0, 300),
     ref: e.ref || '',
   }, { silent: true });
+}
+
+// ─────────── النمو: كوبونات الحملات، روابط الهدايا، تتبّع الحملات، أرباح الإحالة ───────────
+export async function redeemCoupon(code) {
+  if (DEV_MOCK) {
+    await sleep(300);
+    if (code.toUpperCase() !== 'BLACK20') { const e = new Error('coupon_not_found'); e.status = 404; e.detail = 'coupon_not_found'; throw e; }
+    return { reward_id: 'dev_coupon', type: 'discount', value: 20, expires_in_hours: 48 };
+  }
+  return request('POST', '/api/coupons/redeem', { init_data: initData, code });
+}
+
+export async function claimGift(code) {
+  if (DEV_MOCK) return { type: 'days', value: 5 };
+  return request('POST', '/api/gifts/claim', { init_data: initData, code }, { silent: true });
+}
+
+export async function trackCampaign(slug) {
+  if (DEV_MOCK) return { ok: true };
+  return request('POST', '/api/campaigns/track', { init_data: initData, code: slug }, { silent: true });
+}
+
+export async function getReferralStats() {
+  if (DEV_MOCK) {
+    return { paid: 6, earned_days: 52, tier: { min: 5, days: 10 }, next: { min: 15, days: 14 }, left: 9, friend_days: 7,
+      tiers: [{ min: 0, days: 7 }, { min: 5, days: 10 }, { min: 15, days: 14 }, { min: 40, days: 21 }] };
+  }
+  return request('GET', `/api/referral/stats?init_data=${encodeURIComponent(initData)}`, null, { silent: true });
 }

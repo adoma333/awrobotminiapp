@@ -96,19 +96,46 @@ def _np(method: str, path: str, body: dict | None = None) -> httpx.Response:
     )
 
 
-def create_direct_payment(order_id: str, amount_usd: float, pay_currency: str, description: str, ipn_url: str) -> dict:
-    """ينشئ دفعة مباشرة ويعيد عنوان الإيداع والمبلغ بالعملة المختارة (والمذكّرة/memo إن لزمت)."""
+STABLE = {"usdttrc20", "usdtbsc", "usdterc20", "usdtton", "usdcbsc", "usdcerc20", "usdc", "dai"}
+
+
+def display_amount(pay_currency: str, pay_amount, tolerance_pct: float) -> str:
+    """المبلغ الذي يُعرض للمستخدم: العملات المستقرة بلا كسور (12 بدل 12.000850) متى كان الفرق ضمن
+    هامش القبول، وإلا أقرب سنت للأعلى. العملات الأخرى تُعرض بدقتها الكاملة (لا يجوز تقريبها)."""
+    try:
+        amt = float(pay_amount)
+    except (TypeError, ValueError):
+        return str(pay_amount or "")
+    if pay_currency not in STABLE:
+        return f"{amt:.8f}".rstrip("0").rstrip(".")
+    whole = round(amt)
+    if whole >= 1 and abs(whole - amt) <= amt * tolerance_pct / 100:
+        return str(int(whole))
+    import math
+
+    return f"{math.ceil(amt * 100) / 100:.2f}"
+
+
+def create_direct_payment(order_id: str, amount_usd: float, pay_currency: str, description: str, ipn_url: str,
+                          payout_address: str = "", payout_currency: str = "") -> dict:
+    """ينشئ دفعة مباشرة ويعيد عنوان الإيداع والمبلغ بالعملة المختارة (والمذكّرة/memo إن لزمت).
+    payout_address: تحويل تلقائي فوري للمحفظة المحددة بعد التأكيد (وإلا محفظة حسابك في NOWPayments)."""
     if pay_currency not in ENABLED:
         raise PaymentError("unsupported_currency")
+    body = {
+        "price_amount": amount_usd,
+        "price_currency": "usd",
+        "pay_currency": pay_currency,
+        "order_id": order_id,
+        "order_description": description,
+        "ipn_callback_url": ipn_url,
+    }
+    if payout_address:
+        body["payout_address"] = payout_address
+        if payout_currency:
+            body["payout_currency"] = payout_currency
     try:
-        res = _np("POST", "/payment", {
-            "price_amount": amount_usd,
-            "price_currency": "usd",
-            "pay_currency": pay_currency,
-            "order_id": order_id,
-            "order_description": description,
-            "ipn_callback_url": ipn_url,
-        })
+        res = _np("POST", "/payment", body)
         data = res.json()
     except (httpx.HTTPError, RetryableError, ValueError) as e:
         raise PaymentError(f"network error: {e}")

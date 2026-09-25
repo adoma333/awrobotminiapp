@@ -42,8 +42,11 @@ import admin_access
 import announcements
 import notifications
 import support
+import support_accounts
 import ton
 import tonadmin
+import growth
+import secretbox
 from retry import RetryableError, raise_for_retryable, with_backoff
 from tenacity import retry, stop_after_attempt, wait_exponential
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -148,6 +151,7 @@ async def lifespan(_app):
     threading.Thread(target=lambda: _safe(backfill_servers), daemon=True, name="servers-backfill").start()
     _safe(lambda: tonadmin.load_override(db))
     _safe(lambda: announcements.seed_default(db))
+    _safe(lambda: support_accounts.get(db, notify_admins).start())
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "weekly"), "cron", day_of_week="mon", hour=9, id="digest_weekly")
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "monthly"), "cron", day=1, hour=9, id="digest_monthly")
     _scheduler.add_job(retry_inbox, "interval", seconds=60, id="webhook_inbox_retry")
@@ -155,6 +159,8 @@ async def lifespan(_app):
     _scheduler.add_job(_leaderboard_tick, "interval", seconds=leaderboard.TICK_SEC, id="leaderboard_tick")
     _scheduler.add_job(lambda: reminders.run_renewal_reminders(db, tg, WEBAPP_URL), "cron", hour=10, id="renewal_reminders")
     _scheduler.add_job(scan_ton_payments, "interval", seconds=60, id="ton_scan")  # يتجاهل الدورة إن لم تُضبط محفظة
+    _scheduler.add_job(lambda: _safe(run_growth_automations), "interval", minutes=60, id="growth_automations")
+    _scheduler.add_job(lambda: _safe(reconcile_nowpayments), "interval", minutes=5, id="np_reconcile")
     _scheduler.start()
     yield
     _scheduler.shutdown(wait=False)
@@ -312,6 +318,8 @@ def register(body: Registration):
     user = verify_init_data(body.init_data)
     uid = user["id"]
     now_ts = time.time()
+    if billing.get_settings(db).get("maintenance"):
+        raise HTTPException(503, "maintenance")
 
     ref = user_ref(uid)
     snap = ref.get()
@@ -403,6 +411,7 @@ def register(body: Registration):
     notifications.push(db, uid, "account", "تم ربط حسابك بنجاح", "Account linked successfully",
                        f"حساب MT5 {str(body.mt5.login)[-3:].rjust(len(str(body.mt5.login)), '•')} على {body.mt5.server}.",
                        f"MT5 account {str(body.mt5.login)[-3:].rjust(len(str(body.mt5.login)), '•')} on {body.mt5.server}.")
+    support.on_account_linked(db, uid, mask_login(body.mt5.login), body.mt5.server)
     try:
         servers.record_success(db, body.mt5.server)  # اسم خادم صحيح 100% لاقتراحات البحث
     except Exception:  # noqa: BLE001
@@ -454,6 +463,9 @@ def _bot_username():
 def _support_public() -> dict:
     """رابط الدعم الموحّد (سماعة الرأس + زر "تواصل مع الدعم"): بوت الدعم، أو حساب بشري، أو الرابط العام."""
     cfg = support.get_config(db)
+    if support.account_mode():  # حساب تلجرام حقيقي فعّال: كل التواصل معه حصريًا
+        return {"support_url": f"https://t.me/{support.ACCOUNT['username']}", "support_bot": "", "support_mode": "account",
+                "support_phone": cfg.get("support_phone") or ""}
     bot = cfg.get("support_bot_username") or ("" if cfg.get("support_bot_token") else _bot_username())
     url = support.contact_link(cfg, _bot_username()) or billing.get_settings(db).get("support_url") or ""
     return {"support_url": url, "support_bot": bot or "", "support_mode": "bot" if bot else ("account" if url else "none"),
@@ -464,6 +476,9 @@ def _public_settings() -> dict:
     s = billing.get_settings(db)
     return {
         "kill_switch": bool(s.get("kill_switch")),
+        "maintenance": bool(s.get("maintenance")),
+        "maintenance_ar": s.get("maintenance_ar") or "",
+        "maintenance_en": s.get("maintenance_en") or "",
         "referral_enabled": bool(s.get("referral_enabled")),
         "referral_days": s.get("referral_days", 7),
         **_support_public(),
@@ -477,7 +492,21 @@ def _public_settings() -> dict:
 
 @app.post("/api/status")
 def status(body: StatusRequest):
-    return build_status(verify_init_data(body.init_data))
+    user = verify_init_data(body.init_data)
+    _touch_seen(user["id"])
+    return build_status(user)
+
+
+def _touch_seen(uid):
+    """أول/آخر فتح للتطبيق (قمع التحويل + أتمتة الخاملين). كتابة واحدة كل ساعة كحد أقصى."""
+    try:
+        now = time.time()
+        snap = user_ref(uid).get()
+        d = (snap.to_dict() or {}) if snap.exists else {}
+        if now - float(d.get("last_seen") or 0) >= 3600:
+            user_ref(uid).set({"last_seen": now, **({} if d.get("first_seen") else {"first_seen": now})}, merge=True)
+    except Exception:  # noqa: BLE001
+        log.exception("touch seen")
 
 
 def build_status(user: dict) -> dict:
@@ -726,6 +755,17 @@ def send_welcome(msg: dict, raw_text: str = ""):
             if referrer_uid and str(referrer_uid) != str(chat_id):
                 user_ref(chat_id).set({"referred_by": str(referrer_uid)}, merge=True)
     lang = "ar" if (msg.get("from", {}).get("language_code") or "").lower().startswith("ar") else "en"
+    gift = None
+    m = re.fullmatch(r"c_([a-z0-9-]{2,30})", payload or "", re.I)
+    if m:  # رابط حملة إعلانية: نقرة + نسب المستخدم للحملة، وهدية الحملة إن وُجدت
+        camp = growth.track_start(db, chat_id, m.group(1))
+        if camp and camp.get("gift_code"):
+            gift = camp["gift_code"]
+    m = re.fullmatch(r"gift_([A-Za-z0-9]{6,12})", payload or "")
+    if m:
+        gift = m.group(1)
+    if gift:
+        tg("sendMessage", chat_id=chat_id, text=gift_message(chat_id, gift, lang))
     text = WELCOME_AR if lang == "ar" else WELCOME_EN
     btn = BUTTON_AR if lang == "ar" else BUTTON_EN
     reply_markup = (
@@ -781,7 +821,7 @@ def handle_private_message(msg: dict):
 def route_to_support(msg: dict):
     """رسائل المستخدمين للبوت الرئيسي: إن كان هو بوت الدعم يعالجها المساعد، وإلا يوجّه لبوت الدعم المستقل."""
     cfg = support.get_config(db)
-    if cfg.get("support_bot_token"):
+    if support.account_mode() or cfg.get("support_bot_token"):  # الردود تصدر حصريًا من الحساب/البوت المخصص
         if support.handle_agent_reply(db, msg):
             return None
         link = support.contact_link(cfg, None)
@@ -1123,8 +1163,14 @@ def admin_stats(admin_id: int = Depends(get_current_admin)):
 
 # ═══════════════════════════ الإعدادات والباقات (Admin) ═══════════════════════════
 @app.get("/api/packages")
-def public_packages():
-    pkgs = billing.list_packages(db, active_only=True)
+def public_packages(init_data: str = ""):
+    uid = None
+    if init_data:  # مع الهوية: تظهر أيضًا الباقات الخاصة بهذا المستخدم فقط
+        try:
+            uid = verify_init_data(init_data)["id"]
+        except HTTPException:
+            uid = None
+    pkgs = billing.list_packages(db, active_only=True, for_uid=uid)
     rate = ton.usd_rate() if ton.configured() else None
     for p in pkgs:  # سعر TON متغيّر حسب السوق (يُحسب من السعر بالدولار)
         p["price_ton"] = ton.usd_to_ton(p["price_usd"], rate) if rate else None
@@ -1140,6 +1186,15 @@ def admin_get_settings(admin_id: int = Depends(get_current_admin)):
 def admin_update_settings(patch: dict, admin_id: int = Depends(get_current_admin)):
     # تشغيل/إيقاف TON عملية حساسة: تمر فقط عبر /api/admin/ton (رمز OTP)، لا من الإعدادات العامة
     patch = {k: v for k, v in patch.items() if k != "pay_ton_enabled"}
+    try:
+        if "referral_tiers" in patch:
+            patch["referral_tiers"] = growth.clean_tiers(patch["referral_tiers"])
+        if "np_tolerance_pct" in patch:
+            patch["np_tolerance_pct"] = max(0.0, min(5.0, float(patch["np_tolerance_pct"])))
+        if patch.get("np_payout_address") and not re.fullmatch(r"[A-Za-z0-9:_-]{20,120}", str(patch["np_payout_address"])):
+            raise ValueError("invalid payout address")
+    except (growth.GrowthError, ValueError, TypeError) as e:
+        raise HTTPException(422, getattr(e, "code", str(e)))
     return billing.update_settings(db, patch)
 
 
@@ -1197,13 +1252,15 @@ def activate_payment(order_id: str, extra: dict | None = None) -> bool:
             return False
         pkg["id"] = pay["package_id"]
         billing.extend_subscription(db, pay["uid"], pkg)
+        if pkg.get("private_uid") and pkg.get("one_time", True):  # باقة خاصة لمرة واحدة: تختفي بعد استخدامها
+            db.collection("packages").document(pkg["id"]).set({"used": True, "used_at": time.time(), "used_order": order_id}, merge=True)
         if pay.get("bonus_days"):  # جائزة خدش "أيام مجانية" طُبّقت على هذا الطلب
             billing._add_days(db, pay["uid"], int(pay["bonus_days"]))
         if pay.get("reward_id"):  # الجائزة تُعلَّم مستخدمة بعد نجاح الدفع فقط
             rewards.mark_used(db, pay["reward_id"], order_id)
         settings = billing.get_settings(db)
         if settings.get("referral_enabled"):
-            billing.grant_referral_bonus_if_eligible(db, pay["uid"], settings.get("referral_days", 7))
+            billing.grant_referral_bonus_if_eligible(db, pay["uid"], settings.get("referral_days", 7), settings.get("referral_tiers"))
         pay_ref.set({"status": "finished", "confirmed_at": time.time(), **(extra or {})}, merge=True)
     tg("sendMessage", chat_id=pay["uid"], text=PAID_MSG)
     notifications.push(db, pay["uid"], "payment", "تم تفعيل اشتراكك ✅", "Your subscription is active ✅",
@@ -1267,8 +1324,11 @@ class PaymentCreate(BaseModel):
 
 
 def require_method(key: str):
-    """طرق الدفع قابلة للإيقاف من مركز التحكم في لوحة الأدمن."""
-    if not billing.get_settings(db).get(key, True):
+    """طرق الدفع قابلة للإيقاف من مركز التحكم في لوحة الأدمن، وكلها تتوقف في وضع الصيانة."""
+    s_ = billing.get_settings(db)
+    if s_.get("maintenance"):
+        raise HTTPException(503, "maintenance")
+    if not s_.get(key, True):
         raise HTTPException(403, "payment_method_disabled")
 
 
@@ -1293,14 +1353,15 @@ def reward_fields(card, reward_id, full_price) -> dict:
 def create_payment(body: PaymentCreate):
     user = verify_init_data(body.init_data)
     require_method("pay_crypto_enabled")
-    pkgs = {p["id"]: p for p in billing.list_packages(db, active_only=True)}
+    pkgs = {p["id"]: p for p in billing.list_packages(db, active_only=True, for_uid=user["id"])}
     pkg = pkgs.get(body.package_id)
     if not pkg:
         raise HTTPException(404, "package_not_found")
     card = checkout_reward(user["id"], body.reward_id)
     amount_usd = pkg["price_usd"]
     if card:
-        amount_usd = round(rewards.apply_to_amount(card, amount_usd)[0], 2)
+        amount_usd = rewards.apply_to_amount(card, amount_usd)[0]
+    amount_usd = max(1, int(round(amount_usd)))  # قيمة ثابتة بالدولار بلا كسور (12$ لا 12.000850$)
 
     order_id = f"{user['id']}-{body.package_id}-{int(time.time())}"
     base = FRONTEND_ORIGIN if FRONTEND_ORIGIN != "*" else (WEBAPP_URL or "")
@@ -1338,6 +1399,7 @@ def create_payment(body: PaymentCreate):
 
 
 def _create_direct_crypto(user, body, pkg, card, amount_usd, order_id, base):
+    s_ = billing.get_settings(db)
     try:
         pay = payments.create_direct_payment(
             order_id=order_id,
@@ -1345,6 +1407,8 @@ def _create_direct_crypto(user, body, pkg, card, amount_usd, order_id, base):
             pay_currency=body.pay_currency,
             description=f"AW Robot - {pkg.get('name_en') or pkg.get('name_ar')}",
             ipn_url=f"{base}/api/payments/nowpayments-webhook",
+            payout_address=(s_.get("np_payout_address") or "").strip(),
+            payout_currency=(s_.get("np_payout_currency") or "").strip().lower(),
         )
     except payments.PaymentError as e:
         code = str(e)
@@ -1354,6 +1418,8 @@ def _create_direct_crypto(user, body, pkg, card, amount_usd, order_id, base):
         "payment_id": pay.get("payment_id"),
         "pay_address": pay.get("pay_address"),
         "pay_amount": pay.get("pay_amount"),
+        "display_amount": payments.display_amount(pay.get("pay_currency") or body.pay_currency, pay.get("pay_amount"),
+                                                  float(s_.get("np_tolerance_pct") or 1.0)),
         "pay_currency": pay.get("pay_currency") or body.pay_currency,
         "payin_extra_id": pay.get("payin_extra_id"),  # memo/tag مطلوب لبعض الشبكات (مثل TON)
         "network": payments.CURRENCIES.get(body.pay_currency, ("", ""))[1],
@@ -1415,10 +1481,46 @@ def process_nowpayments(data: dict):
     pay_snap = pay_ref.get()
     if not pay_snap.exists or pay_snap.to_dict().get("status") == "finished":
         return  # حماية من التكرار (idempotency)
+    if pay_status == "partially_paid" and _within_tolerance(data, pay_snap.to_dict()):
+        pay_status = "finished"  # الفرق ضمن هامش القبول (تقريب المبلغ المعروض/فروقات الشبكة)
+        data = {**data, "accepted_partial": True}
     if pay_status == "finished":
-        activate_payment(order_id, {"np_payment_id": data.get("payment_id")})
+        activate_payment(order_id, {"np_payment_id": data.get("payment_id"), "actually_paid": data.get("actually_paid"),
+                                    **({"accepted_partial": True} if data.get("accepted_partial") else {})})
     else:
         pay_ref.set({"status": pay_status}, merge=True)
+
+
+def _within_tolerance(data: dict, pay: dict) -> bool:
+    try:
+        need = float(data.get("pay_amount") or (pay.get("np_pay") or {}).get("pay_amount") or 0)
+        got = float(data.get("actually_paid") or 0)
+    except (TypeError, ValueError):
+        return False
+    tol = float(billing.get_settings(db).get("np_tolerance_pct") or 1.0)
+    return need > 0 and got >= need * (1 - tol / 100)
+
+
+def reconcile_nowpayments():
+    """مهمة دورية (كل 5 دقائق): يسأل NOWPayments مباشرة عن كل دفعة منتظرة خلال 48 ساعة — لا تضيع دفعة
+    حتى لو فُقد إشعار الـ webhook."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    now = time.time()
+    for d in db.collection("payments").where(filter=FieldFilter("method", "==", "nowpayments")).stream():
+        p = d.to_dict() or {}
+        if p.get("status") in ("finished", "failed", "expired", "refunded") or not p.get("np_payment_id"):
+            continue
+        if now - float(p.get("created_at") or 0) > 48 * 3600:
+            continue
+        try:
+            remote = payments.get_payment(p["np_payment_id"])
+        except payments.PaymentError:
+            continue
+        st = remote.get("payment_status")
+        if st and (st != p.get("status") or st == "partially_paid"):
+            process_nowpayments({"order_id": d.id, "payment_status": st, "payment_id": p["np_payment_id"],
+                                 "actually_paid": remote.get("actually_paid"), "pay_amount": remote.get("pay_amount")})
 
 
 @app.post("/api/payments/nowpayments-webhook")
@@ -1469,7 +1571,7 @@ def create_ton_payment(body: TonPaymentCreate):
     require_method("pay_ton_enabled")
     if not ton.configured():
         raise HTTPException(503, "ton_not_configured")
-    pkgs = {p["id"]: p for p in billing.list_packages(db, active_only=True)}
+    pkgs = {p["id"]: p for p in billing.list_packages(db, active_only=True, for_uid=user["id"])}
     pkg = pkgs.get(body.package_id)
     if not pkg:
         raise HTTPException(404, "package_not_found")
@@ -1596,7 +1698,7 @@ class StarsPaymentCreate(BaseModel):
 def create_stars_payment(body: StarsPaymentCreate):
     user = verify_init_data(body.init_data)
     require_method("pay_stars_enabled")
-    pkgs = {p["id"]: p for p in billing.list_packages(db, active_only=True)}
+    pkgs = {p["id"]: p for p in billing.list_packages(db, active_only=True, for_uid=user["id"])}
     pkg = pkgs.get(body.package_id)
     if not pkg:
         raise HTTPException(404, "package_not_found")
@@ -1660,19 +1762,32 @@ class UnlinkRequest(BaseModel):
 @app.post("/api/unlink")
 def unlink_account(body: UnlinkRequest):
     user = verify_init_data(body.init_data)
-    ref = user_ref(user["id"])
+    res = do_unlink(user["id"])
+    if not res["ok"]:
+        raise HTTPException(res["status"], res["reason"])
+    return {"ok": True}
+
+
+def mask_login(login) -> str:
+    s_ = str(login or "")
+    return ("•" * max(0, len(s_) - 3)) + s_[-3:]
+
+
+def do_unlink(uid) -> dict:
+    """فكّ ربط حساب MT5 (من التطبيق أو من شات الدعم بعد تأكيد المستخدم). نفس القواعد في الحالتين."""
+    ref = user_ref(uid)
     snap = ref.get()
     if not snap.exists:
-        raise HTTPException(404, "not_found")
+        return {"ok": False, "status": 404, "reason": "not_found"}
     d = snap.to_dict()
     if d.get("status") != "approved":
-        raise HTTPException(400, "not_linked")
+        return {"ok": False, "status": 400, "reason": "not_linked"}
 
     last = d.get("last_unlink_at") or 0
     now_ts = time.time()
     if now_ts - last < UNLINK_COOLDOWN_SEC:
         remaining_h = int((UNLINK_COOLDOWN_SEC - (now_ts - last)) / 3600) + 1
-        raise HTTPException(429, f"cooldown_{remaining_h}h")
+        return {"ok": False, "status": 429, "reason": f"cooldown_{remaining_h}h"}
 
     old_login, old_server = d.get("mt5_login"), d.get("mt5_server")
     ref.set(
@@ -1690,11 +1805,11 @@ def unlink_account(body: UnlinkRequest):
         merge=True,
     )
     tg("sendMessage", chat_id=CHANNEL_ID, parse_mode="HTML",
-       text=f"🔓 فكّ ربط: <code>{user['id']}</code> · {escape(str(old_login))} · {escape(str(old_server))}")
-    notifications.push(db, user["id"], "security", "تنبيه أمني: فُكّ ربط حسابك", "Security alert: account unlinked",
+       text=f"🔓 فكّ ربط: <code>{uid}</code> · {escape(str(old_login))} · {escape(str(old_server))}")
+    notifications.push(db, uid, "security", "تنبيه أمني: فُكّ ربط حسابك", "Security alert: account unlinked",
                        "تم فكّ ربط حساب MT5 من التطبيق. إن لم تكن أنت، تواصل مع الدعم فورًا.",
                        "Your MT5 account was unlinked in the app. If this wasn't you, contact support immediately.")
-    return {"ok": True}
+    return {"ok": True, "login_masked": mask_login(old_login), "server": old_server}
 
 
 class ProfileUpdate(BaseModel):
@@ -2220,6 +2335,7 @@ def admin_ceo(admin_id: int = Depends(get_current_admin)):
         "by_package": dict(sorted(by_package.items(), key=lambda x: -x[1])),
         "series": [{"d": d, "signups": signups[d], "revenue": r2(revenue[d])} for d in days],
         "support": support_stats(),
+        "funnel": growth.funnel(db),
         "generated_at": now,
     }
 
@@ -2289,7 +2405,33 @@ def _leaderboard_tick():
 
 @app.get("/api/admin/leaderboard")
 def admin_leaderboard_config(admin_id: int = Depends(get_current_admin)):
-    return {**leaderboard.get_config(db), "default_profiles": leaderboard.default_config()["profiles"]}
+    import lbscript
+
+    sim = db.collection(leaderboard.SIM_DOC[0]).document(leaderboard.SIM_DOC[1]).get()
+    return {**leaderboard.get_config(db), "default_profiles": leaderboard.default_config()["profiles"],
+            "script_error": ((sim.to_dict() or {}).get("script_error") if sim.exists else None),
+            "script_presets": lbscript.PRESETS, "script_vars": lbscript.VAR_HELP, "script_funcs": lbscript.FUNC_HELP}
+
+
+class ScriptPreview(BaseModel):
+    script: str = Field(min_length=1, max_length=1500)
+    interval_sec: int = Field(default=1200, ge=60, le=86400)
+
+
+@app.post("/api/admin/leaderboard/script/preview")
+def admin_leaderboard_script_preview(body: ScriptPreview, admin_id: int = Depends(get_current_admin)):
+    """معاينة المعادلة على أسبوع كامل قبل حفظها (أول 8 أسماء)."""
+    import lbscript
+
+    cfg = leaderboard.get_config(db)
+    try:
+        tree = lbscript.compile_script(body.script)
+        bases = leaderboard.bases(cfg)[:8]
+        bots = [{"name": p["name"], "base": b, "elite": i < cfg["elite_count"]} for i, (p, b) in enumerate(zip(cfg["profiles"], bases))]
+        series = lbscript.simulate(tree, bots, body.interval_sec)
+    except lbscript.ScriptError as e:
+        raise HTTPException(422, str(e))
+    return {"names": [b["name"] for b in bots], "series": series}
 
 
 class AdminPhoto(BaseModel):
@@ -2748,7 +2890,7 @@ support.PAYMENT_CHECKER["fn"] = _recheck_payment_for
 @app.get("/api/admin/support/config")
 def admin_support_config(admin_id: int = Depends(get_current_admin)):
     cfg = support.get_config(db)
-    return {**support.public_config(cfg), "default_prompt": support.DEFAULT_PROMPT, "ai_available": support.ai_available(),
+    return {**support.public_config(cfg), "default_prompt": support.DEFAULT_PROMPT, "ai_available": support.ai_available(cfg), "model_default": support.MODEL_DEFAULT,
             "main_bot_username": _bot_username(), "contact_url": _support_public()["support_url"],
             "fix_actions": list(support.FIX_ACTIONS)}
 
@@ -2761,7 +2903,7 @@ def admin_support_config_update(patch: dict, admin_id: int = Depends(get_current
         raise HTTPException(422, str(e))
     cur = support.get_config(db)
     hook = None
-    if "support_bot_token" in clean and clean["support_bot_token"] != cur.get("support_bot_token"):
+    if "support_bot_token" in clean and secretbox.open_(clean["support_bot_token"]) != secretbox.open_(cur.get("support_bot_token") or ""):
         if clean["support_bot_token"]:
             if not (WEBAPP_URL or "").startswith("https://"):
                 raise HTTPException(422, "webapp_url_required")
@@ -2959,3 +3101,356 @@ def admin_alerts(since: float = 0, admin_id: int = Depends(get_current_admin)):
                         "at": ev["at"], "page": "system", "title": f"حدث نظام: {ev.get('type')}", "text": str(ev.get("error") or ev.get("detail") or "")[:160]})
     out.sort(key=lambda x: -x["at"])
     return {"now": now, "alerts": out[:60], "support": support_stats()}
+
+
+# ═══════════════════════════ حسابات تلجرام الحقيقية للدعم (Failover) ═══════════════════════════
+support.ACTIONS["unlink"] = do_unlink
+support.ACTIONS["app_link"] = lambda: f"https://t.me/{_bot_username()}?start=relink" if _bot_username() else WEBAPP_URL
+
+
+def _accounts():
+    return support_accounts.get(db, notify_admins)
+
+
+class AccountBegin(BaseModel):
+    phone: str = Field(pattern=r"^\+?\d{7,15}$")
+    api_id: int = Field(ge=1000, le=99999999999)
+    api_hash: str = Field(pattern=r"^[a-f0-9]{32}$")
+    priority: int = Field(default=1, ge=1, le=99)
+
+
+class AccountVerify(BaseModel):
+    code: str = Field(default="", max_length=10)
+    password: str = Field(default="", max_length=200)
+
+
+class AccountPatch(BaseModel):
+    priority: int | None = Field(default=None, ge=1, le=99)
+    enabled: bool | None = None
+    reset: bool = False
+
+
+@app.get("/api/admin/support/accounts")
+def admin_support_accounts(admin_id: int = Depends(get_current_admin)):
+    m = _accounts()
+    return {"rows": [support_accounts.public_row(d) for d in sorted(db.collection(support_accounts.COL).stream(),
+                                                                    key=lambda d: int((d.to_dict() or {}).get("priority") or 99))],
+            "active": m.active_id, "active_username": support.ACCOUNT["username"], "account_mode": support.account_mode(),
+            "telethon": _telethon_ok()}
+
+
+def _telethon_ok() -> bool:
+    try:
+        import telethon  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@app.post("/api/admin/support/accounts")
+def admin_support_account_begin(body: AccountBegin, admin_id: int = Depends(get_current_admin)):
+    if not _telethon_ok():
+        raise HTTPException(503, "telethon_missing")
+    try:
+        aid = _accounts().call(_accounts().begin_login(body.phone, body.api_id, body.api_hash, body.priority))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(422, f"login_failed: {type(e).__name__}")
+    return {"id": aid, "status": "pending_code"}
+
+
+@app.post("/api/admin/support/accounts/{aid}/verify")
+def admin_support_account_verify(aid: str, body: AccountVerify, admin_id: int = Depends(get_current_admin)):
+    try:
+        res = _accounts().call(_accounts().complete_login(aid, body.code.strip(), body.password), timeout=90)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(422, f"verify_failed: {type(e).__name__}")
+    if not res.get("ok"):
+        raise HTTPException(422, res.get("reason") or "verify_failed")
+    return res
+
+
+@app.put("/api/admin/support/accounts/{aid}")
+def admin_support_account_update(aid: str, body: AccountPatch, admin_id: int = Depends(get_current_admin)):
+    _accounts().update(aid, body.model_dump(exclude_none=True))
+    return {"ok": True, "active": _accounts().active_id}
+
+
+@app.delete("/api/admin/support/accounts/{aid}")
+def admin_support_account_delete(aid: str, admin_id: int = Depends(get_current_admin)):
+    _accounts().remove(aid)
+    return {"ok": True}
+
+
+
+# ═══════════════════════════ النمو: كوبونات، هدايا، حملات، أتمتة، قمع، إحالة متدرّجة ═══════════════════════════
+def _growth_http(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except growth.GrowthError as e:
+        raise HTTPException(e.status, e.code)
+
+
+GIFT_TEXT = {
+    "days": ("🎁 هديتك: {v} يوم اشتراك مجاني أُضيفت لحسابك.", "🎁 Your gift: {v} free subscription days were added to your account."),
+    "discount": ("🎁 هديتك: خصم {v}% في محفظة مكافآتك، يُطبَّق تلقائيًا عند الدفع.", "🎁 Your gift: {v}% off in your rewards wallet, applied automatically at checkout."),
+    "free_days": ("🎁 هديتك: {v} يوم إضافي مع اشتراكك القادم.", "🎁 Your gift: {v} extra days with your next subscription."),
+    "scratch": ("🎁 هديتك: بطاقة خدش جديدة تنتظرك في التطبيق!", "🎁 Your gift: a new scratch card is waiting in the app!"),
+}
+GIFT_ERR = {"gift_not_found": ("رابط الهدية غير صالح.", "This gift link isn't valid."), "gift_expired": ("انتهت صلاحية هذه الهدية.", "This gift has expired."),
+            "gift_exhausted": ("نفدت هذه الهدية.", "This gift has run out."), "already_claimed": ("سبق أن حصلت على هذه الهدية ✅", "You've already claimed this gift ✅")}
+
+
+def gift_message(uid, code: str, lang: str) -> str:
+    i = 0 if lang == "ar" else 1
+    try:
+        r = growth.claim_gift(db, uid, code)
+    except growth.GrowthError as e:
+        return GIFT_ERR.get(e.code, ("تعذّر استلام الهدية.", "Couldn't claim the gift."))[i]
+    return GIFT_TEXT[r["type"]][i].replace("{v}", str(r.get("value")))
+
+
+class CodeBody(BaseModel):
+    init_data: str
+    code: str = Field(min_length=3, max_length=20)
+
+
+@app.post("/api/coupons/redeem")
+def coupon_redeem(body: CodeBody):
+    user = verify_init_data(body.init_data)
+    return _growth_http(growth.redeem_coupon, db, user["id"], body.code)
+
+
+@app.post("/api/gifts/claim")
+def gift_claim(body: CodeBody):
+    user = verify_init_data(body.init_data)
+    return _growth_http(growth.claim_gift, db, user["id"], body.code)
+
+
+@app.post("/api/campaigns/track")
+def campaign_track(body: CodeBody):
+    """startapp=c_<slug> من داخل التطبيق (نفس منطق /start في البوت)."""
+    user = verify_init_data(body.init_data)
+    camp = growth.track_start(db, user["id"], body.code)
+    return {"ok": bool(camp), "gift_code": (camp or {}).get("gift_code") or None}
+
+
+@app.get("/api/referral/stats")
+def referral_stats(init_data: str):
+    user = verify_init_data(init_data)
+    snap = user_ref(user["id"]).get()
+    d = (snap.to_dict() or {}) if snap.exists else {}
+    s_ = billing.get_settings(db)
+    tiers = s_.get("referral_tiers") or growth.DEFAULT_TIERS
+    paid = int(d.get("referral_paid_count") or 0)
+    cur, nxt = growth.tier_for(tiers, paid)
+    return {"paid": paid, "earned_days": int(d.get("referral_earned_days") or 0), "tier": cur, "next": nxt,
+            "left": (nxt["min"] - paid) if nxt else 0, "tiers": tiers, "friend_days": s_.get("referral_days", 7)}
+
+
+def run_growth_automations():
+    def send(uid, text, lang):
+        link = f"https://t.me/{_bot_username()}?start=offer" if _bot_username() else ""
+        btn = {"inline_keyboard": [[{"text": "🎁 فتح العرض" if lang == "ar" else "🎁 Open offer", "web_app": {"url": WEBAPP_URL}}]]} if WEBAPP_URL else None
+        tg("sendMessage", chat_id=uid, text=text, **({"reply_markup": btn} if btn else {}))
+        return link
+
+    def notify(uid, tar, ten, bar, ben):
+        notifications.push(db, uid, "broadcast", tar, ten, bar, ben)
+
+    return growth.run_automations(db, send, notify)
+
+
+# ─── لوحة التحكم ───
+@app.get("/api/admin/growth/funnel")
+def admin_growth_funnel(campaign: str | None = None, admin_id: int = Depends(get_current_admin)):
+    return growth.funnel(db, campaign)
+
+
+@app.get("/api/admin/growth/coupons")
+def admin_coupons(admin_id: int = Depends(get_current_admin)):
+    return {"rows": [{"id": d.id, **(d.to_dict() or {})} for d in db.collection(growth.COUPONS).stream()]}
+
+
+@app.post("/api/admin/growth/coupons")
+def admin_coupon_save(data: dict, admin_id: int = Depends(get_current_admin)):
+    c = _growth_http(growth.clean_coupon, data)
+    ref = db.collection(growth.COUPONS).document(c["code"])
+    snap = ref.get()
+    ref.set({**c, **({} if snap.exists else {"used_count": 0, "created_at": time.time(), "created_by": admin_id})}, merge=True)
+    return {"id": c["code"], **(ref.get().to_dict() or {})}
+
+
+@app.delete("/api/admin/growth/coupons/{code}")
+def admin_coupon_delete(code: str, admin_id: int = Depends(get_current_admin)):
+    db.collection(growth.COUPONS).document(code.upper()).delete()
+    return {"ok": True}
+
+
+def _gift_links(code: str) -> dict:
+    bot = _bot_username()
+    short = os.getenv("MINIAPP_SHORT_NAME", "")
+    return {"bot_link": f"https://t.me/{bot}?start=gift_{code}" if bot else "",
+            "app_link": f"https://t.me/{bot}/{short}?startapp=gift_{code}" if bot and short else ""}
+
+
+@app.get("/api/admin/growth/gifts")
+def admin_gifts(admin_id: int = Depends(get_current_admin)):
+    return {"rows": [{"id": d.id, **(d.to_dict() or {}), **_gift_links(d.id)} for d in db.collection(growth.GIFTS).stream()]}
+
+
+@app.post("/api/admin/growth/gifts")
+def admin_gift_create(data: dict, admin_id: int = Depends(get_current_admin)):
+    g = _growth_http(growth.clean_gift, data)
+    code = str(data.get("code") or "").upper() or growth.new_gift_code()
+    if not re.fullmatch(r"[A-Z0-9]{6,12}", code):
+        raise HTTPException(422, "invalid_code")
+    ref = db.collection(growth.GIFTS).document(code)
+    snap = ref.get()
+    ref.set({**g, **({} if snap.exists else {"claims": 0, "created_at": time.time(), "created_by": admin_id})}, merge=True)
+    return {"id": code, **(ref.get().to_dict() or {}), **_gift_links(code)}
+
+
+@app.delete("/api/admin/growth/gifts/{code}")
+def admin_gift_delete(code: str, admin_id: int = Depends(get_current_admin)):
+    db.collection(growth.GIFTS).document(code.upper()).delete()
+    return {"ok": True}
+
+
+@app.get("/api/admin/growth/campaigns")
+def admin_campaigns(admin_id: int = Depends(get_current_admin)):
+    bot = _bot_username()
+    rows = []
+    for d in db.collection(growth.CAMPAIGNS).stream():
+        c = d.to_dict() or {}
+        rows.append({"id": d.id, **c, "link": f"https://t.me/{bot}?start=c_{d.id}" if bot else "", "funnel": growth.funnel(db, d.id)})
+    return {"rows": rows}
+
+
+@app.post("/api/admin/growth/campaigns")
+def admin_campaign_save(data: dict, admin_id: int = Depends(get_current_admin)):
+    c = _growth_http(growth.clean_campaign, data)
+    ref = db.collection(growth.CAMPAIGNS).document(c["slug"])
+    snap = ref.get()
+    ref.set({**c, **({} if snap.exists else {"clicks": 0, "created_at": time.time(), "created_by": admin_id})}, merge=True)
+    return {"id": c["slug"], **(ref.get().to_dict() or {})}
+
+
+@app.delete("/api/admin/growth/campaigns/{slug}")
+def admin_campaign_delete(slug: str, admin_id: int = Depends(get_current_admin)):
+    db.collection(growth.CAMPAIGNS).document(slug.lower()).delete()
+    return {"ok": True}
+
+
+@app.get("/api/admin/growth/automations")
+def admin_automations(admin_id: int = Depends(get_current_admin)):
+    log_rows = [d.to_dict() or {} for d in db.collection(growth.AUTO_LOG).order_by("at", direction="DESCENDING").limit(100).stream()]
+    return {"rows": growth.list_automations(db), "triggers": growth.TRIGGER_LABEL, "log": log_rows}
+
+
+@app.put("/api/admin/growth/automations/{rid}")
+def admin_automation_save(rid: str, data: dict, admin_id: int = Depends(get_current_admin)):
+    if not re.fullmatch(r"[a-z0-9_]{3,40}", rid):
+        raise HTTPException(422, "invalid_id")
+    a = _growth_http(growth.clean_automation, data)
+    db.collection(growth.AUTOMATIONS).document(rid).set(a, merge=True)
+    return {"id": rid, **a}
+
+
+@app.delete("/api/admin/growth/automations/{rid}")
+def admin_automation_delete(rid: str, admin_id: int = Depends(get_current_admin)):
+    db.collection(growth.AUTOMATIONS).document(rid).delete()
+    return {"ok": True}
+
+
+@app.post("/api/admin/growth/automations/run")
+def admin_automation_run(admin_id: int = Depends(get_current_admin)):
+    return {"sent": run_growth_automations()}
+
+
+# ─── باقة خاصة لمستخدم واحد ───
+class PrivatePackage(BaseModel):
+    uid: str = Field(pattern=r"^\d{1,15}$")
+    name_ar: str = Field(min_length=2, max_length=60)
+    name_en: str = Field(default="", max_length=60)
+    price_usd: float = Field(gt=0, le=100000)
+    duration_days: int = Field(ge=1, le=3650)
+    price_stars: int | None = Field(default=None, ge=1, le=1000000)
+    offer_hours: int = Field(default=72, ge=1, le=24 * 60)
+    note_ar: str = Field(default="", max_length=300)
+    note_en: str = Field(default="", max_length=300)
+    via_bot: bool = True
+
+
+@app.post("/api/admin/packages/private")
+def admin_private_package(body: PrivatePackage, admin_id: int = Depends(get_current_admin)):
+    if not user_ref(body.uid).get().exists:
+        raise HTTPException(404, "user_not_found")
+    now = time.time()
+    ref = db.collection("packages").document()
+    ref.set({"name_ar": body.name_ar, "name_en": body.name_en or body.name_ar, "price_usd": round(body.price_usd, 2),
+             "duration_days": body.duration_days, "price_stars": body.price_stars, "active": True, "sort_order": 0, "featured": True,
+             "tagline_ar": "باقة خاصة لك", "tagline_en": "Exclusively for you", "features_ar": [body.note_ar] if body.note_ar else [],
+             "features_en": [body.note_en] if body.note_en else [], "private_uid": body.uid, "one_time": True, "used": False,
+             "offer_expires_at": now + body.offer_hours * 3600, "created_by": admin_id, "created_at": now})
+    title_ar, title_en = "🎁 باقة خاصة لك", "🎁 A package just for you"
+    body_ar = f"{body.name_ar}: {body.duration_days} يوم بسعر ${body.price_usd:g} — صالحة {body.offer_hours} ساعة. {body.note_ar}".strip()
+    body_en = f"{body.name_en or body.name_ar}: {body.duration_days} days for ${body.price_usd:g} — valid {body.offer_hours}h. {body.note_en}".strip()
+    notifications.push(db, body.uid, "broadcast", title_ar, title_en, body_ar, body_en, ref.id)
+    if body.via_bot:
+        lang = ((user_ref(body.uid).get().to_dict() or {}).get("language")) or "ar"
+        btn = {"inline_keyboard": [[{"text": "فتح الباقة" if lang == "ar" else "Open package", "web_app": {"url": WEBAPP_URL + "?view=plans"}}]]} if WEBAPP_URL else None
+        tg("sendMessage", chat_id=body.uid, text=f"{title_ar if lang == 'ar' else title_en}\n\n{body_ar if lang == 'ar' else body_en}", **({"reply_markup": btn} if btn else {}))
+    return {"id": ref.id}
+
+
+# ─── تصدير البيانات (CSV يفتح في Excel) ───
+def _csv_response(name: str, header: list, rows: list):
+    import csv
+    import io
+
+    buf = io.StringIO()
+    buf.write("﻿")  # BOM ليعرض Excel العربية بشكل صحيح
+    w = csv.writer(buf)
+    w.writerow(header)
+    for r in rows:
+        w.writerow(["" if v is None else v for v in r])
+    return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}-{time.strftime("%Y%m%d")}.csv"'})
+
+
+def _iso(ts):
+    try:
+        ts = ts.timestamp()
+    except AttributeError:
+        pass
+    return time.strftime("%Y-%m-%d %H:%M", time.gmtime(float(ts))) if ts else ""
+
+
+@app.get("/api/admin/export/{kind}")
+def admin_export(kind: str, request: Request, admin_id: int = Depends(get_current_admin)):
+    write_audit(admin_id, "EXPORT", f"/api/admin/export/{kind}", 200, {k.lower(): v for k, v in request.headers.items()},
+                request.client.host if request.client else None, "")
+    if kind == "users":
+        rows = []
+        for d in db.collection("users").stream():
+            u = d.to_dict() or {}
+            sub = u.get("subscription") or {}
+            rows.append([d.id, u.get("nickname"), u.get("language"), u.get("status"), u.get("mt5_server"),
+                         (u.get("live") or {}).get("balance"), (u.get("live") or {}).get("currency"), sub.get("package_name_en"),
+                         _iso(sub.get("expires_at")), u.get("referred_by"), u.get("campaign"), _iso(u.get("first_seen")), _iso(u.get("last_seen"))])
+        return _csv_response("users", ["telegram_id", "nickname", "language", "status", "mt5_server", "balance", "currency", "package",
+                                       "expires_at_utc", "referred_by", "campaign", "first_seen_utc", "last_seen_utc"], rows)
+    if kind == "payments":
+        rows = [[d.id, p.get("uid"), p.get("method"), p.get("status"), p.get("package_id"), p.get("amount_usd"), p.get("amount_ton"),
+                 p.get("amount_stars") or p.get("price_stars"), p.get("pay_currency"), _iso(p.get("created_at")), _iso(p.get("confirmed_at"))]
+                for d in db.collection("payments").stream() for p in [d.to_dict() or {}]]
+        return _csv_response("payments", ["order_id", "telegram_id", "method", "status", "package", "usd", "ton", "stars", "coin",
+                                          "created_utc", "confirmed_utc"], rows)
+    if kind == "tickets":
+        rows = [[d.id, t.get("uid"), t.get("status"), t.get("priority"), t.get("channel"), t.get("lang"), t.get("subject"),
+                 (t.get("csat") or {}).get("score") if isinstance(t.get("csat"), dict) else "", t.get("ai_attempts"),
+                 _iso(t.get("created_at")), _iso(t.get("updated_at"))]
+                for d in db.collection(support.TICKETS).stream() for t in [d.to_dict() or {}]]
+        return _csv_response("tickets", ["ticket", "telegram_id", "status", "priority", "channel", "lang", "subject", "csat",
+                                         "ai_replies", "created_utc", "updated_utc"], rows)
+    raise HTTPException(404, "unknown_export")

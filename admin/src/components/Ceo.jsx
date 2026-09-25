@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api";
+import Funnel from "./Funnel";
 
 const n = (v) => (v == null ? "—" : Number(v).toLocaleString("en-US"));
 const usd = (v) => (v == null ? "—" : `$${Number(v).toLocaleString("en-US", { maximumFractionDigits: 2 })}`);
@@ -75,6 +76,14 @@ export default function Ceo() {
         <Kpi label="نسبة من دفع من المربوطين" value={s.conversion_pct == null ? "—" : `${s.conversion_pct}%`} hint={`${n(s.paying_users)} مستخدم دفع`} />
         <Kpi label="جاؤوا عبر الإحالة" value={n(u.referred)} />
       </div>
+
+      {d.funnel && (
+        <div className="panel">
+          <h2>قمع التحويل (من فتح التطبيق حتى التجديد)</h2>
+          <Funnel f={d.funnel} />
+          <p className="muted">لقمع كل حملة إعلانية على حدة وإرسال عروض الاسترجاع تلقائيًا: صفحة «النمو والتسويق».</p>
+        </div>
+      )}
 
       <div className="two-col">
         <div className="panel">
