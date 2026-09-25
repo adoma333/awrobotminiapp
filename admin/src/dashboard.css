@@ -120,7 +120,7 @@ table.list tbody tr:hover { background: var(--surface-2); }
 .ucard .meta { color: var(--muted); font-size: 12.5px; display: flex; gap: 10px; flex-wrap: wrap; }
 .empty { text-align: center; color: var(--muted); padding: 50px 20px; border: 1px dashed var(--border); border-radius: var(--radius); }
 
-.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 20; }
+.overlay { position: fixed; inset: 0; background: var(--overlay); z-index: 20; }
 .sheet {
   position: fixed; top: 0; inset-inline-end: 0; height: 100%; width: 440px; max-width: 100%; overflow-y: auto;
   padding: 20px; display: flex; flex-direction: column; gap: 10px;
@@ -166,12 +166,12 @@ table.list td select { width: auto; }
   .mobile-bar {
     display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 15;
     padding: 10px 14px; padding-top: calc(10px + env(safe-area-inset-top, 0px));
-    background: rgba(0,0,0,.92); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border);
+    background: var(--bar-bg); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border);
   }
   .mobile-bar img { height: 24px; }
   .mobile-title { flex: 1; text-align: center; font-weight: 700; font-size: 14px; }
   .menu-btn, .close-btn { padding: 6px 8px; background: none; border-color: var(--border); }
-  .drawer-backdrop { display: block; position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.6); }
+  .drawer-backdrop { display: block; position: fixed; inset: 0; z-index: 40; background: var(--overlay); }
   .drawer {
     position: absolute; top: 0; inset-inline-start: 0; height: 100%; width: min(300px, 86vw); overflow-y: auto;
     display: flex; flex-direction: column; gap: 4px; padding: 16px 12px;
@@ -188,3 +188,85 @@ table.list td select { width: auto; }
   .sheet { width: 100%; }
 }
 @keyframes drawer-in { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* ═════════ الدعم الفني: التذاكر والمحادثة ═════════ */
+.ticket-list { display: flex; flex-direction: column; gap: 8px; }
+.ticket-row {
+  display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: start; padding: 12px 14px;
+  background: var(--surface); border: 1px solid var(--border); border-inline-start: 3px solid var(--border); border-radius: var(--radius);
+}
+.ticket-row:hover { border-color: var(--border-strong); }
+.ticket-row.pr-critical { border-inline-start-color: var(--bad); }
+.ticket-row.pr-medium { border-inline-start-color: var(--warn); }
+.ticket-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ticket-subject { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet.wide { width: 620px; }
+.note-box { padding: 10px 12px; border-radius: var(--radius); background: var(--accent-dim); border: 1px solid var(--border-strong); font-size: 13.5px; }
+.note-box.bad { background: var(--bad-dim); border-color: var(--bad); }
+.note-box p { margin: 4px 0 0; white-space: pre-wrap; }
+.chat { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow-y: auto; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); }
+.msg { max-width: 86%; padding: 8px 12px; border-radius: 12px; font-size: 13.5px; background: var(--surface-2); border: 1px solid var(--border); }
+.msg p { margin: 2px 0 0; white-space: pre-wrap; word-break: break-word; }
+.msg-role { font-size: 11px; color: var(--muted); }
+.msg.user { align-self: flex-start; }
+.msg.ai { align-self: flex-end; background: var(--accent-dim); border-color: var(--border-strong); }
+.msg.agent { align-self: flex-end; background: var(--ok-dim); border-color: var(--ok); }
+.prompt-box { min-height: 420px; font-size: 13px; line-height: 1.7; font-family: var(--mono); }
+
+/* ═════════ الإشعارات ونافذة التحديثات ═════════ */
+.filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; padding: 12px; border: 1px dashed var(--border); border-radius: var(--radius); }
+.inline-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.feat-row { display: grid; grid-template-columns: 140px 1fr 1fr; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.feat-row textarea { grid-column: span 1; }
+.feat-row button { justify-self: start; }
+.ann-thumb { width: 120px; height: 68px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
+.sticky-actions { position: sticky; bottom: -20px; padding: 12px 0; background: var(--surface); border-top: 1px solid var(--border); }
+
+/* ═════════ محفظة TON ═════════ */
+.stack { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.break { word-break: break-all; }
+.otp-modal {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 30;
+  width: min(420px, calc(100vw - 24px)); display: flex; flex-direction: column; gap: 12px; padding: 22px;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow);
+}
+.otp-modal h2 { margin: 0; font-size: 17px; }
+.otp-input { font-size: 26px; letter-spacing: 10px; text-align: center; padding: 12px; }
+
+/* ═════════ التنبيهات الفورية ═════════ */
+.alerts { position: relative; }
+.alerts-btn { position: relative; width: 38px; height: 38px; padding: 0; display: grid; place-items: center; border-radius: 10px; color: var(--muted); }
+.alerts-btn:hover { color: var(--accent); }
+.alerts-count {
+  position: absolute; top: -6px; inset-inline-end: -6px; min-width: 18px; height: 18px; padding: 0 4px;
+  display: grid; place-items: center; border-radius: 9px; background: var(--bad); color: #fff; font-size: 11px; font-weight: 700;
+}
+.alerts-panel {
+  position: absolute; top: calc(100% + 8px); inset-inline-start: 0; z-index: 60; width: 340px; max-width: calc(100vw - 24px);
+  max-height: 70vh; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+}
+.alerts-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.alert-item { display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: start; padding: 12px 14px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
+.alert-item > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13px; }
+.alert-item.is-new { background: var(--accent-dim); }
+.alert-item:hover { background: var(--surface-2); }
+.alert-toasts { position: fixed; bottom: 18px; inset-inline-start: 18px; z-index: 70; display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100vw - 36px)); }
+.alert-toast {
+  display: flex; flex-direction: column; gap: 3px; text-align: start; padding: 12px 14px; font-size: 13px;
+  background: var(--surface); border: 1px solid var(--border-strong); border-inline-start: 4px solid var(--accent); border-radius: 10px; box-shadow: var(--shadow);
+  animation: fadeIn .2s ease both;
+}
+.alert-toast.lvl-critical { border-inline-start-color: var(--bad); }
+.alert-toast span { color: var(--muted); }
+.theme-btn { display: flex; align-items: center; justify-content: center; gap: 8px; }
+
+@media (max-width: 900px) {
+  .mobile-bar .alerts-panel { inset-inline-start: auto; inset-inline-end: -50px; }
+  .feat-row { grid-template-columns: 1fr; }
+  .sheet.wide { width: 100%; }
+  .msg { max-width: 94%; }
+}
+.sheet > * { flex-shrink: 0; }
+/* لوحة التنبيهات على سطح المكتب: خارج صندوق التمرير في الشريط الجانبي */
+.nav .alerts-panel { position: fixed; top: 18px; inset-inline-start: 276px; }
+.nav { z-index: 25; }

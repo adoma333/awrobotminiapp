@@ -10,6 +10,11 @@ import Servers from "./Servers";
 import Staff from "./Staff";
 import Audit from "./Audit";
 import SystemStatus from "./SystemStatus";
+import Support from "./Support";
+import Notifications from "./Notifications";
+import Announcements from "./Announcements";
+import TonWallet from "./TonWallet";
+import Alerts from "./Alerts";
 import "../dashboard.css";
 
 const I = {
@@ -23,6 +28,12 @@ const I = {
   staff: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8M4 21a8 8 0 0 1 16 0",
   audit: "M9 5H5v16h14V5h-4M9 3h6v4H9ZM8 12h8M8 16h5",
   system: "M22 12h-4l-3 9L9 3l-3 9H2",
+  support: "M4 14v-2a8 8 0 0 1 16 0v2M3 13.5h4V20H3ZM17 13.5h4V20h-4ZM19 20a3.5 3.5 0 0 1-3.5 2H13",
+  notifications: "M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15ZM10 20.5a2.2 2.2 0 0 0 4 0",
+  announcements: "M4 10v4a1 1 0 0 0 1 1h2l6 4V5L7 9H5a1 1 0 0 0-1 1ZM17 9a4 4 0 0 1 0 6",
+  ton: "M4 7h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a1 1 0 0 1-1-1V6a2 2 0 0 1 2-2h10M16 13.5h.01",
+  sun: "M12 3v2M12 19v2M5 5l1.4 1.4M17.6 17.6 19 19M3 12h2M19 12h2M5 19l1.4-1.4M17.6 6.4 19 5M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8",
+  moon: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z",
 };
 const Ico = ({ d }) => (
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
@@ -30,17 +41,48 @@ const Ico = ({ d }) => (
 
 // الأقسام مجمّعة؛ كل صفحة تظهر فقط لمن يملك صلاحية قسمها
 const GROUPS = [
-  { title: "نظرة عامة", pages: [{ key: "ceo", label: "لوحة الرئيس التنفيذي", area: "ceo" }, { key: "system", label: "حالة النظام", area: "system" }] },
-  { title: "العملاء", pages: [{ key: "users", label: "المستخدمون", area: "users" }] },
-  { title: "المبيعات والنمو", pages: [
+  { title: "نظرة عامة", pages: [{ key: "ceo", label: "التقارير والإحصاءات", area: "ceo" }, { key: "system", label: "حالة النظام", area: "system" }] },
+  { title: "المستخدمون", pages: [{ key: "users", label: "المستخدمون", area: "users" }] },
+  { title: "المالية", pages: [
     { key: "packages", label: "الباقات", area: "packages" },
     { key: "rewards", label: "المكافآت والكوبونات", area: "rewards" },
-    { key: "leaderboard", label: "ترتيب الأسبوع", area: "settings" },
+    { key: "ton", label: "محفظة TON", area: "ton" },
   ] },
+  { title: "الدعم", pages: [{ key: "support", label: "الدعم الفني الذكي", area: "support" }] },
+  { title: "الإشعارات", pages: [
+    { key: "notifications", label: "إرسال الإشعارات", area: "notifications" },
+    { key: "announcements", label: "نافذة التحديثات", area: "notifications" },
+  ] },
+  { title: "النمو", pages: [{ key: "leaderboard", label: "ترتيب الأسبوع", area: "settings" }] },
   { title: "الإعدادات", pages: [{ key: "control", label: "مركز التحكم", area: "settings" }, { key: "servers", label: "خوادم MT5", area: "settings" }] },
   { title: "الإدارة", pages: [{ key: "staff", label: "فريق العمل", area: "staff" }, { key: "audit", label: "سجل العمليات", area: "audit" }] },
 ];
-const ICON_OF = { ceo: I.ceo, system: I.system, users: I.users, packages: I.packages, rewards: I.rewards, leaderboard: I.leaderboard, control: I.control, servers: I.servers, staff: I.staff, audit: I.audit };
+const ICON_OF = { ceo: I.ceo, system: I.system, users: I.users, packages: I.packages, rewards: I.rewards, leaderboard: I.leaderboard, control: I.control,
+  servers: I.servers, staff: I.staff, audit: I.audit, support: I.support, notifications: I.notifications, announcements: I.announcements, ton: I.ton };
+
+function useMobile() {
+  const q = "(max-width: 900px)";
+  const [m, setM] = useState(() => window.matchMedia(q).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(q);
+    const on = () => setM(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return m;
+}
+
+const THEME_KEY = "aw_admin_theme";
+function useTheme() {
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem(THEME_KEY) || "dark"; } catch { return "dark"; }
+  });
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem(THEME_KEY, theme); } catch { /* تخزين غير متاح */ }
+  }, [theme]);
+  return [theme, () => setTheme((t) => (t === "dark" ? "light" : "dark"))];
+}
 
 export default function Dashboard({ me, onLogout }) {
   const perms = me?.perms || {};
@@ -51,6 +93,9 @@ export default function Dashboard({ me, onLogout }) {
     return groups.some((g) => g.pages.some((p) => p.key === h)) ? h : first;
   });
   const [drawer, setDrawer] = useState(false);
+  const [theme, toggleTheme] = useTheme();
+  const mobile = useMobile();
+  const go = (key) => groups.some((g) => g.pages.some((p) => p.key === key)) && setPage(key);
   useEffect(() => {
     window.history.replaceState(null, "", `#${page}`);
     setDrawer(false);
@@ -85,6 +130,7 @@ export default function Dashboard({ me, onLogout }) {
           <b>{me?.name || "مرحبًا"}</b>
           <span className="muted">{me?.role_label} · <span className="mono">{me?.admin_id}</span></span>
         </div>
+        <button className="theme-btn" onClick={toggleTheme}><Ico d={theme === "dark" ? I.sun : I.moon} /><span>{theme === "dark" ? "الوضع النهاري" : "الوضع الليلي"}</span></button>
         <button onClick={onLogout}>تسجيل الخروج</button>
       </div>
     </>
@@ -95,13 +141,14 @@ export default function Dashboard({ me, onLogout }) {
       <header className="mobile-bar">
         <img src={logo} alt="AW Robot" />
         <span className="mobile-title">{current?.label}</span>
+        {mobile && <Alerts onGo={go} />}
         <button className="menu-btn" onClick={() => setDrawer(true)} aria-label="القائمة">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
         </button>
       </header>
 
       <nav className="nav">
-        <div className="nav-brand"><img src={logo} alt="AW Robot" /><span>لوحة التحكم</span></div>
+        <div className="nav-brand"><img src={logo} alt="AW Robot" />{!mobile && <Alerts onGo={go} />}</div>
         {nav}
       </nav>
 
@@ -125,6 +172,10 @@ export default function Dashboard({ me, onLogout }) {
         {page === "staff" && <Staff />}
         {page === "audit" && <Audit />}
         {page === "system" && <SystemStatus />}
+        {page === "support" && <Support canWrite={canWrite("support")} />}
+        {page === "notifications" && <Notifications canWrite={canWrite("notifications")} />}
+        {page === "announcements" && <Announcements canWrite={canWrite("notifications")} />}
+        {page === "ton" && <TonWallet canWrite={canWrite("ton")} />}
       </main>
     </div>
   );

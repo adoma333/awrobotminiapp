@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import ErrorNote from './ErrorNote';
 import { getRewards, redeemReward } from '../api';
 import { haptic, requestContact } from '../telegram';
 import { CHECKOUT_TYPES, countdown, prizeIcon, prizeLabel } from '../rewards';
@@ -92,7 +93,7 @@ export default function RewardsHub({ t, onBack, onUse, onRedeemed }) {
         <h1>{t.rwTitle}</h1>
       </div>
 
-      {error && <p className="note warn">{t.rwErr}</p>}
+      {error && <ErrorNote t={t} kind="operation" code="rewards_load_failed">{t.rwErr}</ErrorNote>}
       {!error && !data && <div className="loader" role="status" aria-label={t.loading} />}
 
       {needPhone && (

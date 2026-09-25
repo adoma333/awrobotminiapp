@@ -75,6 +75,37 @@ export const api = {
   revokeReward: (id) => request(`/rewards/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
   extendReward: (id, hours) =>
     request(`/rewards/${encodeURIComponent(id)}/extend`, { method: "POST", body: JSON.stringify({ hours }) }),
+  // الدعم الفني الذكي
+  supportConfig: () => request("/support/config"),
+  saveSupportConfig: (patch) => request("/support/config", { method: "PUT", body: JSON.stringify(patch) }),
+  tickets: (params = {}) => request(`/support/tickets?${new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString()}`),
+  ticket: (id) => request(`/support/tickets/${encodeURIComponent(id)}`),
+  replyTicket: (id, text) => request(`/support/tickets/${encodeURIComponent(id)}/reply`, { method: "POST", body: JSON.stringify({ text }) }),
+  ticketStatus: (id, status, note = "", priority = null) =>
+    request(`/support/tickets/${encodeURIComponent(id)}/status`, { method: "POST", body: JSON.stringify({ status, note, priority }) }),
+  kb: () => request("/support/kb"),
+  addKb: (q, a) => request("/support/kb", { method: "POST", body: JSON.stringify({ q, a }) }),
+  deleteKb: (id) => request(`/support/kb/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  fixes: () => request("/support/fixes"),
+  errors: (params = {}) => request(`/errors?${new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString()}`),
+  // الإشعارات ونافذة التحديثات
+  notifPreview: (target) => request("/notifications/preview", { method: "POST", body: JSON.stringify(target) }),
+  broadcast: (data) => request("/notifications/broadcast", { method: "POST", body: JSON.stringify(data) }),
+  broadcasts: () => request("/notifications/broadcasts"),
+  announcements: () => request("/announcements"),
+  createAnnouncement: (data) => request("/announcements", { method: "POST", body: JSON.stringify(data) }),
+  saveAnnouncement: (id, patch) => request(`/announcements/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }),
+  deleteAnnouncement: (id) => request(`/announcements/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  seedAnnouncement: () => request("/announcements/seed", { method: "POST" }),
+  uploadImage: (photo) => request("/media/image", { method: "POST", body: JSON.stringify({ photo }) }),
+  // محفظة TON (العمليات الحساسة تتطلب OTP)
+  tonOverview: () => request("/ton/overview"),
+  tonOtp: (action, params) => request("/ton/otp", { method: "POST", body: JSON.stringify({ action, params }) }),
+  tonExecute: (otp_id, code) => request("/ton/execute", { method: "POST", body: JSON.stringify({ otp_id, code }) }),
+  tonTransferResult: (data) => request("/ton/transfer-result", { method: "POST", body: JSON.stringify(data) }),
+  tonLog: () => request("/ton/log"),
+  // تنبيهات فورية
+  alerts: (since) => request(`/alerts?since=${since || 0}`),
 };
 
 export { ApiError };

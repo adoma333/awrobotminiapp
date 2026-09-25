@@ -55,6 +55,17 @@ export default function Ceo() {
         <Kpi label="متوسط ما يدفعه المشترك" value={usd(r.arpu_usd)} hint={`نجوم تلجرام: ${n(r.stars_total)} ⭐`} />
       </div>
 
+      {d.support && (
+        <>
+          <h2 className="group-title">الدعم الفني</h2>
+          <div className="kpi-grid">
+            <div className="kpi accent"><span className="kpi-label">تذاكر مفتوحة</span><span className="kpi-value">{d.support.open}</span></div>
+            <div className="kpi bad"><span className="kpi-label">حرجة مفتوحة</span><span className="kpi-value">{d.support.critical_open}</span></div>
+            <div className="kpi"><span className="kpi-label">مع الفريق البشري</span><span className="kpi-value">{d.support.escalated}</span></div>
+            <div className="kpi ok"><span className="kpi-label">رضا العملاء</span><span className="kpi-value">{d.support.csat_avg ? `${d.support.csat_avg}/5` : "—"}</span><span className="kpi-hint">{d.support.csat_count} تقييم · {d.support.resolved} محلولة</span></div>
+          </div>
+        </>
+      )}
       <h2 className="group-title">المستخدمون والاشتراكات</h2>
       <div className="kpi-grid">
         <Kpi label="كل المستخدمين" value={n(u.total)} hint={`+${n(u.new_7d)} هذا الأسبوع · +${n(u.new_30d)} هذا الشهر`} />

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import ErrorNote from './ErrorNote';
 import { claimScratch, openSealedPrize, revealScratch } from '../api';
 import { haptic } from '../telegram';
 import { prizeIcon, prizeLabel } from '../rewards';
@@ -163,7 +164,7 @@ export default function ScratchCard({ t, cardId, onRevealed, onNeedPhone }) {
     if (!doneRef.current && prize && clearedRatio(canvasRef.current) >= REVEAL_AT) finish();
   };
 
-  if (error) return <p className="note warn">{t.rwErr}</p>;
+  if (error) return <ErrorNote t={t} kind="operation" code={`scratch_${error}`}>{t.rwErr}</ErrorNote>;
 
   return (
     <div className={`scratch ${done ? 'is-done' : ''}`}>

@@ -39,7 +39,11 @@ import rewards
 import leaderboard
 import servers
 import admin_access
+import announcements
+import notifications
+import support
 import ton
+import tonadmin
 from retry import RetryableError, raise_for_retryable, with_backoff
 from tenacity import retry, stop_after_attempt, wait_exponential
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -142,14 +146,15 @@ async def lifespan(_app):
     threading.Thread(target=_watchdog, daemon=True, name="tg-watchdog").start()
     heartbeat.start(notify_admins, record_system_event)
     threading.Thread(target=lambda: _safe(backfill_servers), daemon=True, name="servers-backfill").start()
+    _safe(lambda: tonadmin.load_override(db))
+    _safe(lambda: announcements.seed_default(db))
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "weekly"), "cron", day_of_week="mon", hour=9, id="digest_weekly")
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "monthly"), "cron", day=1, hour=9, id="digest_monthly")
     _scheduler.add_job(retry_inbox, "interval", seconds=60, id="webhook_inbox_retry")
     _scheduler.add_job(cleanup_share_media, "cron", hour=4, id="share_media_cleanup")
     _scheduler.add_job(_leaderboard_tick, "interval", seconds=leaderboard.TICK_SEC, id="leaderboard_tick")
     _scheduler.add_job(lambda: reminders.run_renewal_reminders(db, tg, WEBAPP_URL), "cron", hour=10, id="renewal_reminders")
-    if ton.configured():
-        _scheduler.add_job(scan_ton_payments, "interval", seconds=60, id="ton_scan")
+    _scheduler.add_job(scan_ton_payments, "interval", seconds=60, id="ton_scan")  # يتجاهل الدورة إن لم تُضبط محفظة
     _scheduler.start()
     yield
     _scheduler.shutdown(wait=False)
@@ -395,6 +400,9 @@ def register(body: Registration):
         text=f"🟢 ربط تلقائي ناجح: <code>{uid}</code> · {body.mt5.login} · {body.mt5.server} · {account_type}",
         parse_mode="HTML",
     )
+    notifications.push(db, uid, "account", "تم ربط حسابك بنجاح", "Account linked successfully",
+                       f"حساب MT5 {str(body.mt5.login)[-3:].rjust(len(str(body.mt5.login)), '•')} على {body.mt5.server}.",
+                       f"MT5 account {str(body.mt5.login)[-3:].rjust(len(str(body.mt5.login)), '•')} on {body.mt5.server}.")
     try:
         servers.record_success(db, body.mt5.server)  # اسم خادم صحيح 100% لاقتراحات البحث
     except Exception:  # noqa: BLE001
@@ -443,13 +451,22 @@ def _bot_username():
     return _BOT_USERNAME["v"]
 
 
+def _support_public() -> dict:
+    """رابط الدعم الموحّد (سماعة الرأس + زر "تواصل مع الدعم"): بوت الدعم، أو حساب بشري، أو الرابط العام."""
+    cfg = support.get_config(db)
+    bot = cfg.get("support_bot_username") or ("" if cfg.get("support_bot_token") else _bot_username())
+    url = support.contact_link(cfg, _bot_username()) or billing.get_settings(db).get("support_url") or ""
+    return {"support_url": url, "support_bot": bot or "", "support_mode": "bot" if bot else ("account" if url else "none"),
+            "support_phone": cfg.get("support_phone") or ""}
+
+
 def _public_settings() -> dict:
     s = billing.get_settings(db)
     return {
         "kill_switch": bool(s.get("kill_switch")),
         "referral_enabled": bool(s.get("referral_enabled")),
         "referral_days": s.get("referral_days", 7),
-        "support_url": s.get("support_url") or "",
+        **_support_public(),
         "pay_ton": bool(s.get("pay_ton_enabled", True)),
         "pay_crypto": bool(s.get("pay_crypto_enabled", True)),
         "pay_stars": bool(s.get("pay_stars_enabled", True)),
@@ -583,6 +600,8 @@ def handle_callback(cq: dict):
 
     if data == "noop":
         return answer()
+    if support.handle_callback(db, cq):  # تقييم الدعم، طلب موظف، أزرار الموظف
+        return None
     if admin["id"] not in ADMIN_IDS:
         return answer("غير مصرّح لك بهذا الإجراء", True)
 
@@ -736,20 +755,18 @@ def handle_private_message(msg: dict):
     text = (msg.get("text") or "").strip()
     first = text.split()[0].split("@")[0].lower() if text else ""
     if first == "/start":
+        payload = text.split(maxsplit=1)[1].strip() if len(text.split()) > 1 else ""
+        if payload.lower().startswith("err_") or payload.lower() == "support":  # زر "تواصل مع الدعم" / سماعة الرأس
+            return route_to_support(msg)
         return send_welcome(msg, text)
     if first == "/admin":
         return handle_admin_login(msg)
 
     sender = msg["from"]["id"]
-    if sender not in ADMIN_IDS:
-        return
-    if not text or text.startswith("/"):
-        return
-
     state_ref = db.collection("admin_state").document(str(sender))
-    snap = state_ref.get()
-    if not snap.exists:
-        return
+    snap = state_ref.get() if sender in ADMIN_IDS and text and not text.startswith("/") else None
+    if not (snap and snap.exists):
+        return route_to_support(msg)
     state = snap.to_dict()
     state_ref.delete()
 
@@ -759,6 +776,42 @@ def handle_private_message(msg: dict):
         tg("sendMessage", chat_id=sender, text="✅ أُرسل السبب للمستخدم.")
     else:
         tg("sendMessage", chat_id=sender, text="سبق البتّ في هذا الطلب أو لم يعد موجودًا.")
+
+
+def route_to_support(msg: dict):
+    """رسائل المستخدمين للبوت الرئيسي: إن كان هو بوت الدعم يعالجها المساعد، وإلا يوجّه لبوت الدعم المستقل."""
+    cfg = support.get_config(db)
+    if cfg.get("support_bot_token"):
+        if support.handle_agent_reply(db, msg):
+            return None
+        link = support.contact_link(cfg, None)
+        if link:
+            lang = "ar" if (msg["from"].get("language_code") or "ar").startswith("ar") else "en"
+            tg("sendMessage", chat_id=msg["chat"]["id"],
+               text="🎧 للدعم الفني تواصل مع مساعدنا الذكي:" if lang == "ar" else "🎧 For support, chat with our smart assistant:",
+               reply_markup={"inline_keyboard": [[{"text": "🎧 Support", "url": link}]]})
+        return None
+    support.handle_message(db, msg, _bot_username())
+    return None
+
+
+def _support_secret() -> str:
+    return hmac.new(WEBHOOK_SECRET.encode(), b"support-bot", hashlib.sha256).hexdigest()[:48]
+
+
+@app.post("/api/support-webhook")
+def support_webhook(update: dict, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
+    """webhook بوت الدعم المستقل (توكن من لوحة التحكم)."""
+    if not hmac.compare_digest(x_telegram_bot_api_secret_token or "", _support_secret()):
+        raise HTTPException(403, "forbidden")
+    try:
+        if update.get("callback_query"):
+            support.handle_callback(db, update["callback_query"])
+        elif update.get("message"):
+            support.handle_message(db, update["message"])
+    except Exception:  # noqa: BLE001
+        log.exception("support webhook error")
+    return {"ok": True}
 
 
 @app.post("/api/telegram-webhook")
@@ -1085,6 +1138,8 @@ def admin_get_settings(admin_id: int = Depends(get_current_admin)):
 
 @app.put("/api/admin/settings")
 def admin_update_settings(patch: dict, admin_id: int = Depends(get_current_admin)):
+    # تشغيل/إيقاف TON عملية حساسة: تمر فقط عبر /api/admin/ton (رمز OTP)، لا من الإعدادات العامة
+    patch = {k: v for k, v in patch.items() if k != "pay_ton_enabled"}
     return billing.update_settings(db, patch)
 
 
@@ -1151,6 +1206,8 @@ def activate_payment(order_id: str, extra: dict | None = None) -> bool:
             billing.grant_referral_bonus_if_eligible(db, pay["uid"], settings.get("referral_days", 7))
         pay_ref.set({"status": "finished", "confirmed_at": time.time(), **(extra or {})}, merge=True)
     tg("sendMessage", chat_id=pay["uid"], text=PAID_MSG)
+    notifications.push(db, pay["uid"], "payment", "تم تفعيل اشتراكك ✅", "Your subscription is active ✅",
+                       f"تم تأكيد الدفع وتفعيل باقة {pkg.get('name_ar') or ''}.", f"Payment confirmed — {pkg.get('name_en') or ''} plan activated.", order_id)
     return True
 
 
@@ -1634,6 +1691,9 @@ def unlink_account(body: UnlinkRequest):
     )
     tg("sendMessage", chat_id=CHANNEL_ID, parse_mode="HTML",
        text=f"🔓 فكّ ربط: <code>{user['id']}</code> · {escape(str(old_login))} · {escape(str(old_server))}")
+    notifications.push(db, user["id"], "security", "تنبيه أمني: فُكّ ربط حسابك", "Security alert: account unlinked",
+                       "تم فكّ ربط حساب MT5 من التطبيق. إن لم تكن أنت، تواصل مع الدعم فورًا.",
+                       "Your MT5 account was unlinked in the app. If this wasn't you, contact support immediately.")
     return {"ok": True}
 
 
@@ -1659,19 +1719,31 @@ def update_profile(body: ProfileUpdate):
 # ═══════════════════════════ الصورة الشخصية ═══════════════════════════
 AVATAR_DIR = os.getenv("AVATAR_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "avatars")
 AVATAR_MAX_BYTES = 400_000
-_AVATAR_NAME = re.compile(r"^[A-Za-z0-9_-]{4,64}\.jpg$")
+_AVATAR_NAME = re.compile(r"^[A-Za-z0-9_-]{4,64}\.(jpg|png|webp)$")
+_MEDIA_TYPES = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
 
 
-def save_avatar(prefix: str, b64: str) -> str:
-    """يحفظ صورة JPEG (base64) ويعيد رابطها العام."""
+def _image_ext(raw: bytes) -> str | None:
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def save_avatar(prefix: str, b64: str, max_bytes: int = AVATAR_MAX_BYTES) -> str:
+    """يحفظ صورة JPEG/PNG/WebP (base64) ويعيد رابطها العام. النوع يُتحقق منه من محتوى الملف لا من اسمه."""
     try:
         raw = base64.b64decode(b64.split(",")[-1], validate=True)
     except (ValueError, TypeError):
         raise HTTPException(422, "bad_image")
-    if len(raw) > AVATAR_MAX_BYTES or not raw.startswith(b"\xff\xd8\xff"):
+    ext = _image_ext(raw)
+    if len(raw) > max_bytes or not ext:
         raise HTTPException(422, "bad_image")
     os.makedirs(AVATAR_DIR, exist_ok=True)
-    name = f"{prefix}_{secrets.token_urlsafe(6)}.jpg"
+    name = f"{prefix}_{secrets.token_urlsafe(6)}.{ext}"
     with open(os.path.join(AVATAR_DIR, name), "wb") as f:
         f.write(raw)
     return f"{WEBAPP_URL}/api/media/avatars/{name}"
@@ -1710,7 +1782,7 @@ def avatar_file(name: str):
     path = os.path.join(AVATAR_DIR, name)
     if not _AVATAR_NAME.match(name) or not os.path.exists(path):
         raise HTTPException(404, "not_found")
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=2592000"})
+    return FileResponse(path, media_type=_MEDIA_TYPES[name.rsplit(".", 1)[-1]], headers={"Cache-Control": "public, max-age=2592000"})
 
 
 class FeedbackRequest(BaseModel):
@@ -2147,6 +2219,7 @@ def admin_ceo(admin_id: int = Depends(get_current_admin)):
         "by_method": by_method,
         "by_package": dict(sorted(by_package.items(), key=lambda x: -x[1])),
         "series": [{"d": d, "signups": signups[d], "revenue": r2(revenue[d])} for d in days],
+        "support": support_stats(),
         "generated_at": now,
     }
 
@@ -2226,7 +2299,7 @@ class AdminPhoto(BaseModel):
 @app.post("/api/admin/leaderboard/photo")
 def admin_leaderboard_photo(body: AdminPhoto, admin_id: int = Depends(get_current_admin)):
     """رفع صورة بروفايل لمنافس في الترتيب؛ يعيد رابطها لاستخدامه في القائمة."""
-    return {"url": save_avatar("lb", body.photo)}
+    return {"url": save_avatar("lb", body.photo, 1_500_000)}
 
 
 @app.put("/api/admin/leaderboard")
@@ -2315,6 +2388,7 @@ def handle_contact(msg: dict):
     if not sender or contact.get("user_id") != sender or not contact.get("phone_number"):
         return
     ok = rewards.verify_phone(db, sender, contact["phone_number"])
+    user_ref(sender).set({"phone_prefix": re.sub(r"\D", "", contact["phone_number"])[:4]}, merge=True)  # فلتر الدولة في الإشعارات
     tg("sendMessage", chat_id=sender,
        text="✅ تم توثيق رقمك. عد للتطبيق لكشف بطاقتك." if ok else "⚠️ هذا الرقم مستخدم لحساب آخر.")
 
@@ -2426,3 +2500,462 @@ def billing_history(init_data: str):
                       or p.get("invoice_id") or doc.id),
         })
     return {"payments": rows}
+
+
+# ═══════════════════════════ الإشعارات (🔔) ═══════════════════════════
+@app.get("/api/notifications")
+def my_notifications(init_data: str):
+    user = verify_init_data(init_data)
+    snap = user_ref(user["id"]).get()
+    return notifications.list_for(db, user["id"], snap.to_dict() if snap.exists else {})
+
+
+@app.post("/api/notifications/read")
+def my_notifications_read(body: InitOnly):
+    user = verify_init_data(body.init_data)
+    notifications.mark_read(db, user["id"])
+    return {"ok": True}
+
+
+class BroadcastTarget(BaseModel):
+    target: str = Field(pattern="^(user|filter|all)$")
+    uid: str | None = Field(default=None, pattern=r"^\d{1,15}$")
+    filter: dict = Field(default_factory=dict)
+
+
+class BroadcastBody(BroadcastTarget):
+    title_ar: str = Field(default="", max_length=120)
+    title_en: str = Field(default="", max_length=120)
+    body_ar: str = Field(default="", max_length=1000)
+    body_en: str = Field(default="", max_length=1000)
+    via_bot: bool = False
+
+
+def _clean_filter(f: dict) -> dict:
+    return {k: v for k, v in (f or {}).items() if k in notifications.FILTERS and v not in (None, "", False)}
+
+
+@app.post("/api/admin/notifications/preview")
+def admin_notifications_preview(body: BroadcastTarget, admin_id: int = Depends(get_current_admin)):
+    uids = notifications.resolve(db, body.target, body.uid, _clean_filter(body.filter))
+    total = sum(1 for _ in db.collection("users").stream()) if uids is None else len(uids)
+    return {"count": total}
+
+
+def _bot_broadcast(uids: list, text_ar: str, text_en: str):
+    for i, uid in enumerate(uids):
+        snap = user_ref(uid).get()
+        lang = ((snap.to_dict() or {}).get("language") if snap.exists else None) or "ar"
+        tg("sendMessage", chat_id=uid, text=text_ar if lang == "ar" else text_en)
+        if i % 25 == 24:
+            time.sleep(1.1)  # حد تلجرام ~30 رسالة/ث
+
+
+@app.post("/api/admin/notifications/broadcast")
+def admin_notifications_broadcast(body: BroadcastBody, admin_id: int = Depends(get_current_admin)):
+    if not (body.title_ar or body.title_en):
+        raise HTTPException(422, "title_required")
+    if body.target == "user" and not body.uid:
+        raise HTTPException(422, "uid_required")
+    row = notifications.broadcast(db, admin_id, body.target, body.title_ar or body.title_en, body.title_en or body.title_ar,
+                                  body.body_ar, body.body_en or body.body_ar, body.uid, _clean_filter(body.filter))
+    if body.via_bot:
+        uids = row["uids"] if not row["all"] else [d.id for d in db.collection("users").stream()]
+        ar = f"🔔 {row['title_ar']}\n\n{row['body_ar']}".strip()
+        en = f"🔔 {row['title_en']}\n\n{row['body_en']}".strip()
+        threading.Thread(target=lambda: _safe(lambda: _bot_broadcast(uids, ar, en)), daemon=True).start()
+    return {k: v for k, v in row.items() if k != "uids"}
+
+
+@app.get("/api/admin/notifications/broadcasts")
+def admin_notifications_history(admin_id: int = Depends(get_current_admin)):
+    rows = [{"id": d.id, **{k: v for k, v in (d.to_dict() or {}).items() if k != "uids"}}
+            for d in db.collection(notifications.BROADCASTS).order_by("at", direction="DESCENDING").limit(200).stream()]
+    return {"rows": rows}
+
+
+# ═══════════════════════════ نافذة "ما الجديد" (Announcements) ═══════════════════════════
+@app.get("/api/announcements")
+def my_announcement(init_data: str):
+    user = verify_init_data(init_data)
+    snap = user_ref(user["id"]).get()
+    return {"announcement": announcements.pick(db, snap.to_dict() if snap.exists else {})}
+
+
+class AnnounceSeen(BaseModel):
+    init_data: str
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{2,40}$")
+    dismiss: bool = False
+
+
+@app.post("/api/announcements/seen")
+def my_announcement_seen(body: AnnounceSeen):
+    user = verify_init_data(body.init_data)
+    announcements.mark_seen(db, user["id"], body.id, body.dismiss)
+    ref = db.collection(announcements.COL).document(body.id)
+    snap = ref.get()
+    if snap.exists:
+        d = snap.to_dict() or {}
+        ref.set({"views": int(d.get("views") or 0) + 1, "dismissals": int(d.get("dismissals") or 0) + int(body.dismiss)}, merge=True)
+    return {"ok": True}
+
+
+@app.get("/api/admin/announcements")
+def admin_announcements(admin_id: int = Depends(get_current_admin)):
+    return {"items": announcements.list_all(db), "defaults": announcements.DEFAULT, "icons": announcements.ICONS}
+
+
+def _save_announcement(aid: str | None, patch: dict, admin_id: int) -> dict:
+    ref = db.collection(announcements.COL).document(aid) if aid else db.collection(announcements.COL).document()
+    snap = ref.get()
+    if aid and not snap.exists:
+        raise HTTPException(404, "not_found")
+    try:
+        clean = announcements.clean(patch, snap.to_dict() if snap.exists else None)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(422, str(e))
+    base = {} if snap.exists else {k: v for k, v in announcements.DEFAULT.items() if k != "id"} | {"enabled": False, "features": []}
+    ref.set({**base, **clean, "updated_at": time.time(), "updated_by": admin_id}, merge=True)
+    return {**announcements.DEFAULT, **(ref.get().to_dict() or {}), "id": ref.id}
+
+
+@app.post("/api/admin/announcements")
+def admin_announcement_create(patch: dict, admin_id: int = Depends(get_current_admin)):
+    return _save_announcement(None, patch, admin_id)
+
+
+@app.put("/api/admin/announcements/{aid}")
+def admin_announcement_update(aid: str, patch: dict, admin_id: int = Depends(get_current_admin)):
+    return _save_announcement(aid, patch, admin_id)
+
+
+@app.delete("/api/admin/announcements/{aid}")
+def admin_announcement_delete(aid: str, admin_id: int = Depends(get_current_admin)):
+    db.collection(announcements.COL).document(aid).delete()
+    return {"ok": True}
+
+
+@app.post("/api/admin/announcements/seed")
+def admin_announcement_seed(admin_id: int = Depends(get_current_admin)):
+    return announcements.seed_default(db)
+
+
+@app.post("/api/admin/media/image")
+def admin_media_image(body: AdminPhoto, admin_id: int = Depends(get_current_admin)):
+    """صورة لنافذة التحديثات (JPEG/PNG/WebP حتى 1.5MB)."""
+    return {"url": save_avatar("ann", body.photo, 1_500_000)}
+
+
+# ═══════════════════════════ سجل الأخطاء + زر "تواصل مع الدعم" ═══════════════════════════
+class ClientError(BaseModel):
+    init_data: str = ""
+    kind: str = Field(default="ui", pattern="^(network|server|operation|ui)$")
+    code: str = Field(default="", max_length=80)
+    message: str = Field(default="", max_length=500)
+    page: str = Field(default="", max_length=60)
+    online: bool | None = None
+    ua: str = Field(default="", max_length=300)
+    context: dict = Field(default_factory=dict)
+    ref: str = Field(default="", max_length=12)
+
+
+def _support_start_link(ref: str) -> str:
+    cfg = support.get_config(db)
+    return support.contact_link(cfg, _bot_username(), f"err_{ref.replace('ERR-', '')}") or _support_public()["support_url"]
+
+
+_ERR_RL: dict = {}
+ERR_RL_MAX = 20  # تقرير خطأ لكل IP في الدقيقة (يمنع إغراق السجل؛ المسار متاح بلا هوية لأخطاء ما قبل الدخول والانقطاع)
+
+
+@app.post("/api/errors")
+def report_client_error(body: ClientError, request: Request):
+    ip = admin_access.client_ip({k.lower(): v for k, v in request.headers.items()}, request.client.host if request.client else "")
+    now = time.time()
+    hits = [t for t in _ERR_RL.get(ip, []) if now - t < 60]
+    if len(hits) >= ERR_RL_MAX:
+        raise HTTPException(429, "too_many_reports")
+    _ERR_RL[ip] = hits + [now]
+    if len(_ERR_RL) > 5000:
+        _ERR_RL.clear()
+    uid = None
+    if body.init_data:
+        try:
+            uid = verify_init_data(body.init_data)["id"]
+        except HTTPException:
+            uid = None
+    ctx = {k: str(v)[:200] for k, v in list((body.context or {}).items())[:12]}
+    row = support.log_error(db, uid, body.kind, body.code, body.message, body.page, body.online,
+                            body.ua or request.headers.get("user-agent", ""), ctx, "client", body.ref or None)
+    return {"ref": row["ref"], "priority": row["priority"], "support_url": _support_start_link(row["ref"])}
+
+
+@app.exception_handler(Exception)
+async def server_error_handler(request: Request, exc: Exception):
+    """أي خطأ غير متوقع في الخادم: يُسجَّل برقم مرجعي يظهر للمستخدم مع زر الدعم."""
+    from fastapi.responses import JSONResponse
+
+    log.exception("unhandled error on %s", request.url.path, exc_info=exc)
+    row = await run_in_threadpool(support.log_error, db, None, "server", "500", f"{type(exc).__name__}: {exc}"[:400],
+                                  request.url.path[:60], True, request.headers.get("user-agent", ""), {}, "server")
+    return JSONResponse({"detail": "server_error", "ref": row["ref"]}, status_code=500)
+
+
+@app.get("/api/admin/errors")
+def admin_errors(kind: str | None = None, q: str | None = None, limit: int = 200, admin_id: int = Depends(get_current_admin)):
+    rows = [d.to_dict() or {} for d in db.collection(support.ERRORS).order_by("at", direction="DESCENDING").limit(max(1, min(limit, 1000))).stream()]
+    if kind:
+        rows = [r for r in rows if r.get("kind") == kind]
+    if q:
+        ql = q.lower()
+        rows = [r for r in rows if ql in json.dumps(r, ensure_ascii=False, default=str).lower()]
+    return {"rows": rows}
+
+
+# ═══════════════════════════ الدعم الفني الذكي (لوحة التحكم) ═══════════════════════════
+support.NOTIFY["fn"] = lambda uid, kind, tar, ten, bar, ben: notifications.push(db, uid, kind, tar, ten, bar, ben)
+
+
+def _recheck_payment_for(uid) -> dict | None:
+    """أداة الإصلاح الذاتي recheck_payment: تسأل المزوّد نفسه؛ لا تفعيل بدون تأكيده."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    pays = [{"id": d.id, **(d.to_dict() or {})} for d in db.collection("payments").where(filter=FieldFilter("uid", "==", int(uid))).stream()]
+    pays = [p for p in pays if p.get("status") not in ("finished", "failed", "expired", "refunded")
+            and time.time() - float(p.get("created_at") or 0) < 48 * 3600]
+    if not pays:
+        return None
+    p = max(pays, key=lambda x: x.get("created_at") or 0)
+    if p.get("method") == "ton":
+        try:
+            scan_ton_payments(only_order=p["id"], raise_errors=True)
+        except Exception as e:  # noqa: BLE001
+            return {"order_id": p["id"], "method": "ton", "status": p.get("status"), "activated": False, "error": str(e)[:120]}
+    elif p.get("np_payment_id"):
+        try:
+            remote = payments.get_payment(p["np_payment_id"]).get("payment_status")
+            if remote and remote != p.get("status"):
+                process_nowpayments({"order_id": p["id"], "payment_status": remote, "payment_id": p["np_payment_id"]})
+        except payments.PaymentError as e:
+            return {"order_id": p["id"], "method": p.get("method"), "status": p.get("status"), "activated": False, "error": str(e)[:120]}
+    now = (db.collection("payments").document(p["id"]).get().to_dict() or {}).get("status")
+    return {"order_id": p["id"], "method": p.get("method"), "status": now, "activated": now == "finished"}
+
+
+support.PAYMENT_CHECKER["fn"] = _recheck_payment_for
+
+
+@app.get("/api/admin/support/config")
+def admin_support_config(admin_id: int = Depends(get_current_admin)):
+    cfg = support.get_config(db)
+    return {**support.public_config(cfg), "default_prompt": support.DEFAULT_PROMPT, "ai_available": support.ai_available(),
+            "main_bot_username": _bot_username(), "contact_url": _support_public()["support_url"],
+            "fix_actions": list(support.FIX_ACTIONS)}
+
+
+@app.put("/api/admin/support/config")
+def admin_support_config_update(patch: dict, admin_id: int = Depends(get_current_admin)):
+    try:
+        clean = support.clean_config(patch)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(422, str(e))
+    cur = support.get_config(db)
+    hook = None
+    if "support_bot_token" in clean and clean["support_bot_token"] != cur.get("support_bot_token"):
+        if clean["support_bot_token"]:
+            if not (WEBAPP_URL or "").startswith("https://"):
+                raise HTTPException(422, "webapp_url_required")
+            hook = support.setup_webhook({**cur, **clean}, f"{WEBAPP_URL}/api/support-webhook", _support_secret())
+            if not hook["ok"]:
+                raise HTTPException(422, f"bot_token_rejected: {hook.get('description')}")
+            clean["support_bot_username"] = hook.get("username") or ""
+        else:
+            clean["support_bot_username"] = ""
+    cfg = support.save_config(db, clean)
+    return {**support.public_config(cfg), "webhook": hook}
+
+
+@app.get("/api/admin/support/tickets")
+def admin_support_tickets(status: str | None = None, priority: str | None = None, q: str | None = None,
+                          admin_id: int = Depends(get_current_admin)):
+    rows = [{"id": d.id, **(d.to_dict() or {})} for d in db.collection(support.TICKETS).order_by("updated_at", direction="DESCENDING").limit(500).stream()]
+    if status == "active":
+        rows = [r for r in rows if r.get("status") in ("open", "in_progress", "escalated")]
+    elif status:
+        rows = [r for r in rows if r.get("status") == status]
+    if priority:
+        rows = [r for r in rows if r.get("priority") == priority]
+    if q:
+        ql = q.lower().lstrip("#")
+        rows = [r for r in rows if ql in f"{r['id']} {r.get('uid')} {r.get('subject')}".lower()]
+    for r in rows:
+        r.pop("history", None)
+    return {"rows": rows, "stats": support_stats()}
+
+
+def support_stats() -> dict:
+    rows = [d.to_dict() or {} for d in db.collection(support.TICKETS).order_by("updated_at", direction="DESCENDING").limit(1000).stream()]
+    active = [r for r in rows if r.get("status") in ("open", "in_progress", "escalated")]
+    scores = [r["csat"]["score"] for r in rows if isinstance(r.get("csat"), dict) and r["csat"].get("score")]
+    return {"open": len(active), "critical_open": sum(1 for r in active if r.get("priority") == "critical"),
+            "escalated": sum(1 for r in active if r.get("status") == "escalated"),
+            "resolved": sum(1 for r in rows if r.get("status") in ("resolved", "closed")),
+            "csat_avg": round(sum(scores) / len(scores), 2) if scores else None, "csat_count": len(scores), "total": len(rows)}
+
+
+@app.get("/api/admin/support/tickets/{tid}")
+def admin_support_ticket(tid: str, admin_id: int = Depends(get_current_admin)):
+    t = support.get_ticket(db, tid)
+    if not t:
+        raise HTTPException(404, "not_found")
+    return {"ticket": t, "messages": support.messages_of(db, tid), "context": support.user_context(db, t["uid"]),
+            "error": support.get_error(db, t.get("error_ref")) if t.get("error_ref") else None}
+
+
+class TicketReply(BaseModel):
+    text: str = Field(min_length=1, max_length=3500)
+
+
+@app.post("/api/admin/support/tickets/{tid}/reply")
+def admin_support_reply(tid: str, body: TicketReply, admin_id: int = Depends(get_current_admin)):
+    t = support.agent_reply(db, support.get_config(db), tid, body.text.strip(), by=f"admin:{admin_id}")
+    if not t:
+        raise HTTPException(404, "not_found")
+    return {"ok": True, "ticket": t}
+
+
+class TicketStatus(BaseModel):
+    status: str = Field(pattern="^(open|in_progress|escalated|resolved|closed)$")
+    note: str = Field(default="", max_length=300)
+    priority: str | None = Field(default=None, pattern="^(critical|medium|low)$")
+
+
+@app.post("/api/admin/support/tickets/{tid}/status")
+def admin_support_status(tid: str, body: TicketStatus, admin_id: int = Depends(get_current_admin)):
+    if not support.get_ticket(db, tid):
+        raise HTTPException(404, "not_found")
+    if body.priority:
+        db.collection(support.TICKETS).document(tid).set({"priority": body.priority}, merge=True)
+    return {"ticket": support.set_status(db, support.get_config(db), tid, body.status, by=f"admin:{admin_id}", note=body.note)}
+
+
+class KbEntry(BaseModel):
+    q: str = Field(min_length=3, max_length=300)
+    a: str = Field(min_length=3, max_length=2000)
+
+
+@app.get("/api/admin/support/kb")
+def admin_support_kb(admin_id: int = Depends(get_current_admin)):
+    return {"rows": support.kb_entries(db)}
+
+
+@app.post("/api/admin/support/kb")
+def admin_support_kb_add(body: KbEntry, admin_id: int = Depends(get_current_admin)):
+    ref = db.collection(support.KB).document()
+    ref.set({"q": body.q.strip(), "a": body.a.strip(), "at": time.time(), "by": admin_id})
+    return {"id": ref.id}
+
+
+@app.delete("/api/admin/support/kb/{kid}")
+def admin_support_kb_delete(kid: str, admin_id: int = Depends(get_current_admin)):
+    db.collection(support.KB).document(kid).delete()
+    return {"ok": True}
+
+
+@app.get("/api/admin/support/fixes")
+def admin_support_fixes(admin_id: int = Depends(get_current_admin)):
+    return {"rows": [d.to_dict() or {} for d in db.collection(support.FIXES).order_by("at", direction="DESCENDING").limit(300).stream()]}
+
+
+# ═══════════════════════════ محفظة TON (لوحة التحكم + OTP) ═══════════════════════════
+def _send_otp(admin_id, text: str) -> bool:
+    if tonadmin.OTP_BOT_TOKEN:
+        return bool(support.bot_call(tonadmin.OTP_BOT_TOKEN, "sendMessage", chat_id=admin_id, text=text).get("ok"))
+    return bool(tg("sendMessage", chat_id=admin_id, text=text).get("ok"))
+
+
+class TonOtp(BaseModel):
+    action: str = Field(pattern="^(set_wallet|set_window|toggle|transfer)$")
+    params: dict = Field(default_factory=dict)
+
+
+class TonExecute(BaseModel):
+    otp_id: str = Field(min_length=8, max_length=40)
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class TonTransferResult(BaseModel):
+    otp_id: str = Field(min_length=8, max_length=40)
+    ok: bool
+    boc: str = Field(default="", max_length=4000)
+    error: str = Field(default="", max_length=300)
+
+
+@app.get("/api/admin/ton/overview")
+def admin_ton_overview(admin_id: int = Depends(get_current_admin)):
+    return tonadmin.overview(db)
+
+
+@app.post("/api/admin/ton/otp")
+def admin_ton_otp(body: TonOtp, admin_id: int = Depends(get_current_admin)):
+    try:
+        return tonadmin.request_otp(db, admin_id, body.action, body.params, _send_otp)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/admin/ton/execute")
+def admin_ton_execute(body: TonExecute, admin_id: int = Depends(get_current_admin)):
+    try:
+        return tonadmin.execute(db, admin_id, body.otp_id, body.code)
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
+
+
+@app.post("/api/admin/ton/transfer-result")
+def admin_ton_transfer_result(body: TonTransferResult, admin_id: int = Depends(get_current_admin)):
+    try:
+        tonadmin.transfer_result(db, admin_id, body.otp_id, body.ok, body.boc, body.error)
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
+    return {"ok": True}
+
+
+@app.get("/api/admin/ton/log")
+def admin_ton_log(admin_id: int = Depends(get_current_admin)):
+    return {"rows": tonadmin.history(db)}
+
+
+# ═══════════════════════════ تنبيهات فورية داخل اللوحة ═══════════════════════════
+@app.get("/api/admin/alerts")
+def admin_alerts(since: float = 0, admin_id: int = Depends(get_current_admin)):
+    """أحداث مهمة منذ since: خطأ حرج، تذكرة عاجلة/مصعّدة، دفعة كبيرة، عطل في النظام."""
+    now = time.time()
+    since = max(since, now - 7 * 86400)
+    big = float(billing.get_settings(db).get("alert_large_payment_usd") or 400)
+    out = []
+    for d in db.collection(support.ERRORS).order_by("at", direction="DESCENDING").limit(50).stream():
+        e = d.to_dict() or {}
+        if (e.get("at") or 0) > since and e.get("priority") == "critical":
+            out.append({"id": f"e-{d.id}", "type": "error", "level": "critical", "at": e["at"], "page": "support",
+                        "title": f"خطأ حرج {e.get('ref')}", "text": f"{e.get('kind')} · {e.get('message') or e.get('code')}"[:160]})
+    for d in db.collection(support.TICKETS).order_by("updated_at", direction="DESCENDING").limit(50).stream():
+        t = d.to_dict() or {}
+        if (t.get("updated_at") or 0) > since and t.get("status") in ("open", "in_progress", "escalated") \
+                and (t.get("priority") == "critical" or t.get("status") == "escalated"):
+            out.append({"id": f"t-{d.id}-{t.get('status')}", "type": "ticket", "level": "critical" if t.get("priority") == "critical" else "warn",
+                        "at": t["updated_at"], "page": "support", "ref": d.id,
+                        "title": f"تذكرة {'عاجلة' if t.get('priority') == 'critical' else 'مصعّدة'} #{d.id}", "text": (t.get("subject") or "")[:160]})
+    for d in db.collection("payments").order_by("confirmed_at", direction="DESCENDING").limit(30).stream():
+        p = d.to_dict() or {}
+        usd = _pay_usd(p)
+        if p.get("status") == "finished" and (p.get("confirmed_at") or 0) > since and usd >= big:
+            out.append({"id": f"p-{d.id}", "type": "payment", "level": "info", "at": p["confirmed_at"], "page": "ceo",
+                        "title": f"دفعة كبيرة ${round(usd, 2)}", "text": f"{p.get('method')} · {p.get('uid')}"})
+    for d in db.collection("system_events").order_by("at", direction="DESCENDING").limit(20).stream():
+        ev = d.to_dict() or {}
+        if (ev.get("at") or 0) > since:
+            out.append({"id": f"s-{d.id}", "type": "system", "level": "critical" if ev.get("type") in ("down", "stale") else "info",
+                        "at": ev["at"], "page": "system", "title": f"حدث نظام: {ev.get('type')}", "text": str(ev.get("error") or ev.get("detail") or "")[:160]})
+    out.sort(key=lambda x: -x["at"])
+    return {"now": now, "alerts": out[:60], "support": support_stats()}

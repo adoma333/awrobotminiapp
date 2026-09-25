@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import ErrorNote from './ErrorNote';
 import Field from './Field';
 import ServerField from './ServerField';
 import { LOGIN_RE } from '../i18n';
@@ -77,9 +78,9 @@ export default function MT5FormStep({ t, mt5, setMt5, submitting, errorCode, onS
       </div>
 
       {errorCode && (
-        <p className="banner-error" role="alert">
+        <ErrorNote t={t} kind="operation" code={`link_${errorCode}`}>
           {t[`err_${errorCode}`] || t.errGeneric}
-        </p>
+        </ErrorNote>
       )}
 
       <div className="actions">

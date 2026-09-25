@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import logo from './assets/logo-wordmark.png';
 import { messages } from './i18n';
-import { setupTelegram, tgLang, haptic, askWriteAccess, closeApp } from './telegram';
-import { completeOnboarding, errorCodeOf, getStatus, openStatusStream, register } from './api';
+import { setupTelegram, tgLang, haptic, askWriteAccess, closeApp, openExternal } from './telegram';
+import { completeOnboarding, errorCodeOf, getAnnouncement, getNotifications, getStatus, markAnnouncementSeen, openStatusStream, register } from './api';
+import { openSupport, setSupportConfig, setSupportPage } from './support';
 import Stepper from './components/Stepper';
 import LanguageStep from './components/LanguageStep';
 import ProfileStep from './components/ProfileStep';
@@ -23,6 +24,10 @@ import Referral from './components/Referral';
 import TermsRisks from './components/TermsRisks';
 import NetworkBanner from './components/NetworkBanner';
 import { AppSkeleton } from './components/Skeleton';
+import TopBar from './components/TopBar';
+import ErrorCenter, { ErrorBoundary } from './components/ErrorCenter';
+import WhatsNew from './components/WhatsNew';
+import Notifications from './components/Notifications';
 
 const ONBOARD_KEY = 'aw_onboarded';
 const EMPTY_MT5 = { login: '', password: '', server: '' };
@@ -45,6 +50,9 @@ export default function App() {
   const [showTerms, setShowTerms] = useState(false);
   const [preferredReward, setPreferredReward] = useState(null); // جائزة اختارها من محفظة المكافآت
   const [streaming, setStreaming] = useState(false); // بث SSE متصل = لا حاجة للاستعلام الدوري
+  const [unread, setUnread] = useState(0); // شارة 🔔
+  const [ann, setAnn] = useState(null); // نافذة "ما الجديد"
+  const annAsked = useRef(false);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
 
@@ -62,6 +70,42 @@ export default function App() {
     document.documentElement.lang = lang;
     document.documentElement.dir = t.dir;
   }, [lang, t.dir]);
+
+  // رابط الدعم يُحفظ محليًا ليعمل زر الدعم حتى مع انقطاع الخادم
+  useEffect(() => {
+    setSupportConfig(info.settings, info.bot_username);
+  }, [info.settings, info.bot_username]);
+
+  useEffect(() => {
+    setSupportPage(phase === 'dashboard' ? view : `${phase}:${step}`);
+  }, [phase, view, step]);
+
+  // عدد الإشعارات غير المقروءة (كل دقيقة أثناء فتح اللوحة)
+  const refreshUnread = useCallback(() => {
+    getNotifications().then((d) => setUnread(d.unread || 0)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (phase !== 'dashboard') return undefined;
+    refreshUnread();
+    const id = setInterval(refreshUnread, 60000);
+    return () => clearInterval(id);
+  }, [phase, refreshUnread]);
+
+  // نافذة التحديثات: تُطلب مرة واحدة لكل فتح للتطبيق، والخادم يقرر إن كان يحين عرضها
+  useEffect(() => {
+    if (annAsked.current || phase === 'loading' || showOnboarding) return;
+    annAsked.current = true;
+    getAnnouncement().then((r) => r?.announcement && setAnn(r.announcement)).catch(() => {});
+  }, [phase, showOnboarding]);
+
+  function closeAnnouncement(action, never) {
+    const a = ann;
+    setAnn(null);
+    markAnnouncementSeen(a.id, never).catch(() => {});
+    if (action === 'plans' && phase === 'dashboard') setView('plans');
+    else if (action === 'support') openSupport();
+    else if (action === 'url' && a.cta_url) openExternal(a.cta_url);
+  }
 
   const refreshStatus = useCallback(async () => {
     const s = await getStatus();
@@ -218,10 +262,9 @@ export default function App() {
           <img src={logo} alt="AW" />
         </header>
       ) : (
-        <header className="app-bar" dir="ltr">
-          <img src={logo} alt="AW Robot" />
-        </header>
+        <TopBar t={t} showBell={phase === 'dashboard'} unread={unread} onBell={() => setView('notifications')} />
       )}
+      <ErrorBoundary t={t}>
 
       {phase === 'loading' && <AppSkeleton />}
 
@@ -288,6 +331,8 @@ export default function App() {
         <div className="stage has-bottom-nav">
           {view === 'terms' || view === 'privacy' ? (
             <LegalPage t={t} lang={lang} page={view} onBack={() => setView('settings')} />
+          ) : view === 'notifications' ? (
+            <Notifications t={t} lang={lang} onBack={() => setView('main')} onRead={() => setUnread(0)} />
           ) : view === 'faq' ? (
             <FAQ t={t} lang={lang} onBack={() => setView('settings')} />
           ) : view === 'calc' ? (
@@ -339,12 +384,15 @@ export default function App() {
               onBack={() => setView('main')}
             />
           ) : (
-            <Dashboard t={t} lang={lang} data={info} onRenew={() => setView('plans')} onSettings={() => setView('settings')} onRewards={() => setView('rewards')} />
+            <Dashboard t={t} lang={lang} data={info} onRenew={() => setView('plans')} onRewards={() => setView('rewards')} />
           )}
         </div>
       )}
 
+      </ErrorBoundary>
       {phase === 'dashboard' && <BottomNav t={t} view={view} onSelect={setView} />}
+      <ErrorCenter t={t} />
+      {ann && <WhatsNew t={t} lang={lang} ann={ann} onClose={closeAnnouncement} />}
     </main>
   );
 }
