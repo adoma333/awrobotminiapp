@@ -171,7 +171,8 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
     } catch (e) {
       haptic.error();
       if (rewardFailed(e)) return;
-      setMsg(e.detail === 'amount_too_low' ? 'payTooLow' : e.detail === 'payment_provider_error' ? 'payProviderErr' : 'payErr');
+      setMsg(e.detail === 'amount_too_low' ? 'payTooLow' : e.detail === 'gateway_busy_retry' ? 'payBusy'
+        : ['payment_provider_error', 'rate_unavailable'].includes(e.detail) || String(e.detail || '').startsWith('chain_error') ? 'payProviderErr' : 'payErr');
     } finally {
       setBusy('');
     }

@@ -129,6 +129,17 @@ export const api = {
   privatePackage: (data) => request("/packages/private", { method: "POST", body: JSON.stringify(data) }),
   leaderboardScriptPreview: (script, interval_sec) =>
     request("/leaderboard/script/preview", { method: "POST", body: JSON.stringify({ script, interval_sec }) }),
+  // بوابة الدفع الخاصة (AW Pay)
+  gateway: () => request("/gateway"),
+  saveGateway: (patch) => request("/gateway", { method: "PUT", body: JSON.stringify(patch) }),
+  gatewayInvoices: (status = "") => request(`/gateway/invoices${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  gatewayCheck: (id) => request(`/gateway/invoices/${encodeURIComponent(id)}/check`, { method: "POST" }),
+  gatewayAccept: (id, note) => request(`/gateway/invoices/${encodeURIComponent(id)}/accept`, { method: "POST", body: JSON.stringify({ note }) }),
+  gatewayCancel: (id) => request(`/gateway/invoices/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  gatewayAddresses: () => request("/gateway/addresses"),
+  gatewaySweep: (network, uid) => request("/gateway/sweep", { method: "POST", body: JSON.stringify({ network, uid: String(uid) }) }),
+  gatewaySweeps: () => request("/gateway/sweeps"),
+  gatewayTonIncoming: () => request("/gateway/ton-incoming"),
   // تنبيهات فورية
   alerts: (since) => request(`/alerts?since=${since || 0}`),
 };

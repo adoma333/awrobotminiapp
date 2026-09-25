@@ -1514,4 +1514,154 @@ ok("شكل النافذة قابل للتحكم ويُتحقق منه", r.status
 ok("لون غير صالح مرفوض", c.put("/api/admin/announcements/launch", json={"style": {"bg": "red;}"}}).status_code == 422)
 c.post("/api/admin/logout")
 
+# ═════════ 37) بوابة الدفع الخاصة AW Pay (TRON / BSC / TON) ═════════
+import gateway, gw_chains, chain_crypto  # noqa: E402,E401
+raw_, h_ = chain_crypto.sign_legacy_tx(bytes.fromhex("46" * 32), nonce=9, gas_price=20 * 10**9, gas=21000,
+                                       to="0x3535353535353535353535353535353535353535", value=10**18, data=b"", chain_id=1)
+ok("توقيع EIP-155 مطابق للمتجه الرسمي", raw_.endswith("25a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83"))
+ok("عنوان ETH مطابق للمتجه المعروف", chain_crypto.eth_address(bytes.fromhex("4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318")) == "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23")
+ok("تحقق عناوين TRON (checksum)", chain_crypto.is_tron_address(gw_chains.USDT_TRC20) and not chain_crypto.is_tron_address("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6u"))
+ok("قراءة تعليق TON من BOC", chain_crypto.payload_comment(ton.comment_payload("AWTEST1")) == "AWTEST1")
+
+reset(); admin_login(555)
+BAL = {}
+gw_chains.tron_trc20_balance = lambda contract, addr: BAL.get(("usdttrc20", addr), 0)
+gw_chains.tron_trx_balance = lambda addr: BAL.get(("trx", addr), 0)
+gw_chains.bsc_token_balance = lambda contract, addr, confs=0: BAL.get(("usdtbsc", addr), 0)
+gw_chains.bsc_native_balance = lambda addr, confs=0: BAL.get(("bnbbsc", addr), 0)
+gw_chains.usd_rates = lambda ttl=60: {"trx": 0.25, "bnb": 600.0, "ton": 5.0}
+TONTX, JTX, SENT, TXST = [], [], [], {}
+gw_chains.ton_incoming = lambda address, limit=100: list(TONTX)
+gw_chains.ton_jetton_incoming = lambda owner, master, limit=100: list(JTX)
+def _gw_trx(priv, to, amt):
+    SENT.append(("trx", chain_crypto.tron_address(priv), to, amt)); return f"tx{len(SENT)}"
+def _gw_usdt(priv, contract, to, amt, fl):
+    SENT.append(("usdt", chain_crypto.tron_address(priv), to, amt)); return f"tx{len(SENT)}"
+gw_chains.tron_send_trx, gw_chains.tron_send_trc20 = _gw_trx, _gw_usdt
+gw_chains.tron_trc20_fee_sun = lambda frm, contract, to, amt: 20_000_000
+gw_chains.tron_tx_status = lambda tx: TXST.get(tx, "success")
+gw_chains.bsc_gas_price = lambda: 1_000_000_000
+
+ok("البوابة موقوفة افتراضيًا: العملات من NOWPayments", c.get("/api/payments/currencies").json()["provider"] == "nowpayments")
+os.environ.pop("GATEWAY_MASTER_KEY", None)
+ok("لا تشغيل بلا مفتاح رئيسي في .env", c.put("/api/admin/gateway", json={"enabled": True}).status_code == 422)
+os.environ["GATEWAY_MASTER_KEY"] = "11" * 32
+PAY_TRON = chain_crypto.tron_address(bytes.fromhex("22" * 32))
+PAY_TON = "UQ" + "D" * 46
+def _otp_exec(params):
+    CALLS.clear()
+    o_ = c.post("/api/admin/ton/otp", json={"action": "gw_payout", "params": params})
+    if o_.status_code != 200:
+        return o_.status_code
+    code_ = re.search(r"الرمز: (\d{6})", [p_["text"] for m_, p_ in CALLS if m_ == "sendMessage"][-1]).group(1)
+    return c.post("/api/admin/ton/execute", json={"otp_id": o_.json()["otp_id"], "code": code_}).status_code
+ok("عنوان استلام غير صالح للشبكة مرفوض", _otp_exec({"network": "tron", "address": "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23"}) == 422)
+c.put("/api/admin/gateway", json={"payout": {"tron": "TATTACKER"}})
+ok("عنوان الاستلام لا يتغير من الإعدادات العامة", gateway.get_config(DB)["payout"]["tron"] == "")
+ok("تغيير عنوان الاستلام برمز OTP فقط", _otp_exec({"network": "tron", "address": PAY_TRON}) == 200 and _otp_exec({"network": "ton", "address": PAY_TON}) == 200
+   and gateway.get_config(DB)["payout"]["tron"] == PAY_TRON)
+ov_ = c.put("/api/admin/gateway", json={"enabled": True, "sweep_min_usd": {"tron": 10}}).json()
+ok("تشغيل البوابة", ov_["active"] and ov_["ready"] == {"tron": True, "bsc": False, "ton": True})
+cur_ = c.get("/api/payments/currencies").json()
+ok("العملات المتاحة حسب الشبكات الجاهزة فقط", cur_["provider"] == "aw" and {x["code"] for x in cur_["currencies"]} == {"usdttrc20", "trx", "ton", "usdtton"})
+
+add_package("p1", price_usd=12.0)
+add_user(42, status="approved", language="ar")
+r_ = c.post("/api/payments/create", json={"init_data": init_data(42), "package_id": "p1", "pay_currency": "usdttrc20"}).json()
+DEP = gateway.address_of("tron", gateway.deposit_key("tron", 42))
+ok("عنوان إيداع خاص بالمستخدم + مبلغ نظيف", r_["pay_address"] == DEP and r_["display_amount"] == "12" and r_["provider"] == "aw")
+ok("نفس العنوان دائمًا لنفس المستخدم (اشتقاق حتمي)", gateway.address_of("tron", gateway.deposit_key("tron", 42)) == DEP != gateway.address_of("tron", gateway.deposit_key("tron", 43)))
+oid_ = r_["order_id"]
+BAL[("usdttrc20", DEP)] = 5_000_000
+CALLS.clear(); main.run_gateway_tick()
+p_ = DB.store["payments"][oid_]
+ok("دفعة ناقصة: الحالة + رسالة بالمتبقي للمستخدم + تنبيه الأدمن", p_["status"] == "partially_paid"
+   and any("المتبقي 7" in x[1].get("text", "") for x in CALLS if x[1].get("chat_id") == 42) and any(x[1].get("chat_id") == 555 for x in CALLS))
+r2_ = c.post("/api/payments/create", json={"init_data": init_data(42), "package_id": "p1", "pay_currency": "usdttrc20"}).json()
+ok("طلب جديد أثناء دفعة ناقصة يعيد نفس الفاتورة لإكمالها", r2_["order_id"] == oid_ and r2_["remaining"] == "7")
+BAL[("usdttrc20", DEP)] = 11_950_000  # نقص 0.4% ضمن هامش 1%
+main.run_gateway_tick()
+ok("اكتمال الدفع ضمن الهامش يفعّل الاشتراك", DB.store["payments"][oid_]["status"] == "finished" and DB.store["users"]["42"].get("subscription"))
+ok("العنوان يُعلَّم للتجميع", DB.store["gw_addresses"]["tron-42"]["dirty"] and not DB.store["gw_addresses"]["tron-42"]["open_order"])
+
+# التجميع: تمويل الغاز من الخزان ثم تحويل USDT لعنوان الاستلام
+GAS = gateway.address_of("tron", gateway.gas_key("tron"))
+main.run_gateway_sweeps()
+ok("تمويل الغاز من الخزان أولًا", SENT[-1][0] == "trx" and SENT[-1][1] == GAS and SENT[-1][2] == DEP)
+TXST[f"tx{len(SENT)}"] = "pending"
+main.run_gateway_sweeps()
+ok("انتظار تأكيد الشبكة قبل الخطوة التالية", len(SENT) == 1)
+TXST[f"tx{len(SENT)}"] = "success"; BAL[("trx", DEP)] = 21_000_000
+main.run_gateway_sweeps()
+ok("تحويل كامل رصيد USDT إلى عنوان الاستلام", SENT[-1] == ("usdt", DEP, PAY_TRON, 11_950_000))
+main.run_gateway_sweeps()
+sw_ = list(DB.store["gw_sweeps"].values())
+ok("تسجيل عملية التجميع", len(sw_) == 1 and sw_[0]["amount"] == "11.95" and sw_[0]["to"] == PAY_TRON)
+BAL[("usdttrc20", DEP)] = 0; BAL[("trx", DEP)] = 900_000
+main.run_gateway_sweeps(); main.run_gateway_sweeps()
+ok("لا تجميع دون الحد الأدنى + العنوان يعود هادئًا", len(SENT) == 2 and not DB.store["gw_addresses"]["tron-42"]["dirty"])
+
+# لا تجميع أثناء فاتورة مفتوحة، ولا فاتورة أثناء تجميع جارٍ
+r3_ = c.post("/api/payments/create", json={"init_data": init_data(42), "package_id": "p1", "pay_currency": "usdttrc20"}).json()
+BAL[("usdttrc20", DEP)] = 30_000_000
+DB.store["gw_addresses"]["tron-42"]["dirty"] = True
+ok("لا تجميع أثناء فاتورة مفتوحة", gateway.sweep_address(DB, "tron", 42, main.gw_hooks())["state"] == "open_invoice")
+ok("الرصيد القديم لا يُحسب دفعًا للفاتورة الجديدة", DB.store["payments"][r3_["order_id"]]["baseline_units"] == 0)
+main.run_gateway_tick()
+ok("…لكن التحويل الجديد يُحسب", DB.store["payments"][r3_["order_id"]]["status"] == "finished")
+DB.store["gw_addresses"]["tron-42"]["op"] = {"stage": "sweeping", "tx": "txZ", "at": time.time(), "asset": "usdttrc20"}
+TXST["txZ"] = "pending"
+ok("فاتورة جديدة أثناء تجميع جارٍ: انتظر قليلًا", c.post("/api/payments/create", json={"init_data": init_data(42), "package_id": "p1", "pay_currency": "usdttrc20"}).status_code == 409)
+DB.store["gw_addresses"]["tron-42"]["op"] = None
+
+# TON: الدفع المباشر لعنوانك بتعليق فريد
+add_user(77, status="approved", language="en")
+rt_ = c.post("/api/payments/create", json={"init_data": init_data(77), "package_id": "p1", "pay_currency": "ton"}).json()
+ok("TON: عنوانك مباشرة + تعليق فريد + رابط المحفظة", rt_["pay_address"] == PAY_TON and rt_["payin_extra_id"].startswith("AW")
+   and rt_["display_amount"] == "2.4" and "text=" + rt_["payin_extra_id"] in rt_["wallet_link"])
+gateway._TON_CACHE.clear(); TONTX.append({"hash": "hx", "utime": int(time.time()), "amount": 2_400_000_000, "comment": "wrong", "source": "EQs"})
+main.run_gateway_tick()
+ok("تحويل بتعليق آخر لا يُحتسب", DB.store["payments"][rt_["order_id"]]["status"] == "waiting")
+gateway._TON_CACHE.clear(); TONTX.append({"hash": "hy", "utime": int(time.time()), "amount": 2_400_000_000, "comment": rt_["payin_extra_id"].lower(), "source": "EQs"})
+main.run_gateway_tick()
+ok("تحويل بالتعليق الصحيح يفعّل الاشتراك", DB.store["payments"][rt_["order_id"]]["status"] == "finished" and DB.store["payments"][rt_["order_id"]]["tx_hashes"] == ["hy"])
+ru_ = c.post("/api/payments/create", json={"init_data": init_data(77), "package_id": "p1", "pay_currency": "usdtton"}).json()
+gateway._TON_CACHE.clear(); JTX.append({"hash": "hj", "utime": int(time.time()), "amount": 12_000_000, "comment": ru_["payin_extra_id"], "source": "EQs"})
+main.run_gateway_tick()
+ok("USDT على TON بالتعليق", DB.store["payments"][ru_["order_id"]]["status"] == "finished")
+
+# انتهاء المهلة + القبول المتأخر + الإغلاق بدفع ناقص وقرار الأدمن
+add_user(88, status="approved", language="ar")
+rl_ = c.post("/api/payments/create", json={"init_data": init_data(88), "package_id": "p1", "pay_currency": "trx"}).json()
+ok("TRX بسعر السوق", rl_["display_amount"] == "48")
+DEP88 = rl_["pay_address"]
+DB.store["payments"][rl_["order_id"]]["expires_at"] = time.time() - 10
+main.run_gateway_tick()
+ok("انتهاء المهلة", DB.store["payments"][rl_["order_id"]]["status"] == "expired")
+BAL[("trx", DEP88)] = 48_000_000
+main.run_gateway_tick()
+ok("دفعة متأخرة ضمن نافذة القبول تُفعَّل", DB.store["payments"][rl_["order_id"]]["status"] == "finished" and DB.store["payments"][rl_["order_id"]].get("late"))
+add_user(89, status="approved", language="ar")
+rb_ = c.post("/api/payments/create", json={"init_data": init_data(89), "package_id": "p1", "pay_currency": "usdttrc20"}).json()
+BAL[("usdttrc20", rb_["pay_address"])] = 3_000_000
+main.run_gateway_tick()
+DB.store["payments"][rb_["order_id"]]["expires_at"] = time.time() - 49 * 3600
+CALLS.clear(); main.run_gateway_tick()
+ok("إغلاق بدفع ناقص بعد نافذة القبول + تنبيه الأدمن", DB.store["payments"][rb_["order_id"]]["status"] == "underpaid" and any("تحتاج قرارك" in x[1].get("text", "") for x in CALLS))
+inv_ = c.get("/api/admin/gateway/invoices?status=underpaid").json()["rows"]
+ok("قائمة الفواتير في اللوحة", len(inv_) == 1 and inv_[0]["received"] == "3" and inv_[0]["amount"] == "12")
+ok("قبول يدوي من الأدمن يفعّل الاشتراك", c.post(f"/api/admin/gateway/invoices/{rb_['order_id']}/accept", json={"note": "agreed"}).status_code == 200
+   and DB.store["payments"][rb_["order_id"]]["status"] == "finished" and DB.store["users"]["89"].get("subscription"))
+ov2_ = c.get("/api/admin/gateway").json()
+ok("نظرة عامة: الإحصاءات + خزان الغاز", ov2_["stats"]["finished_30d"] >= 5 and ov2_["gas"]["tron"]["address"] == GAS)
+ok("قائمة عناوين الإيداع والتجميعات", len(c.get("/api/admin/gateway/addresses").json()["rows"]) >= 2 and len(c.get("/api/admin/gateway/sweeps").json()["rows"]) == 1)
+CALLS.clear(); W({"message": {"chat": {"id": 555, "type": "private"}, "from": {"id": 555}, "text": "/gateway"}})
+ok("ملخص البوابة في البوت للأدمن (/gateway)", "AW Pay" in CALLS[-1][1]["text"])
+c.put("/api/admin/staff", json={"id": "7778", "role": "support", "name": "S"}); c.post("/api/admin/logout")
+admin_access.invalidate(); admin_login(7778)
+ok("صلاحيات: الدعم لا يصل لبوابة الدفع", c.get("/api/admin/gateway").status_code == 403)
+c.post("/api/admin/logout"); admin_access.invalidate(); admin_login(555)
+c.put("/api/admin/gateway", json={"enabled": False})
+c.post("/api/admin/logout")
+
 print("\nALL BACKEND CHECKS PASSED")

@@ -10,6 +10,8 @@ const STATUS_LABEL = {
   waiting: { ar: 'قيد الانتظار', en: 'Waiting' },
   failed: { ar: 'فشل', en: 'Failed' },
   expired: { ar: 'منتهي', en: 'Expired' },
+  partially_paid: { ar: 'مدفوع جزئيًا', en: 'Partially paid' },
+  underpaid: { ar: 'ناقص — قيد المراجعة', en: 'Underpaid — under review' },
 };
 
 

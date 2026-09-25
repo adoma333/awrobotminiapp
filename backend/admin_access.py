@@ -35,7 +35,7 @@ AREAS = [
     ("/api/admin/staff", "staff"), ("/api/admin/audit", "audit"), ("/api/system/status", "system"),
     ("/api/admin/support/accounts", "settings"),  # حسابات تلجرام الحقيقية: المالك والمدير فقط
     ("/api/admin/support", "support"), ("/api/admin/errors", "support"), ("/api/admin/notifications", "notifications"),
-    ("/api/admin/announcements", "notifications"), ("/api/admin/growth", "packages"), ("/api/admin/export", "settings"), ("/api/admin/media", "notifications"), ("/api/admin/ton", "ton"),
+    ("/api/admin/announcements", "notifications"), ("/api/admin/growth", "packages"), ("/api/admin/export", "settings"), ("/api/admin/media", "notifications"), ("/api/admin/ton", "ton"), ("/api/admin/gateway", "ton"),
 ]
 OPEN_PATHS = {"/api/admin/verify", "/api/admin/logout", "/api/admin/me"}
 
@@ -168,6 +168,11 @@ ACTION_LABEL = [
     (r"^PUT /api/admin/announcements/", "تعديل نافذة تحديثات"),
     (r"^DELETE /api/admin/announcements/", "حذف نافذة تحديثات"),
     (r"^POST /api/admin/media/image$", "رفع صورة"),
+    (r"^PUT /api/admin/gateway$", "تعديل إعدادات بوابة الدفع"),
+    (r"^POST /api/admin/gateway/invoices/[^/]+/accept$", "قبول فاتورة يدويًا (بوابة الدفع)"),
+    (r"^POST /api/admin/gateway/invoices/[^/]+/cancel$", "إلغاء فاتورة (بوابة الدفع)"),
+    (r"^POST /api/admin/gateway/invoices/[^/]+/check$", "فحص فاتورة (بوابة الدفع)"),
+    (r"^POST /api/admin/gateway/sweep$", "تجميع يدوي (بوابة الدفع)"),
     (r"^POST /api/admin/ton/otp$", "طلب رمز تحقق TON"),
     (r"^POST /api/admin/ton/execute$", "تنفيذ عملية TON"),
     (r"^POST /api/admin/ton/transfer-result$", "نتيجة تحويل TON"),

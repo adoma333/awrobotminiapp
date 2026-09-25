@@ -2,23 +2,28 @@ import React, { useEffect, useState } from 'react';
 import ErrorNote from './ErrorNote';
 import QRCode from 'qrcode';
 import { paymentStatus } from '../api';
-import { copyText, haptic } from '../telegram';
+import { copyText, haptic, openExternal } from '../telegram';
 import { useToast } from './Toast';
 import Icon from './Icon';
+import { fill } from '../i18n';
 
 const STEPS = ['waiting', 'confirming', 'finished'];
 const STATUS_STEP = { waiting: 0, partially_paid: 0, confirming: 1, confirmed: 1, sending: 1, finished: 2 };
 
-/** بوابة الدفع المخصّصة: عنوان + مبلغ + QR + عدّاد + حالة حية، بتصميم البوت نفسه (تعمل فوق NOWPayments). */
+/** شاشة الدفع بالعملات الرقمية: عنوان + مبلغ + QR + عدّاد + حالة حية (بوابتنا AW Pay، أو NOWPayments احتياطيًا). */
 export default function CryptoPay({ t, pay, onFinished, onCancel }) {
   const notify = useToast();
   const [qr, setQr] = useState('');
-  const [status, setStatus] = useState('waiting');
+  const [status, setStatus] = useState(pay.status || 'waiting');
+  const [prog, setProg] = useState({ received: pay.received, remaining: pay.remaining }); // الدفع الناقص
   const [now, setNow] = useState(Date.now());
   const exp = pay.expires_at ? Date.parse(pay.expires_at) : null;
   const left = exp ? Math.max(0, exp - now) : null;
   const step = STATUS_STEP[status] ?? 0;
-  const failed = ['failed', 'expired', 'refunded'].includes(status);
+  const failed = ['failed', 'expired', 'refunded', 'replaced', 'closed', 'underpaid', 'cancelled'].includes(status);
+  const partial = status === 'partially_paid' && prog.remaining && prog.remaining !== '0';
+  // روابط ton:// لا تفتح من داخل تلجرام؛ الرابط العام لـ Tonkeeper يفتح المحفظة بالمبلغ والتعليق جاهزين
+  const walletUrl = pay.wallet_link ? pay.wallet_link.replace('ton://transfer/', 'https://app.tonkeeper.com/transfer/') : null;
 
   useEffect(() => {
     QRCode.toDataURL(pay.pay_address, { width: 360, margin: 1, color: { dark: '#000000', light: '#ffffff' } })
@@ -33,6 +38,7 @@ export default function CryptoPay({ t, pay, onFinished, onCancel }) {
         .then((r) => {
           if (!r.status) return;
           setStatus(r.status);
+          if (r.remaining != null) setProg({ received: r.received, remaining: r.remaining });
           if (r.status === 'finished') onFinished();
         })
         .catch(() => {});
@@ -51,7 +57,7 @@ export default function CryptoPay({ t, pay, onFinished, onCancel }) {
   }
 
   const mm = left == null ? null : `${String(Math.floor(left / 60000)).padStart(2, '0')}:${String(Math.floor((left % 60000) / 1000)).padStart(2, '0')}`;
-  const symbol = String(pay.pay_currency || '').toUpperCase().replace(/(TRC20|BSC|ERC20)$/, '');
+  const symbol = pay.symbol || String(pay.pay_currency || '').toUpperCase().replace(/(TRC20|BSC|ERC20)$/, '');
 
   return (
     <section className="step crypto-pay">
@@ -66,6 +72,14 @@ export default function CryptoPay({ t, pay, onFinished, onCancel }) {
           </div>
         ))}
       </div>
+
+      {partial && (
+        <div className="cp-partial" role="status">
+          <b>{t.cpPartialTitle}</b>
+          <span>{fill(t.cpPartial, { got: `${prog.received} ${symbol}`, rem: `${prog.remaining} ${symbol}` })}</span>
+          <button type="button" className="btn soft small" onClick={() => copy(prog.remaining)}><span>{t.cpCopyRemaining}</span></button>
+        </div>
+      )}
 
       <div className="cp-card">
         {qr ? <img className="cp-qr" src={qr} alt="QR" /> : <div className="cp-qr loader" />}
@@ -95,6 +109,9 @@ export default function CryptoPay({ t, pay, onFinished, onCancel }) {
               <button type="button" className="icon-btn small" onClick={() => copy(pay.payin_extra_id)} aria-label={t.copy}><Icon name="copy" size={16} /></button>
             </div>
           </div>
+        )}
+        {walletUrl && !failed && (
+          <button type="button" className="btn primary cp-wallet" onClick={() => openExternal(walletUrl)}><span>{t.cpOpenWallet}</span></button>
         )}
         {mm && !failed && <div className="cp-timer">{t.cpExpires} <b dir="ltr">{mm}</b></div>}
       </div>

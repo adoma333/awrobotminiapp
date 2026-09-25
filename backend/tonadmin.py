@@ -25,9 +25,9 @@ from retry import raise_for_retryable, with_backoff
 CONFIG_DOC = ("config", "ton")
 OTPS = "admin_otp"
 LOG = "ton_admin_log"
-ACTIONS = ("set_wallet", "set_window", "toggle", "transfer")
+ACTIONS = ("set_wallet", "set_window", "toggle", "transfer", "gw_payout")
 ACTION_LABEL = {"set_wallet": "تغيير محفظة الاستلام", "set_window": "تعديل مهلة الدفع", "toggle": "تشغيل/إيقاف الدفع بـ TON",
-                "transfer": "تحويل TON"}
+                "transfer": "تحويل TON", "gw_payout": "تغيير عنوان استلام بوابة الدفع"}
 OTP_TTL = 300
 OTP_ATTEMPTS = 5
 ORDER_RE = r"\d{1,15}-[A-Za-z0-9_]{1,64}-\d{9,12}"
@@ -111,6 +111,13 @@ def validate(action: str, params: dict) -> dict:
         return {"seconds": sec}
     if action == "toggle":
         return {"enabled": bool(params.get("enabled"))}
+    if action == "gw_payout":
+        import gateway
+
+        net, addr = str(params.get("network") or ""), str(params.get("address") or "").strip()
+        if net not in gateway.NETWORKS or not gateway.valid_payout(net, addr):
+            raise ValueError("invalid payout address for network")
+        return {"network": net, "address": addr}
     to = str(params.get("to") or "").strip()
     amount = float(params.get("amount_ton") or 0)
     if not re.fullmatch(ADDR_RE, to):
@@ -183,6 +190,13 @@ def execute(db, admin_id, otp_id: str, code: str) -> dict:
         import billing
 
         billing.update_settings(db, {"pay_ton_enabled": params["enabled"]})
+    elif action == "gw_payout":
+        import gateway
+
+        gref = db.collection(gateway.CONFIG_DOC[0]).document(gateway.CONFIG_DOC[1])
+        prev = ((gref.get().to_dict() or {}).get("payout") or {}).get(params["network"], "")
+        gref.set({"payout": {params["network"]: params["address"]}, "updated_by": admin_id, "updated_at": now}, merge=True)
+        result["previous"] = prev
     elif action == "transfer":
         msg = {"address": params["to"], "amount": str(ton.to_nano(params["amount_ton"]))}
         if params.get("comment"):
