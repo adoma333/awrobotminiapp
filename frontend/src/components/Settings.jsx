@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import PageHead from './PageHead';
 import FeedbackButton from './FeedbackButton';
 import ProfileEditor from './ProfileEditor';
 import { unlink, updateProfile, errorCodeOf } from '../api';
@@ -63,13 +64,7 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
 
   return (
     <section className="dash">
-      <div className="settings-head">
-        <button type="button" className="btn ghost" onClick={onBack}>
-          <svg className="chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
-          <span>{t.back}</span>
-        </button>
-        <h1>{t.settingsTitle}</h1>
-      </div>
+      <PageHead t={t} title={t.settingsTitle} onBack={onBack} />
 
       <ProfileEditor t={t} data={data} onSaved={onProfileSaved} />
 

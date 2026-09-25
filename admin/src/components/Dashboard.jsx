@@ -15,6 +15,7 @@ import Notifications from "./Notifications";
 import Announcements from "./Announcements";
 import TonWallet from "./TonWallet";
 import Alerts from "./Alerts";
+import Growth from "./Growth";
 import "../dashboard.css";
 
 const I = {
@@ -31,6 +32,7 @@ const I = {
   support: "M4 14v-2a8 8 0 0 1 16 0v2M3 13.5h4V20H3ZM17 13.5h4V20h-4ZM19 20a3.5 3.5 0 0 1-3.5 2H13",
   notifications: "M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15ZM10 20.5a2.2 2.2 0 0 0 4 0",
   announcements: "M4 10v4a1 1 0 0 0 1 1h2l6 4V5L7 9H5a1 1 0 0 0-1 1ZM17 9a4 4 0 0 1 0 6",
+  growth: "M3 17l6-6 4 4 8-8M15 7h6v6",
   ton: "M4 7h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a1 1 0 0 1-1-1V6a2 2 0 0 1 2-2h10M16 13.5h.01",
   sun: "M12 3v2M12 19v2M5 5l1.4 1.4M17.6 17.6 19 19M3 12h2M19 12h2M5 19l1.4-1.4M17.6 6.4 19 5M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8",
   moon: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z",
@@ -53,12 +55,12 @@ const GROUPS = [
     { key: "notifications", label: "إرسال الإشعارات", area: "notifications" },
     { key: "announcements", label: "نافذة التحديثات", area: "notifications" },
   ] },
-  { title: "النمو", pages: [{ key: "leaderboard", label: "ترتيب الأسبوع", area: "settings" }] },
+  { title: "النمو", pages: [{ key: "growth", label: "النمو والتسويق", area: "packages" }, { key: "leaderboard", label: "ترتيب الأسبوع", area: "settings" }] },
   { title: "الإعدادات", pages: [{ key: "control", label: "مركز التحكم", area: "settings" }, { key: "servers", label: "خوادم MT5", area: "settings" }] },
   { title: "الإدارة", pages: [{ key: "staff", label: "فريق العمل", area: "staff" }, { key: "audit", label: "سجل العمليات", area: "audit" }] },
 ];
 const ICON_OF = { ceo: I.ceo, system: I.system, users: I.users, packages: I.packages, rewards: I.rewards, leaderboard: I.leaderboard, control: I.control,
-  servers: I.servers, staff: I.staff, audit: I.audit, support: I.support, notifications: I.notifications, announcements: I.announcements, ton: I.ton };
+  servers: I.servers, staff: I.staff, audit: I.audit, support: I.support, notifications: I.notifications, announcements: I.announcements, ton: I.ton, growth: I.growth };
 
 function useMobile() {
   const q = "(max-width: 900px)";
@@ -176,6 +178,7 @@ export default function Dashboard({ me, onLogout }) {
         {page === "notifications" && <Notifications canWrite={canWrite("notifications")} />}
         {page === "announcements" && <Announcements canWrite={canWrite("notifications")} />}
         {page === "ton" && <TonWallet canWrite={canWrite("ton")} />}
+        {page === "growth" && <Growth canWrite={canWrite("packages")} />}
       </main>
     </div>
   );

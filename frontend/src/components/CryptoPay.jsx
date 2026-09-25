@@ -72,8 +72,8 @@ export default function CryptoPay({ t, pay, onFinished, onCancel }) {
         <div className="cp-field">
           <span className="muted">{t.cpAmount}</span>
           <div className="cp-value">
-            <strong dir="ltr">{pay.pay_amount} {symbol}</strong>
-            <button type="button" className="icon-btn small" onClick={() => copy(pay.pay_amount)} aria-label={t.copy}><Icon name="copy" size={16} /></button>
+            <strong dir="ltr">{pay.display_amount || pay.pay_amount} {symbol}</strong>
+            <button type="button" className="icon-btn small" onClick={() => copy(pay.display_amount || pay.pay_amount)} aria-label={t.copy}><Icon name="copy" size={16} /></button>
           </div>
         </div>
         <div className="cp-field">

@@ -42,6 +42,8 @@ def default_config() -> dict:
         "dynamic": True,         # محرك المحاكاة: حركة صعود/هبوط تلقائية
         "interval_sec": 1200,    # فاصل كل حركة
         "volatility_pct": 12,    # أقصى ابتعاد عن القيمة الأساسية ±%
+        "script_enabled": False,  # معادلة مخصّصة للحركة (lbscript) بدل التذبذب الافتراضي
+        "script": "",
         # نطاقات توليد القيمة الأساسية حتميًا لمن لا يملك base_usd
         "elite_count": 3,
         "elite_min": 250_000,
@@ -67,7 +69,14 @@ def _photo_ok(v: str) -> bool:
 
 def clean_config(patch: dict) -> dict:
     out = {}
-    for k in ("enabled", "dynamic"):
+    if "script" in patch:
+        import lbscript
+
+        src = str(patch.get("script") or "").strip()
+        if src:
+            lbscript.compile_script(src)  # يرفع ScriptError برسالة واضحة
+        out["script"] = src[:lbscript.MAX_LEN]
+    for k in ("enabled", "dynamic", "script_enabled"):
         if k in patch:
             out[k] = bool(patch[k])
     if "mode" in patch:
@@ -155,6 +164,10 @@ def tick(db, cfg: dict | None = None, now: float | None = None, rng=random, forc
         bots = _fresh(cfg)  # تأكيد جديد أو أسبوع جديد: العودة للقيم الأساسية (حتمي)
     elif not force and now - float(doc.get("updated_at") or 0) < cfg["interval_sec"]:
         return doc
+    elif cfg["dynamic"] and cfg.get("script_enabled") and cfg.get("script"):
+        err = _scripted_step(cfg, bots, now, rng, doc)
+        if err:
+            doc["script_error"] = err
     elif cfg["dynamic"] and cfg["volatility_pct"] > 0:
         band = cfg["volatility_pct"] / 100
         for b in bots:
@@ -164,9 +177,46 @@ def tick(db, cfg: dict | None = None, now: float | None = None, rng=random, forc
             new = round(max(lo, min(hi, b["usd"] + step)), 2)
             b["delta"] = round(new - b["usd"], 2)
             b["usd"] = new
-    doc = {"week": wk, "fp": fp, "bots": bots, "updated_at": now}
+    doc = {"week": wk, "fp": fp, "bots": bots, "updated_at": now, "ticks": int(doc.get("ticks") or 0) + 1 if doc.get("week") == wk else 0,
+           **({"script_error": doc["script_error"]} if doc.get("script_error") else {})}
     ref.set(doc)
     return doc
+
+
+def week_start(ts: float) -> float:
+    d = datetime.fromtimestamp(ts, timezone.utc)
+    return ts - (d.weekday() * 86400 + d.hour * 3600 + d.minute * 60 + d.second)
+
+
+_COMPILED: dict = {}
+
+
+def _scripted_step(cfg: dict, bots: list, now: float, rng, doc: dict) -> str | None:
+    """حركة واحدة بمعادلة الأدمن. أي خطأ: لا تتغير القيم ويُسجَّل الخطأ ليظهر في اللوحة."""
+    import lbscript
+
+    src = cfg["script"]
+    try:
+        tree = _COMPILED.get(src) or lbscript.compile_script(src)
+        _COMPILED.clear()
+        _COMPILED[src] = tree
+        t = now - week_start(now)
+        order = sorted(range(len(bots)), key=lambda j: -bots[j]["usd"])
+        ranks = {j: r + 1 for r, j in enumerate(order)}
+        elite_n = int(cfg.get("elite_count") or 0)
+        new_vals = []
+        for j, b in enumerate(bots):
+            env = {"base": float(b.get("base") or b["usd"]), "cur": float(b["usd"]), "i": j, "n": len(bots), "rank": ranks[j],
+                   "t": t, "day": int(t // 86400) % 7, "hour": int(t // 3600) % 24, "week": min(1.0, t / (7 * 86400)),
+                   "tick": int(doc.get("ticks") or 0) + 1, "elite": 1 if j < elite_n else 0, "prev": float(b.get("delta") or 0)}
+            new_vals.append(round(max(0.0, min(1e9, lbscript.evaluate(tree, env, rng))), 2))
+    except lbscript.ScriptError as e:
+        return str(e)
+    for b, new in zip(bots, new_vals):
+        b["delta"] = round(new - b["usd"], 2)
+        b["usd"] = new
+    doc.pop("script_error", None)
+    return None
 
 
 def _usd(report: dict, currency: str | None):

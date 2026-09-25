@@ -5,6 +5,11 @@ server {
     root __APP_DIR__/frontend/dist;
     index index.html;
 
+    # التحديثات تصل فورًا لكل الأجهزة: الصفحة ورقم النسخة بلا تخزين مؤقت، والملفات المُجزّأة بتخزين طويل
+    location = /index.html { add_header Cache-Control "no-cache, must-revalidate"; }
+    location = /version.json { add_header Cache-Control "no-store"; }
+    location /assets/ { add_header Cache-Control "public, max-age=31536000, immutable"; }
+
     location / {
         try_files $uri $uri/ /index.html;
     }

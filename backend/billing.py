@@ -25,6 +25,16 @@ DEFAULT_SETTINGS = {
     "announcement_ar": "",     # شريط إعلان أعلى الرئيسية (فارغ = لا يظهر)
     "announcement_en": "",
     "alert_large_payment_usd": 400,  # تنبيه فوري في اللوحة لأي دفعة بهذا المبلغ أو أكثر
+    # الإحالة المتدرّجة: أيام مكافأة المُحيل حسب عدد إحالاته المدفوعة (المُحال يحصل على referral_days)
+    "referral_tiers": [{"min": 0, "days": 7}, {"min": 5, "days": 10}, {"min": 15, "days": 14}, {"min": 40, "days": 21}],
+    # وضع الصيانة: يوقف التسجيل والدفع مؤقتًا ويعرض رسالة للمستخدمين
+    "maintenance": False,
+    "maintenance_ar": "نجري تحديثًا سريعًا لتحسين الخدمة. سنعود خلال دقائق.",
+    "maintenance_en": "We're running a quick update to improve the service. We'll be back in a few minutes.",
+    # NOWPayments: تحويل الدفعات تلقائيًا لمحفظتك (فارغ = المحفظة المضبوطة في حساب NOWPayments)
+    "np_payout_address": "",
+    "np_payout_currency": "",
+    "np_tolerance_pct": 1.0,  # قبول الدفعة إن نقصت بهذه النسبة أو أقل (فروقات التقريب والشبكة)
 }
 
 _SETTINGS_DOC = ("config", "settings")
@@ -63,14 +73,23 @@ def leverage_allowed(settings: dict, leverage) -> bool:
     return True
 
 
-def list_packages(db, active_only=False):
+def list_packages(db, active_only=False, for_uid=None, include_private=None):
+    """الباقات مرتبة. الباقات الخاصة (private_uid) لا تظهر إلا لصاحبها ما دامت غير مستخدمة وغير منتهية.
+    include_private=None: تلقائي (تظهر كلها في غير active_only، أي للأدمن وللتفعيل)."""
     docs = db.collection("packages").order_by("sort_order").stream()
     rows = []
+    now = time.time()
+    if include_private is None:
+        include_private = not active_only
     for d in docs:
         row = d.to_dict() or {}
         row["id"] = d.id
         if active_only and not row.get("active", True):
             continue
+        if row.get("private_uid") and not include_private:
+            mine = for_uid is not None and str(row["private_uid"]) == str(for_uid)
+            if not mine or row.get("used") or (row.get("offer_expires_at") and now > row["offer_expires_at"]):
+                continue
         rows.append(row)
     return rows
 
@@ -195,8 +214,9 @@ def extend_subscription(db, uid, package: dict):
     return _add_days(db, uid, package["duration_days"])
 
 
-def grant_referral_bonus_if_eligible(db, uid, days):
-    """يمنح المُحيل والمُحال عليه أيامًا إضافية عند أول دفعة ناجحة للمُحال، مرة واحدة فقط."""
+def grant_referral_bonus_if_eligible(db, uid, days, tiers=None):
+    """عند أول دفعة ناجحة للمُحال (مرة واحدة): المُحال يحصل على days، والمُحيل على أيام مستواه
+    في الإحالة المتدرّجة (كلما زادت إحالاته المدفوعة زادت مكافأته)."""
     ref = db.collection("users").document(str(uid))
     snap = ref.get()
     data = snap.to_dict() or {}
@@ -207,7 +227,15 @@ def grant_referral_bonus_if_eligible(db, uid, days):
         return None
     ref.set({"referral_reward_granted": True}, merge=True)
     _add_days(db, uid, days)
-    _add_days(db, referrer_id, days)
+    rref = db.collection("users").document(str(referrer_id))
+    rdata = rref.get().to_dict() or {}
+    paid_before = int(rdata.get("referral_paid_count") or 0)
+    tier_days = days
+    for t in sorted(tiers or [], key=lambda t: t["min"]):
+        if paid_before >= t["min"]:
+            tier_days = int(t["days"])
+    _add_days(db, referrer_id, tier_days)
+    rref.set({"referral_paid_count": paid_before + 1, "referral_earned_days": int(rdata.get("referral_earned_days") or 0) + tier_days}, merge=True)
     return referrer_id
 
 

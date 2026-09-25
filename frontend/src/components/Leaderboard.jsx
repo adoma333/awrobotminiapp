@@ -4,6 +4,7 @@ import { fill } from '../i18n';
 import { TIERS } from '../tiers';
 import Avatar from './Avatar';
 import { signedUsd as signed } from '../format';
+import AnimIcon from './AnimIcon';
 
 const tierImg = (key) => TIERS.find((x) => x.key === key)?.img;
 
@@ -15,7 +16,7 @@ function Row({ t, r }) {
       <span className="lb-name">
         <bdi>{r.you ? t.lbYou : r.name}</bdi>
       </span>
-      {r.tier && <img className="lb-tier" src={tierImg(r.tier)} alt="" />}
+      {r.tier && <AnimIcon className="lb-tier" name={r.tier} src={tierImg(r.tier)} />}
       <span className={`lb-pct ${r.usd >= 0 ? 'up' : 'down'}`} dir="ltr">
         {r.delta > 0 ? '▲' : r.delta < 0 ? '▼' : ''} {signed(r.usd)}
       </span>

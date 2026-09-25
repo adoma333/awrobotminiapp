@@ -1,4 +1,5 @@
 import React from 'react';
+import PageHead from './PageHead';
 
 // نصوص ثابتة (عربي/إنجليزي) للشروط والأحكام وسياسة الخصوصية.
 const CONTENT = {
@@ -52,13 +53,7 @@ export default function LegalPage({ t, lang, page, onBack }) {
   const c = CONTENT[page][lang] || CONTENT[page].en;
   return (
     <section className="dash">
-      <div className="settings-head">
-        <button type="button" className="btn ghost" onClick={onBack}>
-          <svg className="chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
-          <span>{t.back}</span>
-        </button>
-        <h1>{c.title}</h1>
-      </div>
+      <PageHead t={t} title={c.title} onBack={onBack} />
       {c.sections.map(([heading, body]) => (
         <div className="section" key={heading}>
           <h2>{heading}</h2>

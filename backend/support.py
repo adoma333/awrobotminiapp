@@ -1,5 +1,10 @@
 """
-AW Support — الدعم الفني الذكي (بوت تلجرام + Claude) مع التذاكر والتصعيد والإصلاح الذاتي.
+AW Support — الدعم الفني الذكي (Gemini Flash المجاني) مع التذاكر والتصعيد والإصلاح الذاتي.
+
+قنوات الرد (حصرية حسب الإعداد):
+  • حسابات تلجرام حقيقية (support_accounts.py): عند وجود حساب فعّال تصدر كل الردود منه وحده
+    (الرئيسي أو الاحتياطي النشط حسب الأولوية)، والبوت يوجّه المستخدم إليه.
+  • بوت الدعم (توكن مستقل أو البوت الرئيسي) عند عدم وجود حساب مربوط.
 
 القنوات:
   • بوت الدعم: توكن مستقل من لوحة التحكم (support_bot_token) أو البوت الرئيسي نفسه عند تركه فارغًا.
@@ -26,7 +31,8 @@ import time
 
 import httpx
 
-from retry import raise_for_retryable, with_backoff
+import secretbox
+from retry import RetryableError, raise_for_retryable, with_backoff
 
 log = logging.getLogger("uvicorn.error")
 
@@ -44,7 +50,8 @@ STATUS_LABEL = {"open": ("مستلمة", "Received"), "in_progress": ("قيد ا
                 "escalated": ("محوّلة لفريق الدعم", "With our support team"), "resolved": ("تم الحل", "Resolved"),
                 "closed": ("مغلقة", "Closed")}
 ASYNC = True  # الاختبارات تجعلها False لتنفيذ متزامن
-MODEL_DEFAULT = "claude-opus-5"
+MODEL_DEFAULT = "gemini-flash-latest"  # أحدث Gemini Flash (مجاني، سريع)؛ قابل للتغيير من اللوحة
+GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
 
 DEFAULT_PROMPT = """أنت "مساعد AW" — مساعد الدعم الفني الذكي لنظام AW ROBOT، وهو نظام تداول آلي (خوارزمي) يربط حسابات MetaTrader 5 ويديرها ويعرض أداءها داخل Mini App في تلجرام.
 
@@ -78,6 +85,12 @@ DEFAULT_PROMPT = """أنت "مساعد AW" — مساعد الدعم الفني 
 - بعد فشل الحل: إن استمرت المشكلة بعد محاولتين من الحلول.
 - اكتب في summary ملخصًا كاملًا: المشكلة، ما جرّبته، نتائج الإصلاحات، وبيانات الحساب ذات الصلة. ثم أخبر المستخدم أن فريق الدعم استلم تذكرته وسيرد قريبًا.
 
+## الإجراءات التي تتطلب تأكيد المستخدم (request_confirmation)
+- unlink_account: إلغاء ربط حساب MT5 الحالي.
+- relink_account: ربط حساب جديد بدل الحالي (يُلغى ربط الحالي ثم يُرسل للمستخدم رابط التطبيق لإدخال بيانات الحساب الجديد بأمان).
+عند طلب المستخدم أحدها: اشرح ما سيحدث بجملة واضحة ثم استدعِ request_confirmation. لا تنفّذ ولا تعلن التنفيذ بنفسك — النظام يسأل المستخدم «نعم/لا» وينفّذ بعد الموافقة ويؤكد النتيجة.
+لا تطلب أبدًا بيانات دخول MT5 داخل المحادثة؛ الربط يتم داخل التطبيق فقط.
+
 ## إغلاق المشكلة (mark_resolved)
 عندما يؤكد المستخدم أن المشكلة حُلّت أو أن سؤاله أُجيب بالكامل، استدعِ mark_resolved بملخص قصير.
 
@@ -99,6 +112,8 @@ DEFAULT_CONFIG = {
     "support_phone": "",
     "system_prompt": "",        # فارغ = DEFAULT_PROMPT
     "model": MODEL_DEFAULT,
+    "gemini_api_key": "",       # مشفّر في قاعدة البيانات؛ فارغ = GEMINI_API_KEY من .env
+    "confirm_actions_enabled": True,  # إلغاء الربط/إعادة الربط من الشات بعد تأكيد نعم/لا
     "escalation_threshold": 3,  # عدد ردود المساعد دون حل قبل التصعيد التلقائي
     "rate_limit_count": 8,      # رسائل خلال النافذة
     "rate_limit_window": 60,    # ثانية
@@ -150,8 +165,10 @@ def invalidate():
 
 def public_config(cfg: dict) -> dict:
     """للأدمن: التوكن لا يُعاد أبدًا، فقط هل هو مضبوط."""
-    out = {k: v for k, v in cfg.items() if k != "support_bot_token"}
+    out = {k: v for k, v in cfg.items() if k not in ("support_bot_token", "gemini_api_key")}
     out["has_bot_token"] = bool(cfg.get("support_bot_token"))
+    out["has_gemini_key"] = bool(cfg.get("gemini_api_key"))
+    out["gemini_env_key"] = bool(os.getenv("GEMINI_API_KEY"))
     out["system_prompt"] = cfg.get("system_prompt") or DEFAULT_PROMPT
     out["prompt_is_default"] = not cfg.get("system_prompt")
     return out
@@ -159,14 +176,19 @@ def public_config(cfg: dict) -> dict:
 
 def clean_config(patch: dict) -> dict:
     out = {}
-    for k in ("enabled", "ai_enabled", "auto_fix_enabled", "csat_enabled"):
+    for k in ("enabled", "ai_enabled", "auto_fix_enabled", "csat_enabled", "confirm_actions_enabled"):
         if k in patch:
             out[k] = bool(patch[k])
     if "support_bot_token" in patch:
         tok = str(patch["support_bot_token"] or "").strip()
         if tok and not re.fullmatch(r"\d{5,15}:[A-Za-z0-9_-]{30,64}", tok):
             raise ValueError("invalid bot token")
-        out["support_bot_token"] = tok
+        out["support_bot_token"] = secretbox.seal(tok)
+    if "gemini_api_key" in patch:
+        key = str(patch["gemini_api_key"] or "").strip()
+        if key and not re.fullmatch(r"[A-Za-z0-9_-]{30,80}", key):
+            raise ValueError("invalid gemini key")
+        out["gemini_api_key"] = secretbox.seal(key)
     if "support_username" in patch:
         u = str(patch["support_username"] or "").strip().lstrip("@").replace("https://t.me/", "")
         if u and not re.fullmatch(r"[A-Za-z0-9_]{4,32}", u):
@@ -187,7 +209,7 @@ def clean_config(patch: dict) -> dict:
         out["system_prompt"] = "" if p == DEFAULT_PROMPT.strip() else p[:20000]
     if "model" in patch:
         m = str(patch["model"] or "").strip()
-        if m and not re.fullmatch(r"claude-[a-z0-9.-]{3,40}", m):
+        if m and not re.fullmatch(r"gemini-[a-z0-9.-]{2,40}", m):
             raise ValueError("invalid model")
         out["model"] = m or MODEL_DEFAULT
     for k, lo, hi in (("escalation_threshold", 1, 10), ("rate_limit_count", 2, 60), ("rate_limit_window", 10, 3600),
@@ -221,7 +243,7 @@ def bot_call(token: str, method: str, **params) -> dict:
 
 
 def bot_token(cfg: dict) -> str:
-    return cfg.get("support_bot_token") or MAIN_TOKEN
+    return secretbox.open_(cfg.get("support_bot_token") or "") or MAIN_TOKEN
 
 
 def send(cfg: dict, chat_id, text: str, markup: dict | None = None) -> dict:
@@ -231,8 +253,32 @@ def send(cfg: dict, chat_id, text: str, markup: dict | None = None) -> dict:
     return bot_call(bot_token(cfg), "sendMessage", **p)
 
 
+# ─── قناة حسابات تلجرام الحقيقية (يضبطها support_accounts عند تشغيل حساب) ───
+ACCOUNT = {"send": None, "username": None}
+
+
+def account_mode() -> bool:
+    return bool(ACCOUNT["send"] and ACCOUNT["username"])
+
+
+def deliver(cfg: dict, channel: str, uid, text: str, markup: dict | None = None, hint: str = "") -> bool:
+    """يرسل للمستخدم عبر قناة تذكرته فقط. قناة الحساب لا تدعم الأزرار، فتُضاف تعليمات نصية بدلها."""
+    if channel == "account":
+        body = text + (f"\n\n{hint}" if hint else "")
+        if ACCOUNT["send"]:
+            return bool(ACCOUNT["send"](uid, body))
+        OUTBOX.append((uid, body))  # لا حساب فعّال الآن: يُرسل من الحساب التالي عند تشغيله (لا يصدر من مصدر آخر)
+        return False
+    return bool(send(cfg, uid, text, markup).get("ok"))
+
+
+OUTBOX: list = []
+
+
 def contact_link(cfg: dict, main_bot_username: str | None, payload: str = "") -> str:
     """رابط فتح محادثة الدعم (يعمل عبر تلجرام حتى لو تعطل الاتصال بخادمنا)."""
+    if account_mode():
+        return f"https://t.me/{ACCOUNT['username']}"
     bot = cfg.get("support_bot_username") or (main_bot_username if not cfg.get("support_bot_token") else "")
     if bot:
         return f"https://t.me/{bot}" + (f"?start={payload}" if payload else "")
@@ -493,76 +539,89 @@ def user_context(db, uid) -> dict:
     }
 
 
-# ═════════════════════════ المساعد الذكي (Claude) ═════════════════════════
+# ═════════════════════════ المساعد الذكي (Gemini Flash) ═════════════════════════
+CONFIRM_ACTIONS = ("unlink_account", "relink_account")
 TOOLS = [
-    {"name": "get_user_context", "description": "Returns the current user's account state: MT5 link status, subscription, sync state, live balance, last payments and recent errors. Call before answering anything about the user's own account.",
-     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
+    {"name": "get_user_context", "description": "Returns the current user's account state: MT5 link status, subscription, sync state, live balance, last payments and recent errors. Call before answering anything about the user's own account."},
     {"name": "search_knowledge_base", "description": "Searches the official AW ROBOT knowledge base (FAQ). Use before answering general questions.",
-     "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False}},
+     "parameters": {"type": "OBJECT", "properties": {"query": {"type": "STRING"}}, "required": ["query"]}},
     {"name": "get_error_details", "description": "Fetches a logged error by its reference (format ERR-XXXXXX): type, code, message, page, connectivity, time.",
-     "input_schema": {"type": "object", "properties": {"ref": {"type": "string"}}, "required": ["ref"], "additionalProperties": False}},
-    {"name": "run_auto_fix", "description": "Runs one whitelisted self-healing action for this user. resync_account: queue an immediate MT5 re-sync (linked accounts). recheck_payment: ask the payment provider about the latest unfinished payment (activation only happens if the provider confirms). reset_stuck_link: reset a link request stuck in 'pending' for 30+ min so the user can relink. set_language: change the app language (params.language = ar|en). Every run is logged.",
-     "input_schema": {"type": "object", "properties": {
-         "action": {"type": "string", "enum": list(FIX_ACTIONS)},
-         "language": {"type": "string", "enum": ["ar", "en"]},
-         "reason": {"type": "string"}}, "required": ["action", "reason"], "additionalProperties": False}},
+     "parameters": {"type": "OBJECT", "properties": {"ref": {"type": "STRING"}}, "required": ["ref"]}},
+    {"name": "run_auto_fix", "description": "Runs one whitelisted self-healing action for this user. resync_account: queue an immediate MT5 re-sync (linked accounts). recheck_payment: ask the payment provider about the latest unfinished payment (activation only happens if the provider confirms). reset_stuck_link: reset a link request stuck in 'pending' for 30+ min so the user can relink. set_language: change the app language (language = ar|en). Every run is logged.",
+     "parameters": {"type": "OBJECT", "properties": {
+         "action": {"type": "STRING", "enum": list(FIX_ACTIONS)},
+         "language": {"type": "STRING", "enum": ["ar", "en"]},
+         "reason": {"type": "STRING"}}, "required": ["action", "reason"]}},
+    {"name": "request_confirmation", "description": "Asks the user to confirm a sensitive account action with yes/no before the system executes it. unlink_account: unlink the current MT5 account. relink_account: unlink the current account, then send the user the app link to add the new account securely (never collect credentials in chat).",
+     "parameters": {"type": "OBJECT", "properties": {
+         "action": {"type": "STRING", "enum": list(CONFIRM_ACTIONS)},
+         "question": {"type": "STRING", "description": "The exact yes/no question to show, in the user's language."}}, "required": ["action", "question"]}},
     {"name": "set_ticket_priority", "description": "Re-classifies the ticket priority: critical, medium or low.",
-     "input_schema": {"type": "object", "properties": {"priority": {"type": "string", "enum": list(PRIORITIES)}, "reason": {"type": "string"}},
-                      "required": ["priority", "reason"], "additionalProperties": False}},
+     "parameters": {"type": "OBJECT", "properties": {"priority": {"type": "STRING", "enum": list(PRIORITIES)}, "reason": {"type": "STRING"}},
+                    "required": ["priority", "reason"]}},
     {"name": "escalate_to_human", "description": "Hands the ticket to the human support team with a complete summary (problem, what was tried, fix results, relevant account data).",
-     "input_schema": {"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"], "additionalProperties": False}},
+     "parameters": {"type": "OBJECT", "properties": {"summary": {"type": "STRING"}}, "required": ["summary"]}},
     {"name": "mark_resolved", "description": "Marks the ticket resolved once the user confirms the issue is fixed or the question is fully answered.",
-     "input_schema": {"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"], "additionalProperties": False}},
+     "parameters": {"type": "OBJECT", "properties": {"summary": {"type": "STRING"}}, "required": ["summary"]}},
 ]
 
-_client = {"v": None}
+
+def api_key(cfg: dict) -> str:
+    return secretbox.open_(cfg.get("gemini_api_key") or "") or os.getenv("GEMINI_API_KEY", "")
 
 
-def ai_available() -> bool:
+def ai_available(cfg: dict | None = None) -> bool:
+    return bool(api_key(cfg or {}))
+
+
+class AiError(Exception):
+    pass
+
+
+_ai_http = httpx.Client(timeout=40)
+
+
+@with_backoff(attempts=3)
+def _gemini_post(url: str, key: str, body: dict) -> dict:
+    return raise_for_retryable(_ai_http.post(url, json=body, headers={"x-goog-api-key": key})).json()
+
+
+def llm(cfg: dict, system: str, contents: list) -> dict:
+    """استدعاء واحد لـ Gemini generateContent مع الأدوات. يرجع محتوى أول مرشّح. يُستبدل في الاختبارات."""
+    key = api_key(cfg)
+    if not key:
+        raise AiError("no api key")
+    body = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": contents,
+        "tools": [{"functionDeclarations": TOOLS}],
+        "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
+        "generationConfig": {"temperature": 0.35, "maxOutputTokens": 2048},
+    }
     try:
-        import anthropic  # noqa: F401
-    except ImportError:
-        return False
-    return bool(os.getenv("ANTHROPIC_API_KEY"))
-
-
-def _anthropic():
-    if _client["v"] is None:
-        import anthropic
-
-        _client["v"] = anthropic.Anthropic(timeout=90, max_retries=2)
-    return _client["v"]
-
-
-def llm(cfg: dict, system: list, messages: list):
-    """استدعاء واحد لـ Claude. يُستبدل في الاختبارات."""
-    return _anthropic().beta.messages.create(
-        model=cfg.get("model") or MODEL_DEFAULT,
-        max_tokens=8000,
-        thinking={"type": "adaptive"},
-        output_config={"effort": "medium"},
-        system=system,
-        tools=TOOLS,
-        messages=messages,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-    )
+        data = _gemini_post(f"{GEMINI_API}/models/{cfg.get('model') or MODEL_DEFAULT}:generateContent", key, body)
+    except (httpx.HTTPError, RetryableError, ValueError) as e:
+        raise AiError(str(e)[:200])
+    cands = data.get("candidates") or []
+    if not cands or not (cands[0].get("content") or {}).get("parts"):
+        raise AiError(f"blocked/empty: {(data.get('promptFeedback') or {}).get('blockReason') or (cands[0].get('finishReason') if cands else '')}")
+    return cands[0]["content"]
 
 
 def _history(db, tid: str) -> list:
-    """رسائل التذكرة بصيغة Claude: user / assistant بالتناوب، تبدأ بـ user."""
+    """رسائل التذكرة بصيغة Gemini: user / model بالتناوب، تبدأ بـ user."""
     out = []
     for m in messages_of(db, tid)[-24:]:
-        role = "user" if m.get("role") == "user" else "assistant"
+        role = "user" if m.get("role") == "user" else "model"
         text = m.get("text") or ""
         if m.get("role") == "agent":
             text = "[رد موظف الدعم البشري] " + text
         elif m.get("role") == "system":
             continue
         if out and out[-1]["role"] == role:
-            out[-1]["content"] += "\n\n" + text
+            out[-1]["parts"][0]["text"] += "\n\n" + text
         else:
-            out.append({"role": role, "content": text})
+            out.append({"role": role, "parts": [{"text": text}]})
     while out and out[0]["role"] != "user":
         out.pop(0)
     return out
@@ -594,43 +653,48 @@ def _tool(db, cfg, uid, tid, name: str, args: dict, state: dict) -> str:
     if name == "mark_resolved":
         state["resolved"] = str(args.get("summary") or "")[:1000]
         return json.dumps({"ok": True})
+    if name == "request_confirmation":
+        if not cfg.get("confirm_actions_enabled", True):
+            return json.dumps({"ok": False, "reason": "disabled_by_admin"})
+        if args.get("action") not in CONFIRM_ACTIONS:
+            return json.dumps({"ok": False, "reason": "not_allowed"})
+        state["confirm"] = {"action": args["action"], "question": str(args.get("question") or "")[:400]}
+        return json.dumps({"ok": True, "note": "The system will now ask the user yes/no. Do not claim it is done."})
     return json.dumps({"error": "unknown tool"})
 
 
 def ai_reply(db, cfg: dict, uid, ticket: dict, lang: str) -> tuple[str, dict]:
-    """يشغّل حلقة الأدوات حتى يرد المساعد. يرجع (النص، الحالة: escalate/resolved/failed)."""
+    """يشغّل حلقة الأدوات حتى يرد المساعد. يرجع (النص، الحالة: escalate/resolved/confirm/failed)."""
     state: dict = {}
-    system = [
-        {"type": "text", "text": cfg.get("system_prompt") or DEFAULT_PROMPT, "cache_control": {"type": "ephemeral"}},
-        {"type": "text", "text": f"Ticket {ticket['id']} · priority {ticket.get('priority')} · user language: {lang} · error ref: {ticket.get('error_ref') or 'none'}"},
-    ]
-    messages = _history(db, ticket["id"])
-    if not messages:
+    system = (cfg.get("system_prompt") or DEFAULT_PROMPT) + (
+        f"\n\n[Context] Ticket {ticket['id']} · priority {ticket.get('priority')} · user language: {lang} · "
+        f"channel: {ticket.get('channel')} · error ref: {ticket.get('error_ref') or 'none'}")
+    contents = _history(db, ticket["id"])
+    if not contents:
         return "", {"failed": True}
     text = ""
     for _ in range(6):
         try:
-            res = llm(cfg, system, messages)
+            content = llm(cfg, system, contents)
         except Exception as e:  # noqa: BLE001 — أي عطل في المزوّد: نرجع لقاعدة المعرفة/الموظف
             log.warning("support ai failed: %s", e)
             state["failed"] = True
             break
-        if res.stop_reason == "refusal":
-            state["failed"] = True
+        parts = content.get("parts") or []
+        text = "\n".join(p["text"] for p in parts if p.get("text") and not p.get("thought")).strip() or text
+        calls = [p["functionCall"] for p in parts if p.get("functionCall")]
+        if not calls:
             break
-        text = "\n".join(b.text for b in res.content if getattr(b, "type", "") == "text").strip() or text
-        if res.stop_reason != "tool_use":
-            break
-        messages.append({"role": "assistant", "content": res.content})
+        contents.append({"role": "model", "parts": parts})  # كما هو (يحفظ thoughtSignature)
         results = []
-        for b in res.content:
-            if getattr(b, "type", "") == "tool_use":
-                try:
-                    out, err = _tool(db, cfg, uid, ticket["id"], b.name, b.input or {}, state), False
-                except Exception as e:  # noqa: BLE001
-                    out, err = f"Error: {e}", True
-                results.append({"type": "tool_result", "tool_use_id": b.id, "content": out, **({"is_error": True} if err else {})})
-        messages.append({"role": "user", "content": results})
+        for c in calls:
+            try:
+                out = _tool(db, cfg, uid, ticket["id"], c.get("name"), c.get("args") or {}, state)
+                payload = json.loads(out)
+            except Exception as e:  # noqa: BLE001
+                payload = {"error": str(e)[:200]}
+            results.append({"functionResponse": {"name": c.get("name"), "response": {"result": payload}}})
+        contents.append({"role": "user", "parts": results})
     return text, state
 
 
@@ -655,8 +719,25 @@ def human_markup(tid: str, lang: str) -> dict:
     return {"inline_keyboard": [[{"text": _t(lang, "👤 التحدث مع موظف", "👤 Talk to a human"), "callback_data": f"human:{tid}"}]]}
 
 
+def confirm_markup(tid: str, lang: str) -> dict:
+    return {"inline_keyboard": [[{"text": _t(lang, "✅ نعم، نفّذ", "✅ Yes, do it"), "callback_data": f"act:{tid}:yes"},
+                                 {"text": _t(lang, "❌ لا", "❌ No"), "callback_data": f"act:{tid}:no"}]]}
+
+
+HINT_HUMAN = ("اكتب «موظف» في أي وقت للتحدث مع موظف.", "Type \"human\" anytime to talk to an agent.")
+HINT_CSAT = ("قيّم تجربتك بإرسال رقم من 1 إلى 5.", "Rate your experience by sending a number from 1 to 5.")
+HINT_CONFIRM = ("أرسل «نعم» للتأكيد أو «لا» للإلغاء.", "Reply \"yes\" to confirm or \"no\" to cancel.")
+YES = r"(نعم|اي|أيوه|ايوه|اكيد|أكيد|موافق|yes|y|ok|confirm)"
+NO = r"(لا|كلا|الغاء|إلغاء|no|n|cancel)"
+
+
+def _hint(pair, lang):
+    return pair[0] if lang == "ar" else pair[1]
+
+
 # ═════════════════════════ تغيير الحالة + الإشعار ═════════════════════════
 NOTIFY = {"fn": None}  # يضبطها main: fn(uid, kind, title_ar, title_en, body_ar, body_en)
+ACTIONS = {"unlink": None, "app_link": None}  # يضبطها main: unlink(uid)->dict ، app_link()->url
 
 
 def set_status(db, cfg, tid: str, status: str, by: str = "system", note: str = "") -> dict | None:
@@ -665,17 +746,20 @@ def set_status(db, cfg, tid: str, status: str, by: str = "system", note: str = "
         return t
     now = time.time()
     hist = (t.get("history") or []) + [{"at": now, "status": status, "by": by, "note": note[:300]}]
+    csat_ask = status == "resolved" and cfg.get("csat_enabled") and not t.get("csat")
     _ticket_ref(db, tid).set({"status": status, "updated_at": now, "history": hist[-30:],
-                              **({"resolved_at": now} if status == "resolved" else {})}, merge=True)
+                              **({"resolved_at": now, "csat_asked": bool(csat_ask)} if status == "resolved" else {})}, merge=True)
     lang = t.get("lang") or "ar"
+    ch = t.get("channel") or "bot"
     ar, en = STATUS_LABEL[status]
     if NOTIFY["fn"]:
         NOTIFY["fn"](t["uid"], "support", f"تذكرة #{tid}: {ar}", f"Ticket #{tid}: {en}", note[:300], note[:300])
     if status in ("in_progress", "resolved", "closed", "escalated"):
-        send(cfg, t["uid"], _t(lang, f"🔔 تحديث التذكرة #{tid}: {ar}", f"🔔 Ticket #{tid} update: {en}")
-             + (f"\n{note}" if note and by != "ai" else ""))
-    if status == "resolved" and cfg.get("csat_enabled") and not t.get("csat"):
-        send(cfg, t["uid"], _t(lang, "كيف تقيّم تجربتك مع الدعم؟", "How would you rate your support experience?"), csat_markup(tid))
+        deliver(cfg, ch, t["uid"], _t(lang, f"🔔 تحديث التذكرة #{tid}: {ar}", f"🔔 Ticket #{tid} update: {en}")
+                + (f"\n{note}" if note and by != "ai" else ""))
+    if csat_ask:
+        deliver(cfg, ch, t["uid"], _t(lang, "كيف تقيّم تجربتك مع الدعم؟", "How would you rate your support experience?"),
+                csat_markup(tid), _hint(HINT_CSAT, lang))
     return get_ticket(db, tid)
 
 
@@ -689,15 +773,87 @@ def escalate(db, cfg, ticket: dict, summary: str, reason: str = "ai"):
     pr_ar = PRIORITY_LABEL[ticket.get("priority") or "low"][0]
     icon = {"critical": "🔴", "medium": "🟠", "low": "🟢"}.get(ticket.get("priority"), "🟢")
     last = "\n".join(f"{'👤' if m.get('role') == 'user' else '🤖'} {m.get('text', '')[:300]}" for m in messages_of(db, tid)[-6:])
-    text = (f"{icon} تصعيد تذكرة #{tid} · الأولوية: {pr_ar}\nالمستخدم: {ticket['uid']} · اللغة: {ticket.get('lang')}\n"
+    text = (f"{icon} تصعيد تذكرة #{tid} · الأولوية: {pr_ar}\nالمستخدم: {ticket['uid']} · اللغة: {ticket.get('lang')} · القناة: {ticket.get('channel')}\n"
             f"سبب التصعيد: {'تلقائي بعد محاولات فاشلة' if reason == 'threshold' else 'طلب المساعد/المستخدم'}\n\n"
             f"الملخص:\n{summary[:1500]}\n\nآخر الرسائل:\n{last}\n\n↩️ رد على هذه الرسالة ليصل ردك للمستخدم مباشرة.")
     markup = {"inline_keyboard": [[{"text": "⏳ قيد المعالجة", "callback_data": f"sup:{tid}:in_progress"},
                                    {"text": "✅ تم الحل", "callback_data": f"sup:{tid}:resolved"}]]}
-    res = send(cfg, chat, text, markup)
+    res = send(cfg, chat, text, markup)  # قناة داخلية للموظف (البوت)، لا تصل للمستخدم
     mid = ((res or {}).get("result") or {}).get("message_id")
     if mid:
         db.collection(RELAY).document(f"{chat}_{mid}").set({"ticket": tid, "at": time.time()})
+
+
+# ═════════════════════════ التأكيد قبل الإجراءات الحساسة ═════════════════════════
+CONFIRM_TTL = 600
+
+
+def ask_confirmation(db, cfg, ticket: dict, action: str, question: str, lang: str):
+    _ticket_ref(db, ticket["id"]).set({"pending_action": {"action": action, "at": time.time()}}, merge=True)
+    q = question or _t(lang, "هل تريد تنفيذ هذا الإجراء؟", "Do you want to proceed?")
+    add_message(db, ticket["id"], "system", f"[confirm:{action}] {q}")
+    deliver(cfg, ticket.get("channel") or "bot", ticket["uid"], "⚠️ " + q, confirm_markup(ticket["id"], lang), _hint(HINT_CONFIRM, lang))
+
+
+def resolve_confirmation(db, cfg, ticket: dict, yes: bool, lang: str) -> bool:
+    """ينفّذ الإجراء المعلّق بعد «نعم» أو يلغيه بعد «لا». يرجع True إن كان هناك إجراء معلّق."""
+    pend = ticket.get("pending_action") or {}
+    if not pend or time.time() - float(pend.get("at") or 0) > CONFIRM_TTL:
+        return False
+    tid, uid, ch = ticket["id"], ticket["uid"], ticket.get("channel") or "bot"
+    _ticket_ref(db, tid).set({"pending_action": None}, merge=True)
+    action = pend["action"]
+    if not yes:
+        msg = _t(lang, "تم الإلغاء، لم يتغير شيء في حسابك.", "Cancelled — nothing was changed on your account.")
+        add_message(db, tid, "ai", msg)
+        deliver(cfg, ch, uid, msg)
+        return True
+    res = ACTIONS["unlink"](uid) if ACTIONS["unlink"] else {"ok": False, "reason": "unavailable"}
+    db.collection(FIXES).document().set({"uid": str(uid), "ticket": tid, "action": action, "params": {}, "by": "user_confirmed",
+                                         "before": {"status": "approved"} if res.get("ok") else {}, "after": {"status": "unlinked"} if res.get("ok") else {},
+                                         "result": res, "at": time.time()})
+    if not res.get("ok"):
+        reason = res.get("reason") or ""
+        msg = _t(lang, f"تعذّر تنفيذ الطلب ({reason}). حوّلته لفريق الدعم.", f"Couldn't complete the request ({reason}). I've passed it to our team.")
+        add_message(db, tid, "ai", msg)
+        deliver(cfg, ch, uid, msg)
+        escalate(db, cfg, get_ticket(db, tid) or ticket, f"فشل تنفيذ {action} بعد تأكيد المستخدم: {reason}")
+        return True
+    acc = f"{res.get('login_masked') or ''} · {res.get('server') or ''}".strip(" ·")
+    if action == "unlink_account":
+        msg = _t(lang, f"✅ تم إلغاء ربط حساب MT5 ({acc}).", f"✅ Your MT5 account ({acc}) has been unlinked.")
+        add_message(db, tid, "ai", msg)
+        deliver(cfg, ch, uid, msg)
+        set_status(db, cfg, tid, "resolved", by="user_confirmed", note=msg)
+    else:  # relink_account
+        link = ACTIONS["app_link"]() if ACTIONS["app_link"] else ""
+        msg = _t(lang, f"✅ تم إلغاء ربط الحساب السابق ({acc}).\nافتح التطبيق الآن وأدخل بيانات حسابك الجديد بأمان:\n{link}\nسأؤكد لك هنا فور نجاح الربط.",
+                 f"✅ Your previous account ({acc}) was unlinked.\nOpen the app now and enter your new account securely:\n{link}\nI'll confirm here as soon as it's linked.")
+        _ticket_ref(db, tid).set({"awaiting_link": True}, merge=True)
+        add_message(db, tid, "ai", msg)
+        markup = {"inline_keyboard": [[{"text": _t(lang, "📲 فتح التطبيق", "📲 Open the app"), "url": link}]]} if link else None
+        deliver(cfg, ch, uid, msg, markup)
+    return True
+
+
+def on_account_linked(db, uid, login_masked: str, server: str):
+    """بعد نجاح ربط حساب من التطبيق: إن كان المستخدم طلب إعادة الربط من الشات نؤكد له النتيجة ببياناتها."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    try:
+        cfg = get_config(db)
+        rows = [{"id": d.id, **(d.to_dict() or {})} for d in db.collection(TICKETS).where(filter=FieldFilter("uid", "==", str(uid))).stream()]
+        for t in rows:
+            if t.get("awaiting_link"):
+                lang = t.get("lang") or "ar"
+                msg = _t(lang, f"✅ تم ربط الحساب الجديد بنجاح.\nبيانات الحساب: {login_masked} · {server}\nيمكنك الدخول للتطبيق والتأكد.",
+                         f"✅ Your new account is linked.\nAccount: {login_masked} · {server}\nYou can open the app to check.")
+                _ticket_ref(db, t["id"]).set({"awaiting_link": False}, merge=True)
+                add_message(db, t["id"], "ai", msg)
+                deliver(cfg, t.get("channel") or "bot", uid, msg)
+                set_status(db, cfg, t["id"], "resolved", by="system", note=msg)
+    except Exception:  # noqa: BLE001 — لا يعطّل الربط نفسه
+        log.exception("on_account_linked")
 
 
 # ═════════════════════════ معالجة رسالة المستخدم ═════════════════════════
@@ -708,6 +864,9 @@ def _run(fn, *a):
         fn(*a)
 
 
+ERR_IN_TEXT = re.compile(r"ERR-[A-Z0-9]{6}")
+
+
 def handle_user_text(db, uid, text: str, lang_hint: str = "ar", channel: str = "bot", error_ref: str | None = None):
     cfg = get_config(db)
     if not cfg.get("enabled"):
@@ -715,9 +874,12 @@ def handle_user_text(db, uid, text: str, lang_hint: str = "ar", channel: str = "
     blocked, first = rate_limited(cfg, uid)
     if blocked:
         if first:
-            send(cfg, uid, _t(detect_lang(text, lang_hint), "⏳ أرسلت رسائل كثيرة خلال وقت قصير. انتظر دقيقة ثم تابع، وسنرد على طلبك.",
-                               "⏳ You've sent many messages in a short time. Please wait a minute — we'll answer your request."))
+            deliver(cfg, channel, uid, _t(detect_lang(text, lang_hint), "⏳ أرسلت رسائل كثيرة خلال وقت قصير. انتظر دقيقة ثم تابع، وسنرد على طلبك.",
+                                          "⏳ You've sent many messages in a short time. Please wait a minute — we'll answer your request."))
         return
+    if not error_ref and text:
+        m = ERR_IN_TEXT.search(text.upper())
+        error_ref = m.group(0) if m else None
     _run(_process, db, cfg, uid, text, lang_hint, channel, error_ref)
 
 
@@ -732,12 +894,17 @@ def _process(db, cfg, uid, text, lang_hint, channel, error_ref):
         is_new = ticket is None
         if is_new:
             ticket = create_ticket(db, uid, text, lang, channel, err)
-        elif err and not ticket.get("error_ref"):
-            _ticket_ref(db, ticket["id"]).set({"error_ref": err["ref"]}, merge=True)
-            ticket["error_ref"] = err["ref"]
+        else:
+            patch = {}
+            if err and not ticket.get("error_ref"):
+                patch["error_ref"] = ticket["error_ref"] = err["ref"]
+            if ticket.get("channel") != channel:  # المستخدم انتقل لقناة أخرى: الردود تتبعه
+                patch["channel"] = ticket["channel"] = channel
+            if patch:
+                _ticket_ref(db, ticket["id"]).set(patch, merge=True)
         add_message(db, ticket["id"], "user", text)
         if is_new:
-            send(cfg, uid, ack_text(cfg, ticket, lang))
+            deliver(cfg, channel, uid, ack_text(cfg, ticket, lang))
         if ticket.get("status") == "escalated":  # موظف بشري يتابعها: نمرر الرسالة له فقط
             if cfg.get("support_chat_id"):
                 res = send(cfg, cfg["support_chat_id"], f"💬 #{ticket['id']} من {uid}:\n{text[:1500]}\n\n↩️ رد على هذه الرسالة للرد عليه.")
@@ -747,15 +914,16 @@ def _process(db, cfg, uid, text, lang_hint, channel, error_ref):
             return
         if int(ticket.get("ai_attempts") or 0) >= int(cfg.get("escalation_threshold") or 3):
             summary = f"تجاوز حد المحاولات ({ticket.get('ai_attempts')}). آخر رسالة: {text[:500]}"
-            send(cfg, uid, _t(lang, "حوّلنا طلبك لفريق الدعم البشري مع ملخص كامل لمحادثتك، وسيرد عليك قريبًا.",
-                               "We've handed your request to our human support team with a full summary. They'll reply shortly."))
+            deliver(cfg, channel, uid, _t(lang, "حوّلنا طلبك لفريق الدعم البشري مع ملخص كامل لمحادثتك، وسيرد عليك قريبًا.",
+                                          "We've handed your request to our human support team with a full summary. They'll reply shortly."))
             escalate(db, cfg, get_ticket(db, ticket["id"]) or ticket, summary, reason="threshold")
             return
-        bot_call(bot_token(cfg), "sendChatAction", chat_id=uid, action="typing")
+        if channel == "bot":
+            bot_call(bot_token(cfg), "sendChatAction", chat_id=uid, action="typing")
         reply, state = ("", {"failed": True})
-        if cfg.get("ai_enabled") and ai_available():
+        if cfg.get("ai_enabled") and ai_available(cfg):
             reply, state = ai_reply(db, cfg, uid, get_ticket(db, ticket["id"]) or ticket, lang)
-        if state.get("failed") or not reply:
+        if (state.get("failed") or not reply) and not state.get("confirm"):
             kb = [] if (err or (get_ticket(db, ticket["id"]) or ticket).get("priority") == "critical") else search_kb(db, text, 1)
             if kb and kb[0]["score"] >= KB_MIN_SCORE:  # سؤال عام: إجابة قاعدة المعرفة؛ الخطأ والحالات الحرجة: موظف بشري
                 reply = kb[0]["a"]
@@ -764,25 +932,73 @@ def _process(db, cfg, uid, text, lang_hint, channel, error_ref):
                 reply = _t(lang, "شكرًا لتوضيحك. حوّلنا طلبك لفريق الدعم البشري وسيرد عليك قريبًا.",
                            "Thanks for the details. Your request is now with our human support team; they'll reply shortly.")
                 state = {"escalate": f"المساعد الذكي غير متاح أو لم يجد إجابة. رسالة المستخدم: {text[:800]}"}
-        add_message(db, ticket["id"], "ai", reply)
+        if reply:
+            add_message(db, ticket["id"], "ai", reply)
         _ticket_ref(db, ticket["id"]).set({"ai_attempts": int(ticket.get("ai_attempts") or 0) + 1}, merge=True)
-        send(cfg, uid, reply, None if state.get("resolved") or state.get("escalate") else human_markup(ticket["id"], lang))
-        if state.get("escalate"):
+        quiet = state.get("resolved") or state.get("escalate") or state.get("confirm")
+        if reply:
+            deliver(cfg, channel, uid, reply, None if quiet else human_markup(ticket["id"], lang), "" if quiet else _hint(HINT_HUMAN, lang))
+        if state.get("confirm"):
+            ask_confirmation(db, cfg, get_ticket(db, ticket["id"]) or ticket, state["confirm"]["action"], state["confirm"]["question"], lang)
+        elif state.get("escalate"):
             escalate(db, cfg, get_ticket(db, ticket["id"]) or ticket, state["escalate"])
         elif state.get("resolved"):
             set_status(db, cfg, ticket["id"], "resolved", by="ai", note=state["resolved"])
     except Exception:  # noqa: BLE001
         log.exception("support processing failed")
-        send(cfg, uid, _t(lang_hint, "تعذّر معالجة رسالتك الآن. حاول بعد قليل، أو اكتب «موظف» للتحويل لفريق الدعم.",
-                           "We couldn't process your message right now. Try again shortly, or type \"human\" to reach our team."))
+        deliver(cfg, channel, uid, _t(lang_hint, "تعذّر معالجة رسالتك الآن. حاول بعد قليل، أو اكتب «موظف» للتحويل لفريق الدعم.",
+                                      "We couldn't process your message right now. Try again shortly, or type \"human\" to reach our team."))
+
+
+def _latest_csat_pending(db, uid) -> dict | None:
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    rows = [{"id": d.id, **(d.to_dict() or {})} for d in db.collection(TICKETS).where(filter=FieldFilter("uid", "==", str(uid))).stream()]
+    rows = [r for r in rows if r.get("csat_asked") and not r.get("csat") and time.time() - float(r.get("resolved_at") or 0) < 86400]
+    return max(rows, key=lambda r: r.get("resolved_at") or 0) if rows else None
+
+
+def text_command(db, cfg, uid, text: str, lang: str, channel: str) -> bool:
+    """أوامر نصية مشتركة لكل القنوات: نعم/لا للتأكيد، تقييم 1-5، طلب موظف. يرجع True إن عالجها."""
+    low = text.strip().lower().strip(".!؟? ")
+    t = open_ticket_for(db, uid)
+    if t and t.get("pending_action"):
+        if re.fullmatch(YES, low):
+            return resolve_confirmation(db, cfg, t, True, t.get("lang") or lang)
+        if re.fullmatch(NO, low):
+            return resolve_confirmation(db, cfg, t, False, t.get("lang") or lang)
+    if re.fullmatch(r"[1-5]", low):
+        c = _latest_csat_pending(db, uid)
+        if c:
+            _ticket_ref(db, c["id"]).set({"csat": {"score": int(low), "at": time.time()}}, merge=True)
+            deliver(cfg, channel, uid, _t(c.get("lang") or lang, "🙏 شكرًا لتقييمك — يساعدنا على التحسين.", "🙏 Thank you — your rating helps us improve."))
+            return True
+    if re.fullmatch(r"(موظف|بشري|human|agent)", low) and t:
+        add_message(db, t["id"], "user", text)
+        deliver(cfg, channel, uid, _t(lang, "👤 حوّلنا طلبك لموظف دعم وسيرد عليك هنا قريبًا.", "👤 A support agent will reply here shortly."))
+        escalate(db, cfg, t, "طلب المستخدم موظفًا.", reason="user")
+        return True
+    return False
+
+
+def handle_account_message(db, uid, text: str, lang: str = "ar"):
+    """رسالة واردة إلى حساب الدعم الحقيقي (من support_accounts)."""
+    cfg = get_config(db)
+    text = (text or "").strip()
+    if not text:
+        return deliver(cfg, "account", uid, _t(lang, "أرسل وصف المشكلة نصًا من فضلك.", "Please describe the issue in text."))
+    if text_command(db, cfg, uid, text, lang, "account"):
+        return True
+    handle_user_text(db, uid, text, lang, "account")
+    return True
 
 
 def handle_callback(db, cq: dict) -> bool:
-    """أزرار: csat:<tid>:<n> · human:<tid> · sup:<tid>:<status> (للموظف). يرجع True إن عالجها."""
+    """أزرار: csat:<tid>:<n> · human:<tid> · act:<tid>:yes|no · sup:<tid>:<status> (للموظف). يرجع True إن عالجها."""
     data = cq.get("data") or ""
     cfg = get_config(db)
     who = (cq.get("from") or {}).get("id")
-    m = re.fullmatch(r"(csat|human|sup):(T[A-Z0-9]{5})(?::(\w+))?", data)
+    m = re.fullmatch(r"(csat|human|sup|act):(T[A-Z0-9]{5})(?::(\w+))?", data)
     if not m:
         return False
     kind, tid, arg = m.groups()
@@ -796,6 +1012,10 @@ def handle_callback(db, cq: dict) -> bool:
         _ticket_ref(db, tid).set({"csat": {"score": max(1, min(5, int(arg))), "at": time.time()}}, merge=True)
         answer(_t(lang, "شكرًا لتقييمك!", "Thanks for your feedback!"))
         send(cfg, who, _t(lang, "🙏 شكرًا لتقييمك — يساعدنا على التحسين.", "🙏 Thank you — your rating helps us improve."))
+    elif kind == "act" and str(who) == t["uid"] and arg in ("yes", "no"):
+        answer("✓")
+        if not resolve_confirmation(db, cfg, t, arg == "yes", lang):
+            send(cfg, who, _t(lang, "انتهت صلاحية هذا الطلب. اكتب طلبك من جديد.", "This request has expired. Please ask again."))
     elif kind == "human" and str(who) == t["uid"]:
         answer(_t(lang, "جارٍ التحويل…", "Connecting…"))
         send(cfg, who, _t(lang, "👤 حوّلنا طلبك لموظف دعم وسيرد عليك هنا قريبًا.", "👤 A support agent will reply here shortly."))
@@ -830,7 +1050,7 @@ def agent_reply(db, cfg, tid: str, text: str, by: str) -> dict | None:
         return None
     add_message(db, tid, "agent", text, {"by": by})
     lang = t.get("lang") or "ar"
-    send(cfg, t["uid"], _t(lang, "👤 فريق الدعم:\n", "👤 Support team:\n") + text)
+    deliver(cfg, t.get("channel") or "bot", t["uid"], _t(lang, "👤 فريق الدعم:\n", "👤 Support team:\n") + text)
     if t.get("status") in ("open", "escalated"):
         set_status(db, cfg, tid, "in_progress", by=by)
     return get_ticket(db, tid)
@@ -860,20 +1080,15 @@ def handle_message(db, msg: dict, main_bot_username: str | None = None) -> bool:
     if not text:
         send(cfg, uid, _t(lang, "أرسل وصف المشكلة نصًا من فضلك.", "Please describe the issue in text."))
         return True
-    if re.fullmatch(r"(موظف|بشري|human|agent)", text.strip().lower()):
-        t = open_ticket_for(db, uid)
-        if t:
-            add_message(db, t["id"], "user", text)
-            send(cfg, uid, _t(lang, "👤 حوّلنا طلبك لموظف دعم وسيرد عليك هنا قريبًا.", "👤 A support agent will reply here shortly."))
-            escalate(db, cfg, t, "طلب المستخدم موظفًا.", reason="user")
-            return True
+    if text_command(db, cfg, uid, text, lang, "bot"):
+        return True
     handle_user_text(db, uid, text, lang, "bot")
     return True
 
 
 def setup_webhook(cfg: dict, url: str, secret: str) -> dict:
     """يضبط webhook بوت الدعم المستقل ويجلب اسمه."""
-    tok = cfg.get("support_bot_token")
+    tok = secretbox.open_(cfg.get("support_bot_token") or "")
     if not tok:
         return {"ok": False, "description": "no token"}
     me = bot_call(tok, "getMe")

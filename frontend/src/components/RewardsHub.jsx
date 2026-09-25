@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import PageHead from './PageHead';
 import ErrorNote from './ErrorNote';
 import { getRewards, redeemReward } from '../api';
 import { haptic, requestContact } from '../telegram';
 import { CHECKOUT_TYPES, countdown, prizeIcon, prizeLabel } from '../rewards';
 import ScratchCard from './ScratchCard';
 import Icon from './Icon';
+import AnimIcon from './AnimIcon';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const STATUS = { active: 'rwActive', used: 'rwUsed', expired: 'rwExpired' };
@@ -85,13 +87,7 @@ export default function RewardsHub({ t, onBack, onUse, onRedeemed }) {
 
   return (
     <section className="dash">
-      <div className="settings-head">
-        <button type="button" className="btn ghost" onClick={onBack}>
-          <svg className="chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
-          <span>{t.back}</span>
-        </button>
-        <h1>{t.rwTitle}</h1>
-      </div>
+      <PageHead t={t} title={t.rwTitle} onBack={onBack} />
 
       {error && <ErrorNote t={t} kind="operation" code="rewards_load_failed">{t.rwErr}</ErrorNote>}
       {!error && !data && <div className="loader" role="status" aria-label={t.loading} />}
@@ -147,7 +143,7 @@ export default function RewardsHub({ t, onBack, onUse, onRedeemed }) {
           <div className="reward-list">
             {list.map((r) => (
               <article key={r.id} className={`reward is-${r.status}`}>
-                <img className="reward-icon" src={prizeIcon(r.type)} alt="" />
+                <AnimIcon className="reward-icon" name={r.type} src={prizeIcon(r.type)} />
                 <div className="reward-body">
                   <strong>{prizeLabel(t, r)}</strong>
                   <span className="muted">
