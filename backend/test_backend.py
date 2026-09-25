@@ -1218,6 +1218,20 @@ ton.usd_rate = lambda: 2.0
 ton.fetch_transactions = lambda limit=100: [{"hash": "h1", "lt": "1", "utime": 1, "source": "EQsrc", "value": 3_000_000_000, "comment": "x-order"}]
 ov = c.get("/api/admin/ton/overview").json()
 ok("الرصيد والتحويلات الواردة", ov["balance_ton"] == 12.5 and ov["balance_usd"] == 25.0 and ov["incoming"][0]["ton"] == 3.0)
+ton.fetch_transactions = lambda limit=100: [{"hash": "h9", "lt": "2", "utime": 1, "source": "EQs", "value": 1, "comment": "gift/for you"},
+                                              {"hash": "h8", "lt": "3", "utime": 1, "source": "EQs", "value": 1, "comment": "__x__"}]
+ok("تعليق حر فيه / لا يُسقط الصفحة", c.get("/api/admin/ton/overview").status_code == 200)
+from retry import RetryableError  # noqa: E402
+import importlib.util as _ilu  # noqa: E402
+_spec = _ilu.spec_from_file_location("ton_real", os.path.join(os.path.dirname(os.path.abspath(__file__)), "ton.py"))
+_ton_real = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_ton_real)
+_ton_real.TON_WALLET = ton.TON_WALLET
+_orig_get = _ton_real._get_transactions
+ton.fetch_transactions = _ton_real.fetch_transactions
+_ton_real._get_transactions = lambda limit: (_ for _ in ()).throw(RetryableError("429"))
+ov = c.get("/api/admin/ton/overview")
+ok("حد toncenter (429): الصفحة تعمل وتعرض السبب", ov.status_code == 200 and "rate limit" in ov.json()["error"])
+_ton_real._get_transactions = _orig_get
 NEW = "UQ" + "B" * 46
 CALLS.clear()
 otp = c.post("/api/admin/ton/otp", json={"action": "set_wallet", "params": {"address": NEW}}).json()
