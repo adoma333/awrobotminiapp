@@ -15,19 +15,8 @@ export default defineConfig({
   plugins: [react(), versionFile()],
   define: { __BUILD_ID__: JSON.stringify(BUILD_ID) },
   build: {
+    // التقسيم يتم بتحميل الصفحات عند الطلب (React.lazy) فقط. لا manualChunks: تقسيم المكتبات يدويًا
+    // سبّب اعتمادًا دائريًا بين الحِزم (Cannot access before initialization) فظهرت شاشة سوداء.
     chunkSizeWarningLimit: 700,
-    rollupOptions: {
-      output: {
-        // فصل المكتبات الثقيلة عن كود التطبيق: تحميل أول أسرع وتخزين مؤقت أطول لما لا يتغير
-        manualChunks(id) {
-          if (id.includes('node_modules')) {
-            if (id.includes('@tonconnect')) return 'tonconnect';
-            if (id.includes('react')) return 'react';
-            return 'vendor';
-          }
-          return undefined;
-        },
-      },
-    },
   },
 });
