@@ -46,7 +46,7 @@ const START_PARAM = String(window.Telegram?.WebApp?.initDataUnsafe?.start_param 
 
 export default function App() {
   const [lang, setLang] = useState(tgLang === 'ar' ? 'ar' : 'en');
-  const [phase, setPhase] = useState('loading'); // loading | flow | dashboard | status
+  const [phase, setPhase] = useState('loading'); // loading | flow | dashboard | status | offline
   const [step, setStep] = useState('lang'); // lang | profile | mt5  (شراء الباقة بعد الربط)
   const [view, setView] = useState('main'); // داخل اللوحة: main | plans | settings | terms | privacy | faq | calc | billing
   const [profile, setProfile] = useState({ nickname: '', avatar: 'boy' });
@@ -148,16 +148,19 @@ export default function App() {
   }, [phase, t, notify, refreshStatus]);
 
   // ───────── التحميل الأول: نقرّر أين يبدأ المستخدم ─────────
-  useEffect(() => {
-    getStatus()
-      .then((s) => {
+  // تعذّر الاتصال (إعادة تشغيل الخادم، شبكة ضعيفة) لا يعني مستخدمًا جديدًا: نعيد المحاولة ثم نعرض شاشة
+  // «تعذّر الاتصال» بدل رحلة التسجيل، حتى لا يظن المستخدم أن حسابه سُجّل خروجه أو ضاع.
+  const loadStart = useCallback(async () => {
+    setPhase('loading');
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const s = await getStatus();
         setInfo(s);
         if (s.language) setLang(s.language);
         if (s.status === 'approved') {
           if (OPEN_PLANS) setView('plans');
           setPhase('dashboard');
-        }
-        else if (s.status === 'rejected' || s.status === 'pending') setPhase('status');
+        } else if (s.status === 'rejected' || s.status === 'pending') setPhase('status');
         else {
           // none / unlinked: يبدأ رحلة الربط (الدفع يأتي بعد الربط)
           if (s.nickname) {
@@ -167,9 +170,21 @@ export default function App() {
           } else if (!localStorage.getItem(ONBOARD_KEY)) setShowOnboarding(true);
           setPhase('flow');
         }
-      })
-      .catch(() => setPhase('flow'));
+        return;
+      } catch (e) {
+        // 4xx (مثل فتح التطبيق خارج تلجرام): رحلة التسجيل كما كانت. غير ذلك: خلل مؤقت → إعادة المحاولة
+        if (e?.status >= 400 && e?.status < 500 && e.status !== 408 && e.status !== 429) {
+          setPhase('flow');
+          return;
+        }
+        await sleep(1500 * (attempt + 1));
+      }
+    }
+    setPhase('offline');
   }, []);
+  useEffect(() => {
+    loadStart();
+  }, [loadStart]);
 
   // ───────── تحديث لحظي عبر SSE (الرصيد، الاشتراك/الدفع، المزامنة) ─────────
   const started = phase !== 'loading';
@@ -366,6 +381,18 @@ export default function App() {
             )}
           </div>
         </>
+      )}
+
+      {phase === 'offline' && (
+        <div className="stage">
+          <section className="step offline-step" role="alert">
+            <h1>{t.offlineTitle}</h1>
+            <p className="sub">{t.offlineSub}</p>
+            <div className="actions">
+              <button type="button" className="btn primary" onClick={loadStart}><span>{t.offlineRetry}</span></button>
+            </div>
+          </section>
+        </div>
       )}
 
       {phase === 'status' && (

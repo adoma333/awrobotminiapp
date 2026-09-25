@@ -95,9 +95,41 @@ pip_install() { # pip_install <مجلد backend>
   [ ! -f "$1/requirements-mt5.txt" ] || as_app "$pip" install -q --no-deps -r "$1/requirements-mt5.txt"
 }
 
+# ───────────── قاعدة البيانات المحلية (SQLite) ─────────────
+db_is_local() { grep -q '^DB_BACKEND=sqlite' "$APP_DIR/backend/.env" 2>/dev/null; }
+
+backup_db() { # backup_db <مجلد النسخة>: نسخة متّسقة من قاعدة SQLite أثناء العمل (كـ root لأن النسخ في /root)
+  [ -f "$APP_DIR/data/aw.db" ] || return 0
+  if ( cd "$APP_DIR/backend" && "$APP_DIR/backend/.venv/bin/python" -c "import localdb,sys; localdb.Client(sys.argv[1]).backup(sys.argv[2])" "$APP_DIR/data/aw.db" "$1/aw.db" ); then
+    ok "نسخة من قاعدة البيانات: $1/aw.db"
+    chown -R "$APP_USER:" "$APP_DIR/data"  # ملفات WAL التي قد يُنشئها root تبقى ملكًا للتطبيق
+  else
+    warn "تعذّر نسخ قاعدة البيانات"
+  fi
+}
+
+migrate_db() { # ينقل كل بيانات Firebase إلى SQLite مرة واحدة ثم يحوّل المشروع إليها (Firebase لا يُمسّ)
+  db_is_local && return 0
+  say "نقل البيانات من Firebase إلى قاعدة البيانات المحلية (SQLite)"
+  mkdir -p "$APP_DIR/data" && chown "$APP_USER:" "$APP_DIR/data" && chmod 750 "$APP_DIR/data"
+  systemctl stop aw-sync 2>/dev/null || true
+  systemctl stop aw-backend 2>/dev/null || true
+  local rc=0
+  ( cd "$APP_DIR/backend" && as_app "$APP_DIR/backend/.venv/bin/python" migrate_sqlite.py ) || rc=$?
+  if [ "$rc" = 0 ]; then
+    printf '\nDB_BACKEND=sqlite\n' >> "$APP_DIR/backend/.env"
+    ok "المشروع يعمل الآن على SQLite — بلا حدود يومية (بيانات Firebase باقية كما هي كنسخة احتياطية)"
+  elif [ "$rc" = 2 ]; then
+    warn "حد Firebase اليومي ما زال مستنفدًا، فلا يمكن قراءة البيانات لنقلها الآن."
+    warn "أعد تشغيل: aw-update  بعد 08:00 بتوقيت الجزائر (07:00 UTC) — سيكمل النقل من حيث توقف."
+  else
+    warn "تعذّر النقل — بقي المشروع على Firebase كما كان."
+  fi
+}
+
 run_tests() { # run_tests <مجلد يحوي backend/>
   local d=$1 t
-  for t in test_backend.py test_sync.py; do
+  for t in test_backend.py test_sync.py test_localdb.py; do
     ( cd "$d/backend" && as_app "$APP_DIR/backend/.venv/bin/python" "$t" > "$d/$t.out" 2>&1 ) \
       || { tail -20 "$d/$t.out"; return 1; }
   done
