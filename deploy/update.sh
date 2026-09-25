@@ -26,6 +26,7 @@ mkdir -p "$BK"
 tar czf "$BK/code-before.tgz" -C "$APP_DIR" --ignore-failed-read \
   backend/main.py backend/sync_worker.py frontend/src deploy 2>/dev/null || true
 ok "نسخة احتياطية: $BK"
+backup_db "$BK"
 
 cd "$APP_DIR"
 if [ ! -d .git ]; then
@@ -43,6 +44,12 @@ git fetch -q origin "$BRANCH" || die "تعذّر الجلب من $REPO_URL (تح
 NEW=$(git rev-parse "origin/$BRANCH")
 if [ -n "$OLD" ] && [ "$OLD" = "$NEW" ] && [ "$FORCE" = 0 ]; then
   ok "أنت على آخر نسخة ($(git rev-parse --short HEAD)). لا شيء لتحديثه."
+  if ! db_is_local && [ -f "$APP_DIR/backend/migrate_sqlite.py" ]; then  # نقل لم يكتمل سابقًا (حد Firebase): نكمله الآن
+    migrate_db
+    systemctl restart aw-backend
+    if systemctl is-enabled --quiet aw-sync 2>/dev/null; then systemctl restart aw-sync; fi
+    health && ok "الـ API يعمل" || die "الـ API لا يستجيب. راجع: journalctl -u aw-backend -n 40"
+  fi
   exit 0
 fi
 
@@ -91,6 +98,8 @@ install_units
 install_sudoers
 install_cli
 tune_nginx
+
+migrate_db
 
 say "إعادة تشغيل الخدمات"
 rollback() {

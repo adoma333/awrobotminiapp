@@ -78,14 +78,21 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL") or (f"{WEBAPP_URL}/api/telegram-webhook" 
 if not ADMIN_IDS:
     print("⚠️  ADMIN_IDS فارغ: لن يستطيع أحد الموافقة أو الرفض من القناة.")
 
-_key_json = os.getenv("FIREBASE_KEY_JSON")  # محتوى ملف الخدمة كنص (مناسب للاستضافة)
-_cred = (
-    credentials.Certificate(json.loads(_key_json))
-    if _key_json
-    else credentials.Certificate(os.getenv("FIREBASE_KEY_PATH", "firebase-adminsdk.json"))
-)
-firebase_admin.initialize_app(_cred)
-db = firestore.client()
+if os.getenv("DB_BACKEND", "").strip().lower() == "sqlite":
+    # قاعدة البيانات المحلية (SQLite): بلا حدود يومية. نفس واجهة Firestore فلا يتغير أي منطق.
+    import localdb
+
+    firestore = localdb  # noqa: F811 — يوفّر SERVER_TIMESTAMP
+    db = localdb.client()
+else:
+    _key_json = os.getenv("FIREBASE_KEY_JSON")  # محتوى ملف الخدمة كنص (مناسب للاستضافة)
+    _cred = (
+        credentials.Certificate(json.loads(_key_json))
+        if _key_json
+        else credentials.Certificate(os.getenv("FIREBASE_KEY_PATH", "firebase-adminsdk.json"))
+    )
+    firebase_admin.initialize_app(_cred)
+    db = firestore.client()
 
 WANTED_UPDATES = ["callback_query", "message", "pre_checkout_query"]  # pre_checkout_query لازم لدفع Stars
 
@@ -162,6 +169,8 @@ async def lifespan(_app):
     _scheduler.add_job(scan_ton_payments, "interval", seconds=60, id="ton_scan")  # يتجاهل الدورة إن لم تُضبط محفظة
     _scheduler.add_job(lambda: _safe(run_growth_automations), "interval", minutes=60, id="growth_automations")
     _scheduler.add_job(lambda: _safe(reconcile_nowpayments), "interval", minutes=5, id="np_reconcile")
+    if os.getenv("DB_BACKEND", "").strip().lower() == "sqlite":
+        _scheduler.add_job(lambda: _safe(backup_local_db), "cron", hour=3, minute=30, id="db_backup")
     _scheduler.add_job(lambda: _safe(run_gateway_tick), "interval", seconds=30, id="gw_tick", max_instances=1, coalesce=True)
     _scheduler.add_job(lambda: _safe(run_gateway_sweeps), "interval", minutes=3, id="gw_sweeps", max_instances=1, coalesce=True)
     _scheduler.add_job(lambda: _safe(run_gateway_gas_check), "interval", minutes=30, id="gw_gas")
@@ -3119,6 +3128,14 @@ def gateway_summary() -> str:
         lines.append(f"⛽ غاز {n.upper()}: {g.get('balance', '?')} {g.get('symbol', '')}{' ⚠️ منخفض' if g.get('low') else ''}")
     lines.append("التحكم الكامل: لوحة التحكم ← بوابة الدفع")
     return "\n".join(lines)
+
+
+def backup_local_db(keep: int = 14):
+    """نسخة يومية متّسقة من قاعدة SQLite في data/backups (آخر 14 يومًا)."""
+    d = os.path.join(os.path.dirname(db.path), "backups")
+    db.backup(os.path.join(d, f"aw-{time.strftime('%Y%m%d')}.db"))
+    for old in sorted(f for f in os.listdir(d) if f.startswith("aw-") and f.endswith(".db"))[:-keep]:
+        os.remove(os.path.join(d, old))
 
 
 def run_gateway_tick():

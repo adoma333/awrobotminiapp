@@ -367,6 +367,12 @@ class Mt5Client:
 # ───────────────────────── التخزين والإشعارات ─────────────────────────
 class Store:
     def __init__(self):
+        if os.getenv("DB_BACKEND", "").strip().lower() == "sqlite":  # نفس ملف القاعدة المحلية الذي يستخدمه الخادم
+            import localdb
+
+            self.db = localdb.client()
+            self.ts = localdb.SERVER_TIMESTAMP
+            return
         import firebase_admin
         from firebase_admin import credentials, firestore
 

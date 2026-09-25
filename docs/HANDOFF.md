@@ -282,3 +282,16 @@ curl -s http://127.0.0.1:8000/api/admin/settings -b /tmp/admin_cookie.txt 2>/dev
 - TON: الدفع مباشرة إلى عنوانك مع تعليق فريد لكل فاتورة.
 - في البوت: `/gateway` (للأدمن) يعرض ملخصًا سريعًا.
 - الطوارئ: `.venv/bin/python gateway_keys.py export tron <uid>` يطبع المفتاح الخاص لأي عنوان إيداع لاستيراده في محفظة.
+
+---
+
+## 11) قاعدة البيانات المحلية SQLite (بدل Firebase)
+
+- **السبب:** الخطة المجانية في Firebase لها حد يومي (50 ألف قراءة)، ونفاده يعطّل التطبيق لكل المستخدمين.
+- **الانتقال تلقائي عبر `aw-update`:** يوقف الخدمات، ثم ينسخ كل مجموعات Firebase إلى `data/aw.db` ويطابق عدد المستندات، ثم يضيف `DB_BACKEND=sqlite` إلى `.env` ويعيد التشغيل. إن كان حد Firebase مستنفدًا، يحتفظ بما نُقل ويكمل عند تشغيل `aw-update` التالي.
+- **Firebase لا يُحذف منه شيء:** يبقى نسخة احتياطية. للرجوع إليه: احذف سطر `DB_BACKEND=sqlite` ثم `systemctl restart aw-backend aw-sync`.
+- **الملفات:** `backend/localdb.py` (واجهة Firestore فوق SQLite، بوضع WAL)، و`backend/migrate_sqlite.py`، و`backend/test_localdb.py`.
+- **النسخ الاحتياطي:**
+  - يوميًا 03:30 في `data/backups/` (آخر 14 يومًا).
+  - وقبل كل `aw-update` في `/root/aw-backup-*/aw.db`.
+  - نزّل نسخة خارج السيرفر أسبوعيًا.
