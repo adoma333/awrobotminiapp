@@ -20,6 +20,8 @@ BSC_CHAIN_ID = 56
 TONCENTER_V2 = os.getenv("TONCENTER_API", "https://toncenter.com/api/v2").rstrip("/")
 TONCENTER_V3 = os.getenv("TONCENTER_V3_API", "https://toncenter.com/api/v3").rstrip("/")
 TONCENTER_KEY = os.getenv("TONCENTER_API_KEY", "")
+TONAPI = os.getenv("TONAPI_URL", "https://tonapi.io").rstrip("/")
+TONAPI_KEY = os.getenv("TONAPI_KEY", "")
 
 USDT_TRC20 = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 USDT_BEP20 = "0x55d398326f99059fF775485246999027B3197955"
@@ -217,7 +219,39 @@ def ton_incoming(address: str, limit: int = 100) -> list:
 
 
 def ton_jetton_incoming(owner: str, master: str, limit: int = 100) -> list:
-    """تحويلات USDT (jetton) الواردة لعنوان الاستلام مع تعليق كل تحويل."""
+    """تحويلات USDT (jetton) الواردة لعنوان الاستلام مع تعليق كل تحويل.
+
+    المصدر الأساسي tonapi (نفس مصدر Tonviewer): يقرأ التعليق حتى في سحوبات المنصات المجمّعة (Binance وغيرها)
+    التي يعيد فيها toncenter التعليق فارغًا. toncenter احتياطي فقط إن تعطل tonapi."""
+    try:
+        return _tonapi_jetton_incoming(owner, master, limit)
+    except Exception:  # noqa: BLE001 — نكمل بالمصدر الاحتياطي
+        return _toncenter_jetton_incoming(owner, master, limit)
+
+
+def _tonapi_jetton_incoming(owner: str, master: str, limit: int) -> list:
+    me, jetton = cc.ton_raw(owner), cc.ton_raw(master)
+    headers = {"Authorization": f"Bearer {TONAPI_KEY}"} if TONAPI_KEY else {}
+    res = HTTP["get"](f"{TONAPI}/v2/accounts/{owner}/jettons/{master}/history", {"limit": min(100, limit)}, headers)
+    if "events" not in res:
+        raise ChainError(f"tonapi: {str(res)[:120]}")
+    out = []
+    for ev in res.get("events") or []:
+        for act in ev.get("actions") or []:
+            t = act.get("JettonTransfer") or {}
+            if act.get("type") != "JettonTransfer" or act.get("status") != "ok":
+                continue
+            try:  # واردة لعنواننا فعلًا، ومن عقد USDT الحقيقي (لا توكن مزيف بنفس الاسم)
+                if cc.ton_raw((t.get("recipient") or {}).get("address")) != me or cc.ton_raw((t.get("jetton") or {}).get("address")) != jetton:
+                    continue
+            except ValueError:
+                continue
+            out.append({"hash": ev.get("event_id"), "utime": int(ev.get("timestamp") or 0), "amount": int(t.get("amount") or 0),
+                        "comment": str(t.get("comment") or "").strip(), "source": (t.get("sender") or {}).get("address")})
+    return out
+
+
+def _toncenter_jetton_incoming(owner: str, master: str, limit: int) -> list:
     res = HTTP["get"](f"{TONCENTER_V3}/jetton/transfers", {"owner_address": owner, "jetton_master": master, "direction": "in",
                                                           "limit": limit, "sort": "desc"}, _ton_headers())
     out = []
