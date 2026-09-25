@@ -1522,6 +1522,34 @@ ok("توقيع EIP-155 مطابق للمتجه الرسمي", raw_.endswith("25a
 ok("عنوان ETH مطابق للمتجه المعروف", chain_crypto.eth_address(bytes.fromhex("4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318")) == "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23")
 ok("تحقق عناوين TRON (checksum)", chain_crypto.is_tron_address(gw_chains.USDT_TRC20) and not chain_crypto.is_tron_address("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6u"))
 ok("قراءة تعليق TON من BOC", chain_crypto.payload_comment(ton.comment_payload("AWTEST1")) == "AWTEST1")
+# بيانات حقيقية: سحب USDT من Binance إلى عنوان الاستلام (toncenter يعيد التعليق فارغًا، tonapi يعيده)
+OWNER_ = "UQA6upacy-O8MSNlwbSUCNYiTjwUIzeCjs6tKIaDDboYAWqx"
+ME_RAW_ = "0:3aba969ccbe3bc312365c1b49408d6224e3c142337828ecead2886830dba1801"
+USDT_RAW_ = "0:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe"
+ok("تحويل عنوان TON للصيغة الخام (checksum)", chain_crypto.ton_raw(OWNER_) == ME_RAW_ and chain_crypto.ton_raw(gw_chains.USDT_TON_MASTER) == USDT_RAW_)
+def _jt(recipient, jetton, amount, comment, status="ok"):
+    return {"type": "JettonTransfer", "status": status, "JettonTransfer": {
+        "sender": {"address": "0:ca1d9edeef40b3a9dbd9082f3767859547c3ce0bf641d09d58e33a3cf06fb309", "name": "Binance Hot Wallet"},
+        "recipient": {"address": recipient}, "amount": amount, "comment": comment, "jetton": {"address": jetton, "symbol": "USD₮", "decimals": 6}}}
+TONAPI_ = {"events": [{"event_id": "da3c12a9d144591ba741364c61cf6545404953585eaa16cd86788f7bd317f07b", "timestamp": 1790373601, "actions": [
+    _jt("0:5f0000000000000000000000000000000000000000000000000000000000abcd", USDT_RAW_, "59700000", "UQAWV6OX7GR8DAAia34M0c8EjEICy"),
+    _jt(ME_RAW_, USDT_RAW_, "10000000", "AWF9LER9W"),
+    _jt(ME_RAW_, "0:" + "1" * 64, "10000000", "AWFAKE000"),
+    _jt(ME_RAW_, USDT_RAW_, "10000000", "AWFAILED0", status="failed")]}]}
+TONCENTER_ = {"jetton_transfers": [{"amount": "10000000", "transaction_hash": "x/KWrH1IX0FPXa8ZOJKCYCsMkUJkrrlz9hx3cYpouTI=", "transaction_now": 1790373601,
+                                    "transaction_aborted": False, "forward_payload": None, "decoded_forward_payload": None, "source": "0:ca1d"}]}
+_http_ = dict(gw_chains.HTTP)
+gw_chains.HTTP["get"] = lambda url, params=None, headers=None: TONAPI_ if "tonapi" in url else TONCENTER_
+got_ = gw_chains.ton_jetton_incoming(OWNER_, gw_chains.USDT_TON_MASTER)
+ok("USDT على TON من Binance: التعليق يُقرأ (tonapi)", [(t["amount"], t["comment"]) for t in got_] == [(10_000_000, "AWF9LER9W")])
+ok("…ويُتجاهل: تحويل لعنوان آخر، توكن مزيف بنفس الاسم، تحويل فاشل", len(got_) == 1)
+def _tonapi_down(url, params=None, headers=None):
+    if "tonapi" in url:
+        raise RuntimeError("tonapi down")
+    return TONCENTER_
+gw_chains.HTTP["get"] = _tonapi_down
+ok("tonapi متوقف: toncenter احتياطيًا", [t["amount"] for t in gw_chains.ton_jetton_incoming(OWNER_, gw_chains.USDT_TON_MASTER)] == [10_000_000])
+gw_chains.HTTP.update(_http_)
 
 reset(); admin_login(555)
 BAL = {}

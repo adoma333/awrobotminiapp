@@ -291,3 +291,30 @@ def payload_comment(b64: str | None) -> str | None:
         return _comment_from(cells, root, shifted, bits - 1, refs)
     except (ValueError, IndexError):
         return None
+
+
+# ───────────────────────── TON: تحويل العنوان للصيغة الخام ─────────────────────────
+def _crc16(data: bytes) -> int:
+    crc = 0
+    for b in data:
+        crc ^= b << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) if crc & 0x8000 else (crc << 1)
+            crc &= 0xFFFF
+    return crc
+
+
+def ton_raw(addr: str) -> str:
+    """UQ…/EQ… أو 0:hex → "wc:hex" بأحرف صغيرة (للمقارنة الآمنة بين الصيغ). يتحقق من checksum."""
+    a = str(addr or "").strip()
+    if ":" in a:
+        wc, h = a.split(":", 1)
+        if len(h) != 64:
+            raise ValueError("bad raw TON address")
+        bytes.fromhex(h)
+        return f"{int(wc)}:{h.lower()}"
+    raw = base64.urlsafe_b64decode(a.replace("+", "-").replace("/", "_") + "=" * (-len(a) % 4))
+    if len(raw) != 36 or _crc16(raw[:34]).to_bytes(2, "big") != raw[34:]:
+        raise ValueError("bad TON address checksum")
+    wc = raw[1] - 256 if raw[1] > 127 else raw[1]
+    return f"{wc}:{raw[2:34].hex()}"
