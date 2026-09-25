@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api";
 
-const ACTION = { set_wallet: "تغيير محفظة الاستلام", set_window: "تعديل مهلة الدفع", toggle: "تشغيل/إيقاف الدفع بـ TON", transfer: "تحويل TON" };
+const ACTION = { set_wallet: "تغيير محفظة الاستلام", set_window: "تعديل مهلة الدفع", toggle: "تشغيل/إيقاف الدفع بـ TON", transfer: "تحويل TON", gw_payout: "تغيير عنوان استلام بوابة الدفع" };
 const EVENT = { otp_requested: "طلب رمز", otp_wrong: "رمز خاطئ", otp_expired: "رمز منتهٍ/مستنفد", otp_invalid: "رمز غير صالح", executed: "نُفّذت", transfer_signed: "وُقّع التحويل", transfer_failed: "فشل التحويل" };
 const when = (ts) => (ts ? new Date(ts * 1000).toLocaleString("ar-u-nu-latn", { dateStyle: "short", timeStyle: "short" }) : "—");
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-6)}` : "—");

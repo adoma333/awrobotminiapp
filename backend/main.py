@@ -46,6 +46,7 @@ import support_accounts
 import ton
 import tonadmin
 import growth
+import gateway
 import secretbox
 from retry import RetryableError, raise_for_retryable, with_backoff
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -161,6 +162,9 @@ async def lifespan(_app):
     _scheduler.add_job(scan_ton_payments, "interval", seconds=60, id="ton_scan")  # يتجاهل الدورة إن لم تُضبط محفظة
     _scheduler.add_job(lambda: _safe(run_growth_automations), "interval", minutes=60, id="growth_automations")
     _scheduler.add_job(lambda: _safe(reconcile_nowpayments), "interval", minutes=5, id="np_reconcile")
+    _scheduler.add_job(lambda: _safe(run_gateway_tick), "interval", seconds=30, id="gw_tick", max_instances=1, coalesce=True)
+    _scheduler.add_job(lambda: _safe(run_gateway_sweeps), "interval", minutes=3, id="gw_sweeps", max_instances=1, coalesce=True)
+    _scheduler.add_job(lambda: _safe(run_gateway_gas_check), "interval", minutes=30, id="gw_gas")
     _scheduler.start()
     yield
     _scheduler.shutdown(wait=False)
@@ -801,6 +805,8 @@ def handle_private_message(msg: dict):
         return send_welcome(msg, text)
     if first == "/admin":
         return handle_admin_login(msg)
+    if first == "/gateway" and msg["from"]["id"] in ADMIN_IDS:
+        return tg("sendMessage", chat_id=msg["chat"]["id"], text=gateway_summary())
 
     sender = msg["from"]["id"]
     state_ref = db.collection("admin_state").document(str(sender))
@@ -1364,6 +1370,18 @@ def create_payment(body: PaymentCreate):
     amount_usd = max(1, int(round(amount_usd)))  # قيمة ثابتة بالدولار بلا كسور (12$ لا 12.000850$)
 
     order_id = f"{user['id']}-{body.package_id}-{int(time.time())}"
+    gw_cfg = gateway.get_config(db)
+    if gateway.active(gw_cfg):
+        order_id += f"-{secrets.token_hex(3)}"  # فريد حتى لو أنشأ المستخدم فاتورتين في الثانية نفسها
+        if not body.pay_currency:
+            raise HTTPException(400, "pay_currency_required")
+        try:
+            return gateway.create_invoice(db, user["id"], body.pay_currency, amount_usd, order_id,
+                                          {"package_id": body.package_id, **reward_fields(card, body.reward_id, pkg["price_usd"])})
+        except gateway.GatewayError as e:
+            raise HTTPException(e.status, e.code)
+        except gateway.ch.ChainError:
+            raise HTTPException(502, "payment_provider_error")
     base = FRONTEND_ORIGIN if FRONTEND_ORIGIN != "*" else (WEBAPP_URL or "")
     if body.pay_currency:
         return _create_direct_crypto(user, body, pkg, card, amount_usd, order_id, base)
@@ -1441,7 +1459,10 @@ def _create_direct_crypto(user, body, pkg, card, amount_usd, order_id, base):
 
 @app.get("/api/payments/currencies")
 def payment_currencies():
-    return {"currencies": payments.currencies()}
+    cfg = gateway.get_config(db)
+    if gateway.active(cfg):  # بوابتنا الخاصة (AW Pay) بدل NOWPayments
+        return {"currencies": gateway.currencies(cfg), "provider": "aw"}
+    return {"currencies": payments.currencies(), "provider": "nowpayments"}
 
 
 class OrderStatus(BaseModel):
@@ -1459,6 +1480,13 @@ def payment_status(body: OrderStatus):
     if not pay or str(pay.get("uid")) != str(user["id"]):
         raise HTTPException(404, "order_not_found")
     status = pay.get("status")
+    if pay.get("method") == "gateway":  # تحقق مباشر من الشبكة (بحد أدنى 8ث بين الطلبات)
+        if status in gateway.OPEN and time.time() - float(pay.get("checked_at") or 0) >= 8:
+            try:
+                return gateway.check_invoice(db, body.order_id, gw_hooks())
+            except Exception:  # noqa: BLE001 — الشبكة بطيئة: نعيد آخر حالة معروفة
+                log.exception("gateway check")
+        return gateway.public_invoice(body.order_id, pay)
     if status not in ("finished", "failed", "expired", "refunded") and pay.get("np_payment_id"):
         if time.time() - float(pay.get("np_checked_at") or 0) >= 10:
             ref.set({"np_checked_at": time.time()}, merge=True)
@@ -3017,7 +3045,7 @@ def _send_otp(admin_id, text: str) -> bool:
 
 
 class TonOtp(BaseModel):
-    action: str = Field(pattern="^(set_wallet|set_window|toggle|transfer)$")
+    action: str = Field(pattern="^(set_wallet|set_window|toggle|transfer|gw_payout)$")
     params: dict = Field(default_factory=dict)
 
 
@@ -3066,6 +3094,172 @@ def admin_ton_transfer_result(body: TonTransferResult, admin_id: int = Depends(g
 @app.get("/api/admin/ton/log")
 def admin_ton_log(admin_id: int = Depends(get_current_admin)):
     return {"rows": tonadmin.history(db)}
+
+
+# ═══════════════════════════ بوابة الدفع الخاصة (AW Pay) ═══════════════════════════
+def _gw_user(uid, text_ar: str, text_en: str):
+    lang = ((user_ref(uid).get().to_dict() or {}).get("language")) or "ar"
+    tg("sendMessage", chat_id=uid, text=text_ar if lang == "ar" else text_en)
+    notifications.push(db, uid, "payment", "دفعة ناقصة" if "⚠️" in text_ar else "تحديث الدفع",
+                       "Partial payment" if "⚠️" in text_en else "Payment update", text_ar, text_en)
+
+
+def gw_hooks() -> dict:
+    return {"paid": lambda oid, extra: activate_payment(oid, extra), "user": _gw_user, "admin": notify_admins}
+
+
+def gateway_summary() -> str:
+    """ملخص سريع لبوابة الدفع في البوت (/gateway للأدمن)."""
+    o = gateway.overview(db)
+    st, gas = o["stats"], gateway.gas_status(db)
+    lines = ["💳 بوابة الدفع AW Pay", f"الحالة: {'✅ تعمل' if o['active'] else '⏸️ موقوفة'}",
+             f"آخر 30 يومًا: {st['finished_30d']} دفعة · ${st['revenue_usd_30d']}",
+             f"مفتوحة: {st['open']} · ناقصة: {st['partial']} · تحتاج قرارك: {st['underpaid']}"]
+    for n, g in gas.items():
+        lines.append(f"⛽ غاز {n.upper()}: {g.get('balance', '?')} {g.get('symbol', '')}{' ⚠️ منخفض' if g.get('low') else ''}")
+    lines.append("التحكم الكامل: لوحة التحكم ← بوابة الدفع")
+    return "\n".join(lines)
+
+
+def run_gateway_tick():
+    if gateway.active(gateway.get_config(db)):
+        gateway.tick(db, gw_hooks())
+
+
+def run_gateway_sweeps():
+    gateway.sweep_tick(db, gw_hooks())
+
+
+_gw_gas_alert = {"at": 0.0}
+
+
+def run_gateway_gas_check():
+    """تنبيه عند انخفاض خزان الغاز (مرة كل 6 ساعات كحد أقصى)."""
+    cfg = gateway.get_config(db)
+    if not gateway.active(cfg) or time.time() - _gw_gas_alert["at"] < 6 * 3600:
+        return
+    low = [f"{n.upper()}: {g.get('balance')} {g.get('symbol')} — {g['address']}" for n, g in gateway.gas_status(db).items() if g.get("low")]
+    if low:
+        _gw_gas_alert["at"] = time.time()
+        notify_admins("⛽ خزان الغاز لبوابة الدفع منخفض — التجميع التلقائي قد يتوقف:\n" + "\n".join(low))
+
+
+def _gw_http(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except gateway.GatewayError as e:
+        raise HTTPException(e.status, e.code)
+    except gateway.ch.ChainError as e:
+        raise HTTPException(502, f"chain_error: {e}"[:160])
+
+
+@app.get("/api/admin/gateway")
+def admin_gateway(admin_id: int = Depends(get_current_admin)):
+    out = gateway.overview(db)
+    out["gas"] = gateway.gas_status(db)
+    return out
+
+
+@app.put("/api/admin/gateway")
+def admin_gateway_save(patch: dict, admin_id: int = Depends(get_current_admin)):
+    try:
+        clean = gateway.clean_config(patch)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(422, str(e))
+    if clean.get("enabled") and not gateway.master():
+        raise HTTPException(422, "gateway_master_key_missing")
+    db.collection(gateway.CONFIG_DOC[0]).document(gateway.CONFIG_DOC[1]).set({**clean, "updated_by": admin_id, "updated_at": time.time()}, merge=True)
+    return gateway.overview(db)
+
+
+@app.get("/api/admin/gateway/invoices")
+def admin_gateway_invoices(status: str = "", limit: int = 100, admin_id: int = Depends(get_current_admin)):
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    rows = []
+    for d in db.collection("payments").where(filter=FieldFilter("method", "==", "gateway")).stream():
+        p = d.to_dict() or {}
+        if status and p.get("status") != status:
+            continue
+        a = gateway.ASSETS.get(p.get("asset"), {})
+        rows.append({"id": d.id, "uid": p.get("uid"), "status": p.get("status"), "asset": p.get("asset"), "symbol": a.get("symbol"),
+                     "network": p.get("network"), "address": p.get("address"), "memo": p.get("memo"), "amount": p.get("amount_text"),
+                     "received": gateway.fmt_units(p["asset"], p.get("received_units") or 0) if p.get("asset") in gateway.ASSETS else None,
+                     "amount_usd": p.get("amount_usd"), "created_at": p.get("created_at"), "expires_at": p.get("expires_at"),
+                     "confirmed_at": p.get("confirmed_at"), "package_id": p.get("package_id"), "tx_hashes": p.get("tx_hashes"),
+                     "manual_accept": p.get("manual_accept"), "check_error": p.get("check_error")})
+    rows.sort(key=lambda r: -(r.get("created_at") or 0))
+    return {"rows": rows[:max(1, min(500, limit))]}
+
+
+class GwNote(BaseModel):
+    note: str = Field(default="", max_length=200)
+
+
+@app.post("/api/admin/gateway/invoices/{order_id}/check")
+def admin_gateway_check(order_id: str, admin_id: int = Depends(get_current_admin)):
+    return _gw_http(gateway.check_invoice, db, order_id, gw_hooks())
+
+
+@app.post("/api/admin/gateway/invoices/{order_id}/accept")
+def admin_gateway_accept(order_id: str, body: GwNote, admin_id: int = Depends(get_current_admin)):
+    return _gw_http(gateway.accept_invoice, db, order_id, admin_id, gw_hooks(), body.note)
+
+
+@app.post("/api/admin/gateway/invoices/{order_id}/cancel")
+def admin_gateway_cancel(order_id: str, admin_id: int = Depends(get_current_admin)):
+    return _gw_http(gateway.cancel_invoice, db, order_id, admin_id)
+
+
+@app.get("/api/admin/gateway/addresses")
+def admin_gateway_addresses(admin_id: int = Depends(get_current_admin)):
+    rows = [{"id": d.id, **{k: v for k, v in (d.to_dict() or {}).items()}} for d in db.collection(gateway.ADDRS).stream()]
+    rows.sort(key=lambda r: (not r.get("dirty"), not r.get("op"), -(r.get("created_at") or 0)))
+    return {"rows": rows[:500]}
+
+
+class GwSweep(BaseModel):
+    network: str = Field(pattern=r"^(tron|bsc)$")
+    uid: str = Field(pattern=r"^\d{1,15}$")
+
+
+@app.post("/api/admin/gateway/sweep")
+def admin_gateway_sweep(body: GwSweep, admin_id: int = Depends(get_current_admin)):
+    return _gw_http(gateway.sweep_address, db, body.network, body.uid, gw_hooks(), True)
+
+
+@app.get("/api/admin/gateway/sweeps")
+def admin_gateway_sweeps(admin_id: int = Depends(get_current_admin)):
+    rows = [d.to_dict() or {} for d in db.collection(gateway.SWEEPS).stream()]
+    rows.sort(key=lambda r: -(r.get("at") or 0))
+    return {"rows": rows[:200]}
+
+
+@app.get("/api/admin/gateway/ton-incoming")
+def admin_gateway_ton_incoming(admin_id: int = Depends(get_current_admin)):
+    """آخر التحويلات الواردة لعنوان TON مع ما طابق منها فاتورة — لمطابقة التحويلات التي أُرسلت بلا تعليق يدويًا."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    cfg = gateway.get_config(db)
+    addr = cfg["payout"].get("ton")
+    if not addr:
+        return {"rows": []}
+    memos = {}
+    for d in db.collection("payments").where(filter=FieldFilter("method", "==", "gateway")).stream():
+        p = d.to_dict() or {}
+        if p.get("memo"):
+            memos[p["memo"]] = d.id
+    rows = []
+    for kind, fetch in (("ton", lambda: gateway.ch.ton_incoming(addr, 50)),
+                        ("usdtton", lambda: gateway.ch.ton_jetton_incoming(addr, gateway.ch.USDT_TON_MASTER, 50))):
+        try:
+            for t in fetch():
+                rows.append({**t, "asset": kind, "amount_text": gateway.fmt_units(kind, t["amount"]),
+                             "order_id": memos.get(t["comment"].replace(" ", "").upper())})
+        except gateway.ch.ChainError:
+            continue
+    rows.sort(key=lambda r: -r["utime"])
+    return {"rows": rows}
 
 
 # ═══════════════════════════ تنبيهات فورية داخل اللوحة ═══════════════════════════

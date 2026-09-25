@@ -3602,3 +3602,10 @@ html[lang='ar'] .btn.small {
 .ref-tiers li.on { border-color: var(--line); color: var(--bone); }
 .ref-tiers li.on bdi { color: var(--ember); }
 .cur-ic { width: 1.05em; height: 1.05em; object-fit: contain; vertical-align: -0.15em; }
+
+/* الدفع الناقص في بوابة الدفع */
+.cp-partial { display: grid; gap: 6px; margin: 0 0 12px; padding: 12px 14px; border-radius: 14px;
+  border: 1px solid rgba(255, 196, 0, 0.4); background: rgba(255, 196, 0, 0.08); font-size: 14px; }
+.cp-partial b { color: #ffc400; }
+.cp-partial .btn { justify-self: start; }
+.cp-wallet { width: 100%; margin-top: 10px; }
