@@ -3,13 +3,7 @@ import { getLeaderboard } from '../api';
 import { fill } from '../i18n';
 import { TIERS } from '../tiers';
 import Avatar from './Avatar';
-import Icon from './Icon';
-
 import { signedUsd as signed } from '../format';
-// علامة صغيرة للمنافس المحاكاة (مع سطر توضيحي أسفل القائمة)
-const SimMark = ({ t }) => (
-  <span className="lb-sim" title={t.lbSimTitle} aria-label={t.lbSimTitle}><Icon name="bolt" size={11} /></span>
-);
 
 const tierImg = (key) => TIERS.find((x) => x.key === key)?.img;
 
@@ -20,7 +14,6 @@ function Row({ t, r }) {
       <Avatar kind={r.avatar} src={r.photo} size={34} />
       <span className="lb-name">
         <bdi>{r.you ? t.lbYou : r.name}</bdi>
-        {r.simulated && <SimMark t={t} />}
       </span>
       {r.tier && <img className="lb-tier" src={tierImg(r.tier)} alt="" />}
       <span className={`lb-pct ${r.usd >= 0 ? 'up' : 'down'}`} dir="ltr">
@@ -60,7 +53,6 @@ export default function Leaderboard({ t }) {
             <Avatar kind={r.avatar} src={r.photo} size={r.rank === 1 ? 64 : 52} />
             <b><bdi>{r.you ? t.lbYou : r.name.split(' ')[0]}</bdi></b>
             <span className="pod-pct" dir="ltr">{signed(r.usd)}</span>
-            {r.simulated && <SimMark t={t} />}
             <span className="pod-base" />
           </div>
         ))}
@@ -74,9 +66,7 @@ export default function Leaderboard({ t }) {
           <Row t={t} r={lb.me} />
         </ol>
       )}
-      {lb.has_simulated && (
-        <p className="muted small-note lb-legend"><SimMark t={t} /> {t.lbSimNote}</p>
-      )}
+      {lb.has_simulated && <p className="muted small-note lb-legend">{t.lbSimNote}</p>}
     </div>
   );
 }

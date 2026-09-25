@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -198,6 +199,10 @@ def fake_tg(method, **p):
 
 
 main.tg = fake_tg
+import support  # noqa: E402
+support.bot_call = lambda token, method, **p: fake_tg(method, _token=token, **p) if method != "sendMessage" else (CALLS.append((method, {"_token": token, **p})) or {"ok": True, "result": {"message_id": len(CALLS)}})
+support.ASYNC = False
+os.environ.pop("ANTHROPIC_API_KEY", None)
 main.get_logo_file_id = lambda: None
 c = TestClient(main.app, base_url="https://testserver")
 
@@ -953,10 +958,17 @@ sims = [r for r in lb["rows"] if r["simulated"]]
 ok("النخبة فوق 250 ألف دولار وتتصدر", len(sims) == 12 and all(r["usd"] >= 250000 for r in lb["rows"][:3]) and all(r["simulated"] for r in lb["rows"][:3]))
 ok("ترتيب المستخدم محسوب بين الجميع", lb["me"]["rank"] == 1 + sum(1 for r in lb["rows"] if r["usd"] > 1250.5))
 cfg = leaderboard.get_config(DB)
+first = [(r["name"], r["usd"]) for r in lb["rows"]]
+DB.store.pop("leaderboard", None)  # حتى لو أُعيد حساب كل شيء من الصفر: نفس القيم (حتمية)
+ok("البيانات ثابتة: لا تتغير عشوائيًا مع كل تحديث", [(r["name"], r["usd"]) for r in c.get("/api/leaderboard", params={"init_data": init_data()}).json()["rows"]] == first)
 before = {b["id"]: b["usd"] for b in DB.store["leaderboard"]["sim"]["bots"]}
 leaderboard.tick(DB, cfg, rng=__import__("random").Random(3))
-ok("السباق: الأرباح تتحرك كل دورة", before != {b["id"]: b["usd"] for b in DB.store["leaderboard"]["sim"]["bots"]})
-ok("أسماء وصور من الإعدادات", DB.store["leaderboard"]["sim"]["bots"][0]["name"] == cfg["profiles"][0]["name"])
+ok("لا حركة قبل الفاصل الزمني الذي يحدده الأدمن", before == {b["id"]: b["usd"] for b in DB.store["leaderboard"]["sim"]["bots"]})
+leaderboard.tick(DB, cfg, rng=__import__("random").Random(3), force=True)
+moved = DB.store["leaderboard"]["sim"]["bots"]
+ok("المحاكاة الديناميكية: الأرباح تتحرك", before != {b["id"]: b["usd"] for b in moved})
+ok("الحركة ضمن نطاق التذبذب حول القيمة الأساسية", all(b["base"] * 0.88 - 0.01 <= b["usd"] <= b["base"] * 1.12 + 0.01 for b in moved))
+ok("أسماء وصور من الإعدادات", moved[0]["name"] == cfg["profiles"][0]["name"])
 
 W({"message": {"chat": {"id": 555, "type": "private"}, "from": {"id": 555}, "text": "/admin"}})
 txt = CALLS[-1][1]["text"]
@@ -970,6 +982,14 @@ ok("نطاق غير منطقي مرفوض", c.put("/api/admin/leaderboard", json
 lb = c.get("/api/leaderboard", params={"init_data": init_data()}).json()
 sims = [r for r in lb["rows"] if r["simulated"]]
 ok("تغيير الإعدادات يطبَّق فورًا", sorted(r["name"] for r in sims) == ["Ali", "Nour"] and max(r["usd"] for r in sims) >= 400000)
+r = c.put("/api/admin/leaderboard", json={"mode": "group", "group_size": 4, "profiles": [
+    {"name": "A1", "base_usd": 5000}, {"name": "A2", "base_usd": 900}, {"name": "A3", "base_usd": 100, "photo": "https://example.test/api/media/avatars/lb_x.webp"}, {"name": "A4", "base_usd": 50}]})
+lb = c.get("/api/leaderboard", params={"init_data": init_data()}).json()
+ok("المجموعة المغلقة: العدد ثابت ويشمل المستخدم الحقيقي", len(lb["rows"]) == 4 and sum(r["you"] for r in lb["rows"]) == 1 and lb["mode"] == "group")
+ok("المستخدم الحقيقي مرتب بين الأسماء بنفس المنطق", [r["name"] for r in lb["rows"]] == ["A1", "Ahmed", "A2", "A3"] and lb["me"]["rank"] == 2)
+ok("القيمة الأساسية المؤكَّدة تُعرض كما هي + الصورة لكل إدخال", [r["usd"] for r in lb["rows"] if r["simulated"]] == [5000, 900, 100] and lb["rows"][3]["photo"].endswith(".webp"))
+ok("المستخدمون الحقيقيون الآخرون خارج المجموعة", all(r["name"] != "Sara" for r in lb["rows"]))
+c.put("/api/admin/leaderboard", json={"mode": "open"})
 c.post("/api/admin/logout")
 
 # ═════════ 26) صفحة "انشر الآن" لكل منصة ═════════
@@ -1051,6 +1071,180 @@ ceo = c.get("/api/admin/ceo").json()
 ok("CEO: المستخدمون والاشتراكات", ceo["users"]["total"] == 3 and ceo["users"]["linked"] == 2 and ceo["subscriptions"]["active"] == 1 and ceo["subscriptions"]["conversion_pct"] == 50.0)
 ok("CEO: الإيرادات بالدولار (TON × سعره)", ceo["revenue"]["total_usd"] == 59.0 and ceo["revenue"]["orders"] == 2 and ceo["by_method"] == {"nowpayments": 1, "ton": 1})
 ok("CEO: منحنى 30 يومًا", len(ceo["series"]) == 30 and ceo["series"][-1]["revenue"] == 59.0)
+c.post("/api/admin/logout")
+
+# ═════════ 30) الإشعارات (🔔): تلقائية + بث من الأدمن ═════════
+import notifications  # noqa: E402
+reset(); admin_access.invalidate()
+add_user(42, status="approved", language="ar", subscription={"expires_at": time.time() + 86400}, live={"balance": 50.0})
+add_user(43, status="approved", language="en", live={"balance": 5000.0}, phone_prefix="9665")
+add_user(44, status="none", language="ar")
+notifications.push(DB, 42, "deposit", "إيداع", "Deposit", "+100", "+100")
+n = c.get("/api/notifications", params={"init_data": init_data()}).json()
+ok("إشعار وارد تلقائي محفوظ كسجل", n["unread"] == 1 and n["items"][0]["kind"] == "deposit")
+admin_login(555)
+ok("معاينة عدد المستلمين بالفلتر", c.post("/api/admin/notifications/preview", json={"target": "filter", "filter": {"low_balance": 100}}).json()["count"] == 1)
+ok("فلتر الدولة (رمز الهاتف)", c.post("/api/admin/notifications/preview", json={"target": "filter", "filter": {"phone_prefix": "+966"}}).json()["count"] == 1)
+r = c.post("/api/admin/notifications/broadcast", json={"target": "filter", "filter": {"active": True}, "title_ar": "عرض", "title_en": "Offer", "body_ar": "خصم", "via_bot": True})
+ok("بث لمجموعة بفلتر (النشطين)", r.status_code == 200 and r.json()["count"] == 1)
+c.post("/api/admin/notifications/broadcast", json={"target": "all", "title_ar": "للجميع"})
+c.post("/api/admin/notifications/broadcast", json={"target": "user", "uid": "43", "title_ar": "خاص"})
+n42 = c.get("/api/notifications", params={"init_data": init_data()}).json()
+n43 = c.get("/api/notifications", params={"init_data": init_data(43)}).json()
+ok("كل مستخدم يرى ما يخصه فقط", {x["title_ar"] for x in n42["items"]} == {"إيداع", "عرض", "للجميع"} and {x["title_ar"] for x in n43["items"]} == {"للجميع", "خاص"})
+c.post("/api/notifications/read", json={"init_data": init_data()})
+ok("تعليم الكل كمقروء", c.get("/api/notifications", params={"init_data": init_data()}).json()["unread"] == 0)
+ok("سجل البث في اللوحة", len(c.get("/api/admin/notifications/broadcasts").json()["rows"]) == 3)
+
+# ═════════ 31) نافذة "ما الجديد" ═════════
+import announcements  # noqa: E402
+announcements.seed_default(DB)
+a = c.get("/api/announcements", params={"init_data": init_data()}).json()["announcement"]
+ok("نافذة الإطلاق الافتراضية تظهر عند الدخول", a and a["id"] == "launch" and len(a["features"]) == 5)
+c.post("/api/announcements/seen", json={"init_data": init_data(), "id": "launch"})
+ok("مرة واحدة فقط (once)", c.get("/api/announcements", params={"init_data": init_data()}).json()["announcement"] is None)
+c.put("/api/admin/announcements/launch", json={"frequency": "every_open"})
+ok("كل دخول (every_open)", c.get("/api/announcements", params={"init_data": init_data()}).json()["announcement"] is not None)
+c.post("/api/announcements/seen", json={"init_data": init_data(), "id": "launch", "dismiss": True})
+ok("لا تظهر مرة أخرى", c.get("/api/announcements", params={"init_data": init_data()}).json()["announcement"] is None)
+c.put("/api/admin/announcements/launch", json={"reset_views": True, "audience": "expired"})
+ok("الجمهور: منتهية اشتراكاتهم فقط", c.get("/api/announcements", params={"init_data": init_data()}).json()["announcement"] is None)
+c.put("/api/admin/announcements/launch", json={"audience": "all", "frequency": "daily", "starts_at": time.time() + 3600})
+ok("تاريخ بداية العرض", c.get("/api/announcements", params={"init_data": init_data()}).json()["announcement"] is None)
+c.put("/api/admin/announcements/launch", json={"starts_at": 0})
+ok("إعادة العرض للجميع بعد reset_views", c.get("/api/announcements", params={"init_data": init_data()}).json()["announcement"]["id"] == "launch")
+ok("إيقاف كامل (On/Off)", c.put("/api/admin/announcements/launch", json={"enabled": False}).status_code == 200 and c.get("/api/announcements", params={"init_data": init_data()}).json()["announcement"] is None)
+ok("تحقق من المدخلات", c.put("/api/admin/announcements/launch", json={"frequency": "hourly"}).status_code == 422)
+
+# ═════════ 32) سجل الأخطاء + الدعم الذكي ═════════
+er = c.post("/api/errors", json={"init_data": init_data(), "kind": "operation", "code": "ton_payment_failed", "message": "TON payment failed", "page": "plans", "online": True}).json()
+ok("الخطأ يُسجَّل برقم مرجعي + أولوية تلقائية + رابط الدعم", er["ref"].startswith("ERR-") and er["priority"] == "critical" and "start=err_" in er["support_url"])
+ok("خطأ بلا هوية (انقطاع/قبل الدخول) يُقبل", c.post("/api/errors", json={"kind": "network", "code": "timeout"}).json()["ref"])
+main._ERR_RL.clear()
+ok("حد تقارير الأخطاء لكل IP", [c.post("/api/errors", json={"kind": "ui"}).status_code for _ in range(main.ERR_RL_MAX + 1)][-1] == 429)
+main._ERR_RL.clear()
+CALLS.clear()
+W({"message": {"chat": {"id": 42, "type": "private"}, "from": {"id": 42, "language_code": "ar"}, "text": "/start err_" + er["ref"][4:]}})
+t42 = support.open_ticket_for(DB, 42)
+ok("/start err_<ref>: تذكرة فورية مربوطة بالخطأ وأولوية حرجة", t42 and t42["error_ref"] == er["ref"] and t42["priority"] == "critical")
+sent = [p_["text"] for m_, p_ in CALLS if m_ == "sendMessage"]
+ok("رد أولي فوري: رقم التذكرة + الوقت المتوقع", any(f"#{t42['id']}" in x and "خلال" in x for x in sent))
+ok("بلا مساعد ذكي ولا إجابة: تحويل للبشري", support.get_ticket(DB, t42["id"])["status"] == "escalated")
+
+from types import SimpleNamespace as NS  # noqa: E402
+support.ai_available = lambda: True
+SCRIPT = []
+def fake_llm(cfg, system, messages):
+    SCRIPT_SEEN.append(messages)
+    return SCRIPT.pop(0)
+SCRIPT_SEEN = []
+support.llm = fake_llm
+tool = lambda name, inp, id_="tu1": NS(type="tool_use", name=name, input=inp, id=id_)  # noqa: E731
+txt = lambda t_: NS(type="text", text=t_)  # noqa: E731
+add_user(46, status="approved", language="en", sync={"state": "error", "fails": 3}, mt5_password="SECRET-PW", mt5_login="99887766")
+SCRIPT[:] = [NS(stop_reason="tool_use", content=[tool("get_user_context", {}, "a"), tool("run_auto_fix", {"action": "resync_account", "reason": "sync error"}, "b")]),
+             NS(stop_reason="end_turn", content=[txt("I've re-synced your account. Data will refresh in a few minutes.")])]
+CALLS.clear()
+W({"message": {"chat": {"id": 46, "type": "private"}, "from": {"id": 46, "language_code": "en"}, "text": "My data is not updating"}})
+t46 = support.open_ticket_for(DB, 46)
+ok("المساعد: يقرأ بيانات المستخدم وينفّذ إصلاحًا مسموحًا", DB.store["users"]["46"]["sync"]["state"] == "new")
+ok("الإصلاح الآلي مسجَّل", any(x["action"] == "resync_account" and x["uid"] == "46" for x in DB.store["auto_fix_log"].values()))
+ok("سياق المساعد لا يكشف كلمة المرور ولا رقم الحساب كاملًا", "SECRET-PW" not in json.dumps(SCRIPT_SEEN, default=str) and "99887766" not in json.dumps(support.user_context(DB, 46)))
+ok("الرد بلغة المستخدم + زر موظف", any(p_.get("text", "").startswith("I've re-synced") and "reply_markup" in p_ for m_, p_ in CALLS))
+ok("إصلاح خارج القائمة البيضاء مرفوض", support.run_fix(DB, 46, "extend_subscription")["reason"] == "not_allowed")
+ok("reset_stuck_link لا يلمس حسابًا غير عالق", support.run_fix(DB, 46, "reset_stuck_link")["ok"] is False)
+SCRIPT[:] = [NS(stop_reason="tool_use", content=[tool("mark_resolved", {"summary": "resync fixed it"})]),
+             NS(stop_reason="end_turn", content=[txt("Great, glad it's fixed!")])]
+CALLS.clear()
+W({"message": {"chat": {"id": 46, "type": "private"}, "from": {"id": 46, "language_code": "en"}, "text": "yes it works now thanks"}})
+ok("الحل + إشعار الحالة + طلب التقييم", support.get_ticket(DB, t46["id"])["status"] == "resolved"
+   and any("csat:" in json.dumps(p_.get("reply_markup", {})) for m_, p_ in CALLS))
+ok("إشعار داخل التطبيق بتغير حالة التذكرة", any(x.get("kind") == "support" and x["uid"] == "46" for x in DB.store["notifications"].values()))
+W({"callback_query": {"id": "q1", "from": {"id": 46}, "data": f"csat:{t46['id']}:5", "message": {"chat": {"id": 46}, "message_id": 1}}})
+ok("تقييم الرضا محفوظ", support.get_ticket(DB, t46["id"])["csat"]["score"] == 5)
+
+DB.store.setdefault("config", {})["support"] = {"escalation_threshold": 2, "support_chat_id": "9001"}; support.invalidate()
+SCRIPT[:] = [NS(stop_reason="end_turn", content=[txt("Try restarting the app.")]), NS(stop_reason="end_turn", content=[txt("Try again later.")])]
+for m in ("app crashes", "still crashes"):
+    W({"message": {"chat": {"id": 47, "type": "private"}, "from": {"id": 47, "language_code": "en"}, "text": m}})
+CALLS.clear()
+W({"message": {"chat": {"id": 47, "type": "private"}, "from": {"id": 47, "language_code": "en"}, "text": "not fixed"}})
+t47 = support.open_ticket_for(DB, 47)
+esc = [p_ for m_, p_ in CALLS if m_ == "sendMessage" and str(p_.get("chat_id")) == "9001"]
+ok("تصعيد تلقائي بعد حد المحاولات مع ملخص للموظف", t47["status"] == "escalated" and esc and "تصعيد تذكرة" in esc[0]["text"] and "الأولوية" in esc[0]["text"])
+relay_mid = esc[0] and [k for k in DB.store["support_relay"]][-1].split("_")[1]
+CALLS.clear()
+W({"message": {"chat": {"id": 9001, "type": "private"}, "from": {"id": 9001}, "text": "Please update to the latest version.",
+               "reply_to_message": {"message_id": int(relay_mid)}}})
+ok("رد الموظف (Reply) يصل للمستخدم ويُحفظ", any(p_.get("chat_id") == "47" and "latest version" in p_.get("text", "") for m_, p_ in CALLS)
+   and support.get_ticket(DB, t47["id"])["status"] == "in_progress")
+support.llm = lambda *a: (_ for _ in ()).throw(RuntimeError("provider down"))
+W({"message": {"chat": {"id": 48, "type": "private"}, "from": {"id": 48, "language_code": "ar"}, "text": "كيف أغير اللغة"}})
+t48 = support.open_ticket_for(DB, 48)
+ok("تعطل المزوّد: البحث في قاعدة المعرفة أولًا", t48 and any("الإعدادات" in (m_.get("text") or "") and m_["role"] == "ai" for m_ in support.messages_of(DB, t48["id"])))
+support._RL.clear(); DB.store["config"]["support"]["rate_limit_count"] = 2; support.invalidate()
+CALLS.clear()
+for _ in range(4):
+    W({"message": {"chat": {"id": 49, "type": "private"}, "from": {"id": 49, "language_code": "ar"}, "text": "سبام"}})
+ok("حماية من السبام: تنبيه واحد فقط", sum(1 for m_, p_ in CALLS if m_ == "sendMessage" and "رسائل كثيرة" in p_.get("text", "")) == 1)
+support.ai_available = lambda: False
+
+g = c.get("/api/admin/support/config").json()
+ok("الأدمن: System Prompt افتراضي كامل + التوكن لا يُعاد", g["prompt_is_default"] and "escalate_to_human" in g["system_prompt"] and "support_bot_token" not in g)
+ok("توكن غير صالح مرفوض", c.put("/api/admin/support/config", json={"support_bot_token": "abc"}).status_code == 422)
+r = c.put("/api/admin/support/config", json={"support_bot_token": "123456:" + "A" * 35, "support_phone": "+966 50 000 0000"})
+ok("بوت دعم مستقل: ضبط webhook + اسم البوت", r.status_code == 200 and r.json()["has_bot_token"] and any(m_ == "setWebhook" and p_["url"].endswith("/api/support-webhook") for m_, p_ in CALLS))
+ok("سجل التدقيق يخفي التوكن", "A" * 35 not in json.dumps(c.get("/api/admin/audit").json()))
+DB.store["config"]["support"]["support_bot_username"] = "aw_support_bot"; support.invalidate()
+st = c.post("/api/status", json={"init_data": init_data()}).json()["settings"]
+ok("رابط سماعة الدعم في التطبيق = بوت الدعم", st["support_url"] == "https://t.me/aw_support_bot" and st["support_mode"] == "bot")
+ok("البوت الرئيسي يوجّه لبوت الدعم المستقل", (W({"message": {"chat": {"id": 50, "type": "private"}, "from": {"id": 50}, "text": "help"}}) or True)
+   and "aw_support_bot" in json.dumps(CALLS[-1][1]))
+ok("webhook بوت الدعم يتطلب السر", c.post("/api/support-webhook", json={}).status_code == 403)
+rows = c.get("/api/admin/support/tickets", params={"status": "active"}).json()
+ok("صندوق التذاكر + الإحصاءات", rows["stats"]["open"] >= 2 and rows["stats"]["csat_avg"] == 5)
+ok("رد الأدمن من اللوحة", c.post(f"/api/admin/support/tickets/{t47['id']}/reply", json={"text": "Fixed on our side"}).status_code == 200)
+ok("تفاصيل التذكرة + سياق المستخدم", c.get(f"/api/admin/support/tickets/{t47['id']}").json()["messages"][-1]["role"] == "agent")
+ok("سجل الأخطاء في اللوحة بحث", len(c.get("/api/admin/errors", params={"q": "ton_payment"}).json()["rows"]) == 1)
+ok("قاعدة المعرفة: إضافة", c.post("/api/admin/support/kb", json={"q": "ساعات العمل", "a": "الدعم 24/7"}).status_code == 200 and support.search_kb(DB, "ساعات العمل")[0]["a"] == "الدعم 24/7")
+al = c.get("/api/admin/alerts").json()
+ok("تنبيهات فورية: خطأ حرج + تذكرة مصعّدة", any(x["type"] == "error" for x in al["alerts"]) and any(x["type"] == "ticket" for x in al["alerts"]))
+
+# ═════════ 33) محفظة TON من اللوحة + OTP ═════════
+import tonadmin  # noqa: E402
+ton.TON_WALLET = "UQ_PROJECT_WALLET"
+tonadmin.balance_nano = lambda: 12_500_000_000
+ton.usd_rate = lambda: 2.0
+ton.fetch_transactions = lambda limit=100: [{"hash": "h1", "lt": "1", "utime": 1, "source": "EQsrc", "value": 3_000_000_000, "comment": "x-order"}]
+ov = c.get("/api/admin/ton/overview").json()
+ok("الرصيد والتحويلات الواردة", ov["balance_ton"] == 12.5 and ov["balance_usd"] == 25.0 and ov["incoming"][0]["ton"] == 3.0)
+NEW = "UQ" + "B" * 46
+CALLS.clear()
+otp = c.post("/api/admin/ton/otp", json={"action": "set_wallet", "params": {"address": NEW}}).json()
+code_msg = [p_["text"] for m_, p_ in CALLS if m_ == "sendMessage" and p_.get("chat_id") == 555][-1]
+code = re.search(r"الرمز: (\d{6})", code_msg).group(1)
+ok("OTP يُرسل للأدمن عبر البوت", otp["sent"] and "تغيير محفظة الاستلام" in code_msg)
+ok("رمز خاطئ مرفوض", c.post("/api/admin/ton/execute", json={"otp_id": otp["otp_id"], "code": "000000" if code != "000000" else "111111"}).status_code == 403)
+ok("لا تنفيذ قبل الرمز الصحيح", ton.TON_WALLET == "UQ_PROJECT_WALLET")
+ok("الرمز الصحيح ينفّذ", c.post("/api/admin/ton/execute", json={"otp_id": otp["otp_id"], "code": code}).json()["ok"] and ton.TON_WALLET == NEW)
+ok("الرمز للاستخدام مرة واحدة", c.post("/api/admin/ton/execute", json={"otp_id": otp["otp_id"], "code": code}).status_code == 403)
+ok("عنوان غير صالح مرفوض", c.post("/api/admin/ton/otp", json={"action": "set_wallet", "params": {"address": "bad"}}).status_code == 422)
+CALLS.clear()
+otp = c.post("/api/admin/ton/otp", json={"action": "transfer", "params": {"to": "EQ" + "C" * 46, "amount_ton": 1.5, "comment": "payout"}}).json()
+code = re.search(r"الرمز: (\d{6})", [p_["text"] for m_, p_ in CALLS if m_ == "sendMessage"][-1]).group(1)
+tx = c.post("/api/admin/ton/execute", json={"otp_id": otp["otp_id"], "code": code}).json()["transaction"]
+ok("التحويل: طلب TON Connect يوقّعه الأدمن (الخادم بلا مفتاح)", tx["messages"][0]["amount"] == "1500000000" and tx["messages"][0]["payload"])
+c.post("/api/admin/ton/transfer-result", json={"otp_id": otp["otp_id"], "ok": True, "boc": "te6cc"})
+lg = c.get("/api/admin/ton/log").json()["rows"]
+c.put("/api/admin/settings", json={"pay_ton_enabled": False})
+ok("تشغيل/إيقاف TON لا يتجاوز OTP عبر الإعدادات العامة", billing.get_settings(DB).get("pay_ton_enabled", True) is True)
+ok("سجل كل محاولة (ناجحة وفاشلة)", {x["event"] for x in lg} >= {"otp_requested", "otp_wrong", "executed", "transfer_signed", "otp_expired"})
+ton.TON_WALLET = ""
+c.post("/api/admin/logout")
+admin_access.invalidate(); admin_login(555); c.put("/api/admin/staff", json={"id": "7777", "role": "support", "name": "Mona"})
+admin_login(7777)
+ok("صلاحيات: الدعم يرى التذاكر ولا يلمس محفظة TON", c.get("/api/admin/support/tickets").status_code == 200 and c.get("/api/admin/ton/overview").status_code == 403)
+ok("صلاحيات: الدعم لا يرسل إشعارات", c.post("/api/admin/notifications/broadcast", json={"target": "all", "title_ar": "x"}).status_code == 403)
 c.post("/api/admin/logout")
 
 print("\nALL BACKEND CHECKS PASSED")

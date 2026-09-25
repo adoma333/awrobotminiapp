@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import ErrorNote from './ErrorNote';
 import QRCode from 'qrcode';
 import { paymentStatus } from '../api';
 import { copyText, haptic } from '../telegram';
@@ -98,7 +99,7 @@ export default function CryptoPay({ t, pay, onFinished, onCancel }) {
         {mm && !failed && <div className="cp-timer">{t.cpExpires} <b dir="ltr">{mm}</b></div>}
       </div>
 
-      {failed ? <p className="banner-error" role="alert">{t.cpFailed}</p> : <p className="muted small-note">{t.cpNote}</p>}
+      {failed ? <ErrorNote t={t} kind="operation" code="crypto_payment_failed">{t.cpFailed}</ErrorNote> : <p className="muted small-note">{t.cpNote}</p>}
 
       <div className="actions">
         <button type="button" className="btn ghost" onClick={onCancel}>

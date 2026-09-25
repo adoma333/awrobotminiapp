@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import ErrorNote from './ErrorNote';
 import { getBillingHistory } from '../api';
 import { amount, fmtDate } from '../format';
 
@@ -32,7 +33,7 @@ export default function BillingHistory({ t, lang, onBack }) {
       </div>
 
       <div className="section">
-        {error && <p className="note warn">{t.billError}</p>}
+        {error && <ErrorNote t={t} kind="operation" code="billing_load_failed">{t.billError}</ErrorNote>}
         {!error && rows === null && <p className="sub">{t.loading}</p>}
         {!error && rows && rows.length === 0 && <p className="sub">{t.billEmpty}</p>}
 

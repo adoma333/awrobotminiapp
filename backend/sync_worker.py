@@ -407,6 +407,11 @@ class Store:
 
         return rewards.grant_card(self.db, uid, event)
 
+    def notify(self, uid, kind, title_ar, title_en, body_ar="", body_en=""):
+        import notifications
+
+        return notifications.push(self.db, uid, kind, title_ar, title_en, body_ar, body_en)
+
 
 class Notifier:
     def __init__(self):
@@ -674,6 +679,8 @@ class Worker:
         })
         job.next_due, job.fails, job.first_fail = now + delay, 0, 0.0
         self.grant_streak_card(job.uid, new_stats)
+        if raw.get("v") == STATS_VERSION:  # لا نُغرق المستخدم بإشعارات تاريخ الحساب عند أول مزامنة
+            self.activity_notices(job.uid, stats, new_stats, live.get("currency") or "")
         self.transient_streak = 0
         self.last_ok_ts = now
         log.info("✔ %s (%s) رصيد=%s", job.uid, mask(doc["mt5_login"]), live["balance"])
@@ -691,6 +698,27 @@ class Worker:
                 grant(uid, f"streak7_{start}")
             except Exception as e:  # noqa: BLE001 — المكافأة لا تعطّل المزامنة أبدًا
                 log.warning("تعذّر منح بطاقة السلسلة لـ %s: %s", uid, e)
+
+    def activity_notices(self, uid, old, new, cur):
+        """إشعارات داخل التطبيق: إيداع، سحب، وملخص الصفقات المغلقة في هذه المزامنة."""
+        push = getattr(self.store, "notify", None)
+        if not push:
+            return
+        try:
+            dep = round(float(new["deposits"]) - float(old["deposits"]), 2)
+            wd = round(float(new["withdrawals"]) - float(old["withdrawals"]), 2)
+            closed = sum(int(new[k]) - int(old[k]) for k in ("wins", "losses", "flat"))
+            pnl = round(float(new["trading_pnl"]) - float(old["trading_pnl"]), 2)
+            if dep > 0:
+                push(uid, "deposit", "تم رصد إيداع في حسابك", "Deposit detected", f"+{dep:,.2f} {cur}", f"+{dep:,.2f} {cur}")
+            if wd > 0:
+                push(uid, "deposit", "تم رصد سحب من حسابك", "Withdrawal detected", f"-{wd:,.2f} {cur}", f"-{wd:,.2f} {cur}")
+            if closed > 0:
+                sign = "+" if pnl >= 0 else ""
+                push(uid, "trade", f"أُغلقت {closed} صفقة", f"{closed} trade(s) closed",
+                     f"صافي النتيجة: {sign}{pnl:,.2f} {cur}", f"Net result: {sign}{pnl:,.2f} {cur}")
+        except Exception as e:  # noqa: BLE001 — الإشعار لا يعطّل المزامنة
+            log.warning("تعذّر إنشاء إشعار النشاط لـ %s: %s", uid, e)
 
     def on_failure(self, job, doc, err):
         now = self.clock()
@@ -734,6 +762,14 @@ class Worker:
         })
         self.queue.pop(job.uid, None)
         self.notifier.user(job.uid, USER_MSG.get(lang, USER_MSG["en"]).format(r=reason))
+        push = getattr(self.store, "notify", None)
+        if push:
+            try:
+                push(job.uid, "security", "تنبيه أمني: تعذّر الدخول لحساب MT5", "Security alert: MT5 login failed",
+                     "بيانات الدخول لم تعد صحيحة (ربما غُيّرت كلمة المرور). أعد ربط حسابك.",
+                     "Your login details are no longer valid (password changed?). Please relink your account.")
+            except Exception as e:  # noqa: BLE001
+                log.warning("تعذّر إنشاء الإشعار الأمني: %s", e)
         self.notifier.admin(
             f"⚠️ توقف تحديث حساب {doc.get('mt5_login')} ({doc.get('mt5_server')}) "
             f"للمستخدم {job.uid}: {err}\nأُعيد الطلب للمستخدم لتعديل بياناته."

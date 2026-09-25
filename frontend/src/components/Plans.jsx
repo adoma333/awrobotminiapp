@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import ErrorNote from './ErrorNote';
 import {
   checkTonPayment, createCryptoPayment, createStarsPayment, createTonPayment, getCurrencies, getPackages, getRewards,
 } from '../api';
@@ -331,7 +332,7 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
           ) : null}
         </div>
 
-        {msg && <p className="banner-error" role="alert">{t[msg]}</p>}
+        {msg && <ErrorNote t={t} kind="operation" code={`pay_${msg}`}>{t[msg]}</ErrorNote>}
         <p className="muted small-note">{t.paySecure}</p>
 
         <div className="actions">
@@ -361,10 +362,10 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
 
       {packages === null && !loadError && <div className="loader" role="status" aria-label={t.loading} />}
       {loadError && (
-        <div className="banner-error" role="alert">
+        <ErrorNote t={t} kind="operation" code="plans_load_failed">
           {t.plansLoadErr}{' '}
           <button type="button" className="link" onClick={load}>{t.reload}</button>
-        </div>
+        </ErrorNote>
       )}
       {packages && packages.length === 0 && <p className="note">{t.noPlans}</p>}
 

@@ -9,6 +9,8 @@ export default function Audit() {
   const [rows, setRows] = useState(null);
   const [open, setOpen] = useState(null);
   const [admin, setAdmin] = useState("");
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState("");
   useEffect(() => {
     const t = setTimeout(() => api.audit({ limit: 300, ...(admin ? { admin } : {}) }).then((r) => setRows(r.rows)).catch(() => setRows([])), 250);
     return () => clearTimeout(t);
@@ -16,14 +18,19 @@ export default function Audit() {
 
   return (
     <>
-      <div className="topbar">
-        <h1>سجل العمليات</h1>
+      <div className="topbar"><h1>سجل العمليات</h1></div>
+      <div className="filters">
+        <input className="search" placeholder="بحث: العملية، IP، الجهاز، المسار، المحتوى…" value={q} onChange={(e) => setQ(e.target.value)} />
         <input className="narrow-wide" inputMode="numeric" placeholder="تصفية بـ Telegram ID" value={admin} onChange={(e) => setAdmin(e.target.value.replace(/\D/g, ""))} />
+        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="">كل النتائج</option><option value="ok">الناجحة</option><option value="fail">الفاشلة</option>
+        </select>
       </div>
       {!rows && <p className="muted">...جارٍ التحميل</p>}
       {rows && rows.length === 0 && <div className="empty">لا عمليات مسجّلة بعد.</div>}
       <div className="audit-list">
-        {(rows || []).map((r) => (
+        {(rows || []).filter((r) => (!status || (status === "ok") === (r.status < 400))
+          && (!q || JSON.stringify(r).toLowerCase().includes(q.toLowerCase()))).map((r) => (
           <button key={r.id} className={`audit ${open === r.id ? "open" : ""}`} onClick={() => setOpen(open === r.id ? null : r.id)}>
             <div className="audit-top">
               <b>{r.action}</b>

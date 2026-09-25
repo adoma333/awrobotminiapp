@@ -5,7 +5,9 @@ AW Admin Access — صلاحيات فريق العمل وسجل العمليات
   owner    : مالك (من ADMIN_IDS في .env) — كل شيء، ومنه إدارة الفريق
   manager  : مدير — كل الأقسام عدا إدارة الفريق
   support  : دعم فني — المستخدمون والمكافآت (قراءة/كتابة) + الإحصاءات والنظام (قراءة)
-  viewer   : مشاهد — الإحصاءات والمستخدمون والنظام (قراءة فقط)
+  viewer   : مشاهد — الإحصاءات والمستخدمون والنظام والدعم (قراءة فقط)
+أقسام جديدة: support (التذاكر والمساعد الذكي والأخطاء)، notifications (الإشعارات ونافذة التحديثات)،
+ton (محفظة TON — العمليات الحساسة تتطلب OTP إضافيًا عبر البوت).
 الأعضاء (غير المالكين) في config/staff: {members: {telegram_id: {role, name, added_at}}}.
 """
 import json
@@ -17,10 +19,12 @@ ROLE_LABEL = {"owner": "مالك", "manager": "مدير", "support": "دعم ف�
 
 # صلاحية كل دور على كل قسم: rw = قراءة وكتابة، r = قراءة فقط
 PERMS = {
-    "owner": {a: "rw" for a in ("ceo", "users", "rewards", "packages", "settings", "system", "staff", "audit")},
-    "manager": {"ceo": "rw", "users": "rw", "rewards": "rw", "packages": "rw", "settings": "rw", "system": "rw", "audit": "r"},
-    "support": {"ceo": "r", "users": "rw", "rewards": "rw", "system": "r"},
-    "viewer": {"ceo": "r", "users": "r", "system": "r"},
+    "owner": {a: "rw" for a in ("ceo", "users", "rewards", "packages", "settings", "system", "staff", "audit",
+                                 "support", "notifications", "ton")},
+    "manager": {"ceo": "rw", "users": "rw", "rewards": "rw", "packages": "rw", "settings": "rw", "system": "rw", "audit": "r",
+                "support": "rw", "notifications": "rw", "ton": "r"},
+    "support": {"ceo": "r", "users": "rw", "rewards": "rw", "system": "r", "support": "rw", "notifications": "r"},
+    "viewer": {"ceo": "r", "users": "r", "system": "r", "support": "r"},
 }
 
 # القسم حسب بادئة المسار
@@ -29,6 +33,8 @@ AREAS = [
     ("/api/admin/ceo", "ceo"), ("/api/admin/rewards", "rewards"), ("/api/admin/packages", "packages"),
     ("/api/admin/settings", "settings"), ("/api/admin/leaderboard", "settings"), ("/api/admin/servers", "settings"),
     ("/api/admin/staff", "staff"), ("/api/admin/audit", "audit"), ("/api/system/status", "system"),
+    ("/api/admin/support", "support"), ("/api/admin/errors", "support"), ("/api/admin/notifications", "notifications"),
+    ("/api/admin/announcements", "notifications"), ("/api/admin/media", "notifications"), ("/api/admin/ton", "ton"),
 ]
 OPEN_PATHS = {"/api/admin/verify", "/api/admin/logout", "/api/admin/me"}
 
@@ -103,7 +109,7 @@ def parse_device(ua: str) -> dict:
     return {"os": os_, "browser": browser, "model": model, "type": "mobile" if mobile else "desktop"}
 
 
-SECRET_KEYS = {"token", "code", "password", "mt5_password", "photo", "story", "post", "secret"}
+SECRET_KEYS = {"token", "code", "password", "mt5_password", "photo", "story", "post", "secret", "support_bot_token", "boc"}
 
 
 def summarize_body(raw: bytes, limit: int = 1500) -> str:
@@ -146,6 +152,20 @@ ACTION_LABEL = [
     (r"^DELETE /api/admin/servers/", "حذف خادم"),
     (r"^PUT /api/admin/staff$", "إضافة/تعديل عضو فريق"),
     (r"^DELETE /api/admin/staff/", "إزالة عضو فريق"),
+    (r"^PUT /api/admin/support/config$", "تعديل إعدادات الدعم"),
+    (r"^POST /api/admin/support/tickets/[^/]+/reply$", "رد على تذكرة دعم"),
+    (r"^POST /api/admin/support/tickets/[^/]+/status$", "تغيير حالة تذكرة"),
+    (r"^POST /api/admin/support/kb$", "إضافة لقاعدة المعرفة"),
+    (r"^DELETE /api/admin/support/kb/", "حذف من قاعدة المعرفة"),
+    (r"^POST /api/admin/notifications/broadcast$", "إرسال إشعار"),
+    (r"^POST /api/admin/announcements/seed$", "استعادة التحديث الافتراضي"),
+    (r"^POST /api/admin/announcements$", "إضافة نافذة تحديثات"),
+    (r"^PUT /api/admin/announcements/", "تعديل نافذة تحديثات"),
+    (r"^DELETE /api/admin/announcements/", "حذف نافذة تحديثات"),
+    (r"^POST /api/admin/media/image$", "رفع صورة"),
+    (r"^POST /api/admin/ton/otp$", "طلب رمز تحقق TON"),
+    (r"^POST /api/admin/ton/execute$", "تنفيذ عملية TON"),
+    (r"^POST /api/admin/ton/transfer-result$", "نتيجة تحويل TON"),
     (r"^POST /api/admin/logout$", "تسجيل خروج"),
     (r"^LOGIN", "تسجيل دخول"),
 ]

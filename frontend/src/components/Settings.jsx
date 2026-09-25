@@ -4,12 +4,10 @@ import ProfileEditor from './ProfileEditor';
 import { unlink, updateProfile, errorCodeOf } from '../api';
 import { fill } from '../i18n';
 import { fmtDate } from '../format';
-import { copyText, haptic, openExternal, openTelegramLink } from '../telegram';
-
-const LANGS = [
-  { code: 'ar', name: 'العربية' },
-  { code: 'en', name: 'English' },
-];
+import { copyText, haptic, openTelegramLink } from '../telegram';
+import { openSupport } from '../support';
+import LangSwitch from './LangSwitch';
+import ErrorNote from './ErrorNote';
 
 
 export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUnlinked, onLegal, onFaq, onCalc, onBilling, onRewards, onProfileSaved }) {
@@ -77,21 +75,7 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
 
       <div className="section">
         <h2>{t.language}</h2>
-        <div className="options" role="radiogroup" aria-label={t.language}>
-          {LANGS.map((l) => (
-            <button
-              key={l.code}
-              type="button"
-              role="radio"
-              aria-checked={lang === l.code}
-              className={`option ${lang === l.code ? 'is-selected' : ''}`}
-              onClick={() => pickLang(l.code)}
-            >
-              <span className={`option-name ${l.code === 'ar' ? 'is-ar' : ''}`} lang={l.code}>{l.name}</span>
-              <span className="ring" />
-            </button>
-          ))}
-        </div>
+        <LangSwitch lang={lang} onChange={pickLang} label={t.language} />
       </div>
 
       <div className="section">
@@ -161,7 +145,7 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
           </button>
           <FeedbackButton t={t} />
           {cfg.support_url && (
-            <button type="button" className="row row-link" onClick={() => (/^https:\/\/t\.me\//.test(cfg.support_url) ? openTelegramLink(cfg.support_url) : openExternal(cfg.support_url))}>
+            <button type="button" className="row row-link" onClick={openSupport}>
               <span className="row-label">{t.supportLink}</span>
               <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
             </button>
@@ -188,7 +172,7 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
         {!confirm ? (
           <>
             <p className="sub">{t.unlinkBody}</p>
-            {error && <p className="banner-error" role="alert">{error}</p>}
+            {error && <ErrorNote t={t} code="unlink_failed">{error}</ErrorNote>}
             <div className="actions inline">
               <button type="button" className="btn danger" onClick={() => { setError(''); setConfirm(true); }}>
                 <span>{t.unlinkBtn}</span>

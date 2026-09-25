@@ -39,16 +39,17 @@ export default function AppSettings() {
 
       <div className="panel">
         <h2>طرق الدفع</h2>
-        <label className="check"><input type="checkbox" checked={s.pay_ton_enabled} onChange={(e) => set({ pay_ton_enabled: e.target.checked })} /> محفظة TON (TON Connect)</label>
+        <label className="check"><input type="checkbox" checked={s.pay_ton_enabled} disabled /> محفظة TON (TON Connect) — تُدار من صفحة «محفظة TON» برمز تحقق</label>
         <label className="check"><input type="checkbox" checked={s.pay_crypto_enabled} onChange={(e) => set({ pay_crypto_enabled: e.target.checked })} /> العملات الرقمية (بوابة NOWPayments المخصّصة)</label>
         <label className="check"><input type="checkbox" checked={s.pay_stars_enabled} onChange={(e) => set({ pay_stars_enabled: e.target.checked })} /> نجوم تلجرام</label>
         <p className="muted">إيقاف أي طريقة يخفيها من التطبيق فورًا ويرفضها الخادم أيضًا.</p>
       </div>
 
       <div className="panel">
-        <h2>الدعم والإعلانات</h2>
+        <h2>شريط الإعلان والتنبيهات</h2>
+        <p className="muted">قناة الدعم (البوت، الحساب البشري، الهاتف) أصبحت في «الدعم الفني الذكي»، ونافذة التحديثات المنبثقة في «نافذة التحديثات».</p>
         <div className="grid-form">
-          <label>رابط الدعم الفني (يظهر في إعدادات التطبيق)<input dir="ltr" placeholder="https://t.me/your_support" value={s.support_url} onChange={(e) => set({ support_url: e.target.value.trim() })} /></label>
+          <label>تنبيه فوري في اللوحة لأي دفعة من ($)<input className="mono" type="number" min="0" value={s.alert_large_payment_usd ?? 400} onChange={(e) => set({ alert_large_payment_usd: Number(e.target.value) })} /></label>
         </div>
         <div className="grid-form">
           <label>إعلان أعلى الرئيسية (عربي)<textarea rows={2} value={s.announcement_ar} onChange={(e) => set({ announcement_ar: e.target.value })} /></label>

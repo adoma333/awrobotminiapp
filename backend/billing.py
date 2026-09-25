@@ -24,6 +24,7 @@ DEFAULT_SETTINGS = {
     "pay_stars_enabled": True,
     "announcement_ar": "",     # شريط إعلان أعلى الرئيسية (فارغ = لا يظهر)
     "announcement_en": "",
+    "alert_large_payment_usd": 400,  # تنبيه فوري في اللوحة لأي دفعة بهذا المبلغ أو أكثر
 }
 
 _SETTINGS_DOC = ("config", "settings")

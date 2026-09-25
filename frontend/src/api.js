@@ -1,4 +1,6 @@
 import { initData } from './telegram';
+import { emitAppError } from './errors';
+import { currentPage } from './support';
 
 const API = import.meta.env.VITE_API_URL ?? '';
 
@@ -6,24 +8,39 @@ const API = import.meta.env.VITE_API_URL ?? '';
 const DEV_MOCK = import.meta.env.DEV && !initData;
 const mock = { subAt: 0, approved: false, unlinked: false, prize: null, revealed: false };
 
-async function request(method, path, body) {
+// طلبات الخلفية (الاستعلام الدوري) لا تُظهر رسالة خطأ عامة؛ أما أي طلب يبادر به المستخدم ففشله في الشبكة
+// أو الخادم يظهر في ErrorCenter مع زر "تواصل مع الدعم" (أخطاء المنطق 4xx تعرضها الصفحة نفسها بجانب زر الدعم).
+const REQ_TIMEOUT_MS = 30000;
+
+async function request(method, path, body, { silent = false } = {}) {
   let res;
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS) : null;
   try {
     res = await fetch(`${API}${path}`, {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,
+      signal: ctrl?.signal,
     });
-  } catch {
+  } catch (e) {
     const err = new Error('network');
     err.status = 0;
+    err.timeout = e?.name === 'AbortError';
+    if (!silent) emitAppError({ kind: 'network', code: err.timeout ? 'timeout' : navigator.onLine ? 'connection_lost' : 'offline', message: path.split('?')[0], page: currentPage() });
     throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(typeof data.detail === 'string' ? data.detail : 'request_failed');
     err.status = res.status;
     err.detail = data.detail;
+    err.ref = data.ref;
+    if (!silent && res.status >= 500) {
+      emitAppError({ kind: 'server', code: String(res.status), message: `${path.split('?')[0]} · ${err.message}`, ref: data.ref, page: currentPage() });
+    }
     throw err;
   }
   return data;
@@ -64,7 +81,7 @@ export async function getStatus() {
         : null,
       referral_code: 'AB12CD',
       bot_username: 'awfxapp_bot',
-      settings: { kill_switch: false, referral_enabled: true, referral_days: 7 },
+      settings: { kill_switch: false, referral_enabled: true, referral_days: 7, support_url: 'https://t.me/aw_support_bot', support_bot: 'aw_support_bot', support_mode: 'bot' },
     };
     if (!mock.approved) {
       // مستخدم جديد بلا ملف شخصي؛ بعد فكّ الربط يبقى اسمه وصورته (كما يعيد الخادم)
@@ -79,7 +96,7 @@ export async function getStatus() {
       sync: { state: 'ok', last_ok: now - 300 },
     };
   }
-  return request('POST', '/api/status', { init_data: initData });
+  return request('POST', '/api/status', { init_data: initData }, { silent: true });
 }
 
 // بث لحظي لحالة الحساب والدفع (SSE). يعيد الاتصال تلقائيًا بتراجع أُسّي (1ث، 2ث، 4ث ... حتى 30ث).
@@ -346,5 +363,75 @@ export async function getLeaderboard() {
     rows.forEach((r, i) => { r.rank = i + 1; });
     return { week: '2026-W39', rows, me: rows[5], total: rows.length, has_simulated: true };
   }
-  return request('GET', `/api/leaderboard?init_data=${encodeURIComponent(initData)}`);
+  return request('GET', `/api/leaderboard?init_data=${encodeURIComponent(initData)}`, null, { silent: true });
+}
+
+// ─────────── الإشعارات (🔔) ───────────
+const DEV_NOTIFS = [
+  { id: 'n1', kind: 'payment', at: Date.now() / 1000 - 600, title_ar: 'تم تفعيل اشتراكك ✅', title_en: 'Your subscription is active ✅', body_ar: 'تم تأكيد الدفع وتفعيل باقة Pro.', body_en: 'Payment confirmed — Pro plan activated.', unread: true },
+  { id: 'n2', kind: 'trade', at: Date.now() / 1000 - 7200, title_ar: 'أُغلقت 4 صفقة', title_en: '4 trade(s) closed', body_ar: 'صافي النتيجة: +128.40 USD', body_en: 'Net result: +128.40 USD', unread: true },
+  { id: 'n3', kind: 'broadcast', at: Date.now() / 1000 - 86400, title_ar: 'تحديث جديد متاح', title_en: 'New update available', body_ar: 'أضفنا الدعم الذكي ومركز الإشعارات.', body_en: 'Smart support and a notification center are here.', unread: false },
+  { id: 'n4', kind: 'security', at: Date.now() / 1000 - 3 * 86400, title_ar: 'تنبيه أمني: فُكّ ربط حسابك', title_en: 'Security alert: account unlinked', body_ar: 'تم فكّ ربط حساب MT5 من التطبيق.', body_en: 'Your MT5 account was unlinked in the app.', unread: false },
+];
+
+export async function getNotifications() {
+  if (DEV_MOCK) {
+    await sleep(200);
+    return { items: DEV_NOTIFS, unread: DEV_NOTIFS.filter((n) => n.unread).length };
+  }
+  return request('GET', `/api/notifications?init_data=${encodeURIComponent(initData)}`, null, { silent: true });
+}
+
+export async function markNotificationsRead() {
+  if (DEV_MOCK) {
+    DEV_NOTIFS.forEach((n) => { n.unread = false; });
+    return { ok: true };
+  }
+  return request('POST', '/api/notifications/read', { init_data: initData }, { silent: true });
+}
+
+// ─────────── نافذة "ما الجديد" ───────────
+export async function getAnnouncement() {
+  if (DEV_MOCK) {
+    await sleep(400);
+    if (sessionStorage.getItem('aw_dev_ann')) return { announcement: null };
+    return {
+      announcement: {
+        id: 'launch', allow_dismiss: true, badge_ar: 'إطلاق جديد', badge_en: 'New release', image: '',
+        title_ar: 'AW ROBOT — التداول الآلي بمستوى جديد', title_en: 'AW ROBOT — Automated trading, re-engineered',
+        subtitle_ar: 'نظام تداول خوارزمي يعمل نيابةً عنك على مدار الساعة، بشفافية كاملة وتحكم تام.',
+        subtitle_en: 'An algorithmic trading system that works for you around the clock — fully transparent, fully in your control.',
+        features: [
+          { icon: 'bolt', title_ar: 'تنفيذ آلي 24/7', title_en: '24/7 automated execution', text_ar: 'خوارزميات تنفّذ الصفقات وتدير المخاطر على خوادم سحابية عالية السرعة — دون أن تُبقي هاتفك مفتوحًا.', text_en: 'Algorithms execute trades and manage risk on high-speed cloud servers.' },
+          { icon: 'chart', title_ar: 'أداء لحظي بوضوح', title_en: 'Live, crystal-clear performance', text_ar: 'رصيدك ونموك اليومي والأسبوعي والشهري وتحليلات مفصّلة في لوحة واحدة.', text_en: 'Balance, growth and deep analytics in one dashboard.' },
+          { icon: 'shield', title_ar: 'أمان بلا تنازلات', title_en: 'Security without compromise', text_ar: 'لا صلاحية لنا على السحب أو الإيداع — أموالك تبقى بينك وبين وسيطك فقط.', text_en: 'Zero access to deposits or withdrawals.' },
+          { icon: 'headset', title_ar: 'دعم ذكي فوري', title_en: 'Instant smart support', text_ar: 'مساعد ذكي يعرف حالة حسابك ويحل المشكلات فورًا، مع فريق بشري عند الحاجة.', text_en: 'A smart assistant that fixes issues instantly.' },
+          { icon: 'bell', title_ar: 'إشعارات لكل ما يهمك', title_en: 'Notifications that matter', text_ar: 'تنبيهات فورية للدفع والإيداع والصفقات وأي تغيير في حسابك.', text_en: 'Instant alerts for payments, deposits and trades.' },
+        ],
+        body_ar: '', body_en: '',
+        footnote_ar: 'التداول في الأسواق المالية ينطوي على مخاطر، والأداء السابق لا يضمن النتائج المستقبلية.',
+        footnote_en: 'Trading financial markets involves risk; past performance does not guarantee future results.',
+        cta_label_ar: 'ابدأ الآن', cta_label_en: 'Get started', cta_action: 'close', cta_url: '',
+      },
+    };
+  }
+  return request('GET', `/api/announcements?init_data=${encodeURIComponent(initData)}`, null, { silent: true });
+}
+
+export async function markAnnouncementSeen(id, dismiss) {
+  if (DEV_MOCK) {
+    sessionStorage.setItem('aw_dev_ann', '1');
+    return { ok: true };
+  }
+  return request('POST', '/api/announcements/seen', { init_data: initData, id, dismiss: Boolean(dismiss) }, { silent: true });
+}
+
+// ─────────── سجل الأخطاء (زر "تواصل مع الدعم") ───────────
+export async function reportError(e) {
+  if (DEV_MOCK) return { ref: 'ERR-DEV123' };
+  return request('POST', '/api/errors', {
+    init_data: initData, kind: e.kind, code: String(e.code || '').slice(0, 80), message: String(e.message || '').slice(0, 500),
+    page: String(e.page || '').slice(0, 60), online: navigator.onLine, ua: navigator.userAgent.slice(0, 300),
+    ref: e.ref || '',
+  }, { silent: true });
 }

@@ -18,7 +18,7 @@ function Cell({ label, pctValue, money, cur }) {
   );
 }
 
-export default function Dashboard({ t, lang, data, onRenew, onSettings, onRewards }) {
+export default function Dashboard({ t, lang, data, onRenew, onRewards }) {
   const { live, nickname, avatar, subscription: sub } = data;
   const r = data.report || {};
   const sync = data.sync || {};
@@ -45,12 +45,6 @@ export default function Dashboard({ t, lang, data, onRenew, onSettings, onReward
           <div className="who-name">{nickname}</div>
           <div className="who-meta"><bdi dir="ltr">{account.login} · {account.server}</bdi></div>
         </div>
-        <button type="button" className="icon-btn" onClick={onSettings} aria-label={t.settingsTitle}>
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
-          </svg>
-        </button>
       </div>
 
       <div className="hero">
@@ -93,7 +87,7 @@ export default function Dashboard({ t, lang, data, onRenew, onSettings, onReward
 
       <div className="section">
         <h2>{t.growth}</h2>
-        <div className="grid2">
+        <div className="grid2 growth-grid">
           <Cell label={t.today} pctValue={r.daily_growth_pct} money={r.daily_pnl} cur={cur} />
           <Cell label={t.week} pctValue={r.weekly_growth_pct} money={r.weekly_pnl} cur={cur} />
           <Cell label={t.month} pctValue={r.monthly_growth_pct} money={r.monthly_pnl} cur={cur} />
