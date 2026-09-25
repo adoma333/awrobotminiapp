@@ -13,7 +13,7 @@ import time
 
 import httpx
 
-from retry import raise_for_retryable, with_backoff
+from retry import RetryableError, raise_for_retryable, with_backoff
 
 TON_WALLET = os.getenv("TON_WALLET_ADDRESS", "").strip()
 TONCENTER_API = os.getenv("TONCENTER_API", "https://toncenter.com/api/v2").rstrip("/")
@@ -80,8 +80,10 @@ def fetch_transactions(limit: int = 100) -> list:
         raise TonError("TON_WALLET_ADDRESS not configured")
     try:
         raw = _get_transactions(limit)
-    except (httpx.HTTPError, ValueError) as e:
-        raise TonError(str(e))
+    except TonError:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, RetryableError) as e:  # 429/5xx بعد استنفاد المحاولات
+        raise TonError("toncenter rate limit / unavailable" if isinstance(e, RetryableError) else str(e))
     out = []
     for tx in raw:
         msg = tx.get("in_msg") or {}

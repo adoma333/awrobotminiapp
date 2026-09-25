@@ -30,6 +30,7 @@ ACTION_LABEL = {"set_wallet": "تغيير محفظة الاستلام", "set_win
                 "transfer": "تحويل TON"}
 OTP_TTL = 300
 OTP_ATTEMPTS = 5
+ORDER_RE = r"\d{1,15}-[A-Za-z0-9_]{1,64}-\d{9,12}"
 ADDR_RE = r"(?:[EUk0]Q[A-Za-z0-9_-]{46}|-?\d:[0-9a-fA-F]{64})"
 
 
@@ -74,12 +75,15 @@ def overview(db) -> dict:
     if ton.configured():
         try:
             txs = ton.fetch_transactions(30)
-            orders = {tx["comment"] for tx in txs if tx["comment"]}
+            # التعليق نص حر يكتبه المرسل: لا يُستخدم كمعرّف مستند إلا إن طابق صيغة طلباتنا {uid}-{package}-{ts}
+            orders = {tx["comment"] for tx in txs if re.fullmatch(ORDER_RE, tx["comment"] or "")}
             known = {oid for oid in orders if db.collection("payments").document(oid).get().exists}
             incoming = [{**tx, "ton": round(tx["value"] / ton.NANO, 4), "order": tx["comment"] if tx["comment"] in known else None}
                         for tx in txs[:30]]
         except ton.TonError as e:
             error = str(e)
+        except Exception as e:  # noqa: BLE001 — عطل في قراءة المعاملات لا يُسقط الصفحة كلها
+            error = f"{type(e).__name__}: {e}"[:200]
     import billing
 
     return {
