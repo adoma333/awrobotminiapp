@@ -205,6 +205,7 @@ def fake_tg(method, **p):
 
 main.tg = fake_tg
 import support  # noqa: E402
+REAL_LLM = support.llm
 import analytics  # noqa: E402
 support.bot_call = lambda token, method, **p: fake_tg(method, _token=token, **p) if method != "sendMessage" else (CALLS.append((method, {"_token": token, **p})) or {"ok": True, "result": {"message_id": len(CALLS)}})
 support.ASYNC = False
@@ -1771,5 +1772,41 @@ c.put("/api/admin/cards", json={"enabled": False})
 ok("إيقاف البطاقات كليًا", main.cards_send({"chat_id": 705, "text": "🔔 تذكير"}) is None)
 c.post("/api/admin/logout")
 main._tg_call = _orig_call
+
+# ═════════ 40) Gemini: نماذج احتياطية عند الازدحام (503) ═════════
+from retry import RetryableError  # noqa: E402
+_orig_post = support._gemini_post
+SEEN_M = []
+def _fake_post(url, key, body):
+    m = url.split("/models/")[1].split(":")[0]
+    SEEN_M.append(m)
+    if m == "gemini-flash-latest":
+        raise RetryableError("HTTP 503")
+    if m == "gemini-flash-lite-latest":
+        raise support.ModelUnavailable("HTTP 404")
+    return {"candidates": [{"content": {"role": "model", "parts": [{"text": f"OK from {m}"}]}}]}
+support._gemini_post = _fake_post
+os.environ["GEMINI_API_KEY"] = "AIza" + "t" * 35
+support._GOOD_MODEL.update(m=None, until=0)
+support.llm = REAL_LLM
+cfg_ = {**support.DEFAULT_CONFIG}
+r_ = support.llm(cfg_, "sys", [{"role": "user", "parts": [{"text": "hi"}]}])
+ok("503 على الأساسي و404 على الاحتياطي الأول → رد من الاحتياطي التالي", r_["parts"][0]["text"] == "OK from gemini-2.5-flash"
+   and SEEN_M == ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"])
+SEEN_M.clear(); support.llm(cfg_, "sys", [{"role": "user", "parts": [{"text": "hi"}]}])
+ok("الاحتياطي الناجح يُجرَّب أولًا لبضع دقائق (لا انتظار على الأساسي المزدحم)", SEEN_M == ["gemini-2.5-flash"])
+support._gemini_post = lambda url, key, body: (_ for _ in ()).throw(RetryableError("HTTP 503"))
+try:
+    support.llm(cfg_, "sys", [{"role": "user", "parts": [{"text": "hi"}]}]); _failed = False
+except support.AiError as e:
+    _failed = "gemini-flash-latest" in str(e) and "gemini-2.5-flash-lite" in str(e)
+ok("كل النماذج مزدحمة → خطأ واضح بكل المحاولات", _failed)
+support._gemini_post = _orig_post
+os.environ.pop("GEMINI_API_KEY", None)
+support._GOOD_MODEL.update(m=None, until=0)
+admin_login(555)
+ok("قائمة النماذج الاحتياطية من اللوحة (تحقق من الصيغة)", c.put("/api/admin/support/config", json={"fallback_models": "gemini-2.5-flash, gemini-2.5-flash-lite"}).json()["fallback_models"] == ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+   and c.put("/api/admin/support/config", json={"fallback_models": ["gpt-4"]}).status_code == 422)
+c.post("/api/admin/logout")
 
 print("\nALL BACKEND CHECKS PASSED")
