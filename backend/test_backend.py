@@ -1274,6 +1274,9 @@ support.ai_available = lambda *a: False
 g = c.get("/api/admin/support/config").json()
 ok("الأدمن: System Prompt افتراضي كامل + المفاتيح لا تُعاد", g["prompt_is_default"] and "escalate_to_human" in g["system_prompt"] and "gemini_api_key" not in g and "support_bot_token" not in g)
 ok("الأدمن: إعدادات مركز الدعم وصلاحيات المساعد", "ai_actions" in g and "welcome_ar" in g and "sounds_enabled" in g)
+ok("مفتاح Gemini بالصيغة الأحدث (نقطة/أطول) + مسافات منسوخة يُقبل", c.put("/api/admin/support/config", json={"gemini_api_key": " AQ.Ab8RN6" + "k" * 60 + "_aRSg\n"}).status_code == 200
+   and support.api_key(support.get_config(DB)) == "AQ.Ab8RN6" + "k" * 60 + "_aRSg")
+ok("مفتاح بمحارف غير صالحة مرفوض", c.put("/api/admin/support/config", json={"gemini_api_key": "AIza<script>" + "x" * 30}).status_code == 422)
 ok("مفتاح Gemini يُحفظ مشفّرًا ولا يُعاد", c.put("/api/admin/support/config", json={"gemini_api_key": "AIza" + "x" * 35}).json()["has_gemini_key"]
    and DB.store["config"]["support"]["gemini_api_key"].startswith("enc:") and support.api_key(support.get_config(DB)) == "AIza" + "x" * 35)
 r = c.put("/api/admin/support/config", json={"ai_actions": {"resync_account": False, "hack": True}, "quick_ar": ["سؤال"] * 20, "support_phone": "+966 50 000 0000"})
