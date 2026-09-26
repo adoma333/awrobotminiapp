@@ -58,11 +58,11 @@ export default function InterestCalculator({ t, lang, onBack }) {
         <div className="calc-chart">
           <ResponsiveContainer width="100%" height={200}>
             <LineChart data={series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.16)" />
               <XAxis dataKey="day" tick={{ fill: '#8c8378', fontSize: 11 }} tickLine={false} axisLine={false} />
               <YAxis tick={{ fill: '#8c8378', fontSize: 11 }} tickLine={false} axisLine={false} width={54} />
               <Tooltip
-                contentStyle={{ background: '#100e0c', border: '1px solid rgba(255,138,0,0.28)', borderRadius: 10, fontSize: 12 }}
+                contentStyle={{ background: 'var(--surface)', border: '1px solid rgba(255,138,0,0.28)', borderRadius: 10, fontSize: 12 }}
                 labelFormatter={(day) => `${t.calcDay} ${day}`}
                 formatter={(value) => [nf(value), t.calcBalance]}
               />

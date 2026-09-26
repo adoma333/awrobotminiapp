@@ -3,7 +3,8 @@ import logo from './assets/logo-wordmark.png';
 import { fill, messages } from './i18n';
 import { setupTelegram, tgLang, haptic, askWriteAccess, closeApp, openExternal } from './telegram';
 import { claimGift, completeOnboarding, errorCodeOf, trackCampaign, getAnnouncement, getNotifications, getStatus, markAnnouncementSeen, openStatusStream, register } from './api';
-import { openSupport, setSupportConfig, setSupportPage } from './support';
+import { onSupportOpen, openSupport, setSupportPage } from './support';
+import { setTrackingLang, setupPixels, trackEvent, trackPage } from './tracking';
 import Stepper from './components/Stepper';
 import LanguageStep from './components/LanguageStep';
 import ProfileStep from './components/ProfileStep';
@@ -32,6 +33,7 @@ const Analytics = lazy(() => import('./components/Analytics'));
 const Referral = lazy(() => import('./components/Referral'));
 const TermsRisks = lazy(() => import('./components/TermsRisks'));
 const Notifications = lazy(() => import('./components/Notifications'));
+const SupportCenter = lazy(() => import('./components/SupportCenter'));
 
 const ONBOARD_KEY = 'aw_onboarded';
 const EMPTY_MT5 = { login: '', password: '', server: '' };
@@ -41,6 +43,9 @@ const QS = new URLSearchParams(window.location.search);
 const RENEW_TON = QS.get('renew') === 'ton';
 // ?view=plans: من رسائل البوت (باقة خاصة، عروض الاسترجاع) تفتح شاشة الباقات مباشرة
 const OPEN_PLANS = RENEW_TON || QS.get('view') === 'plans';
+// ?view=support[&err=ERR-XXXXXX]: من زر «فتح مركز الدعم» في رسائل البوت
+const OPEN_SUPPORT = QS.get('view') === 'support';
+const OPEN_ERR = /^ERR-[A-Z0-9]{6}$/.test(QS.get('err') || '') ? QS.get('err') : '';
 // startapp=gift_<code> رابط هدية · startapp=c_<slug> رابط حملة تسويقية
 const START_PARAM = String(window.Telegram?.WebApp?.initDataUnsafe?.start_param || QS.get('startapp') || '');
 
@@ -61,6 +66,8 @@ export default function App() {
   const [streaming, setStreaming] = useState(false); // بث SSE متصل = لا حاجة للاستعلام الدوري
   const [unread, setUnread] = useState(0); // شارة 🔔
   const [ann, setAnn] = useState(null); // نافذة "ما الجديد"
+  const [support, setSupport] = useState({ open: false, errorRef: '', draft: '' }); // مركز الدعم (فوق أي شاشة)
+  const supportAsked = useRef(false);
   const annAsked = useRef(false);
   const startHandled = useRef(false);
   const busyRef = useRef(false);
@@ -87,14 +94,28 @@ export default function App() {
     document.documentElement.dir = t.dir;
   }, [lang, t.dir]);
 
-  // رابط الدعم يُحفظ محليًا ليعمل زر الدعم حتى مع انقطاع الخادم
+  // البكسلات وإعدادات التتبّع من الخادم
   useEffect(() => {
-    setSupportConfig(info.settings, info.bot_username);
-  }, [info.settings, info.bot_username]);
+    setupPixels(info.settings);
+  }, [info.settings]);
 
   useEffect(() => {
-    setSupportPage(phase === 'dashboard' ? view : `${phase}:${step}`);
-  }, [phase, view, step]);
+    setTrackingLang(lang);
+  }, [lang]);
+
+  useEffect(() => {
+    const page = phase === 'dashboard' ? view : phase === 'flow' ? `flow:${showOnboarding ? 'onboarding' : showTerms ? 'terms' : step}` : phase;
+    setSupportPage(page);
+    if (phase !== 'loading') trackPage(page);
+  }, [phase, view, step, showOnboarding, showTerms]);
+
+  // مركز الدعم: يُفتح من أي مكان (السماعة، رسائل الأخطاء، الإعدادات، رسائل البوت ?view=support)
+  useEffect(() => onSupportOpen((o) => setSupport({ open: true, errorRef: o.errorRef || '', draft: o.draft || '' })), []);
+  useEffect(() => {
+    if (supportAsked.current || phase === 'loading' || !OPEN_SUPPORT) return;
+    supportAsked.current = true;
+    openSupport({ errorRef: OPEN_ERR });
+  }, [phase]);
 
   // عدد الإشعارات غير المقروءة (كل دقيقة أثناء فتح اللوحة)
   const refreshUnread = useCallback(() => {
@@ -226,6 +247,7 @@ export default function App() {
     const s = await refreshStatus();
     if (s.status === 'approved') {
       haptic.success();
+      trackEvent('link_account', { returning: returning ? 1 : 0 });
       setMt5(EMPTY_MT5);
       // بلا اشتراك فعّال: نعرض الباقات مباشرة بعد نجاح الربط
       setView(s.subscription?.active ? 'main' : 'plans');
@@ -467,6 +489,19 @@ export default function App() {
       </ErrorBoundary>
       {phase === 'dashboard' && <BottomNav t={t} view={view} onSelect={setView} />}
       <ErrorCenter t={t} />
+      {support.open && (
+        <Suspense fallback={null}>
+          <SupportCenter
+            t={t}
+            lang={lang}
+            open={support.open}
+            errorRef={support.errorRef}
+            draft={support.draft}
+            onClose={() => setSupport({ open: false, errorRef: '', draft: '' })}
+            onLinkAccount={() => afterUnlink().catch(() => {})}
+          />
+        </Suspense>
+      )}
       {ann && <WhatsNew t={t} lang={lang} ann={ann} onClose={closeAnnouncement} />}
     </main>
   );

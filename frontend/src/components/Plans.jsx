@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { trackEvent } from '../tracking';
 import ErrorNote from './ErrorNote';
 import PageHead from './PageHead';
 import {
@@ -125,7 +126,14 @@ export default function Plans({ t, lang, sub, refreshStatus, mode, onContinue, o
     return true;
   };
 
+  const selRef = useRef(null);
+  selRef.current = selected;
+  useEffect(() => {
+    if (selected) trackEvent('checkout_open', { pkg: selected.id, usd: selected.price_usd });
+  }, [selected]);
+
   const markPaid = useCallback(() => {
+    trackEvent('purchase', { pkg: selRef.current?.id || '', usd: selRef.current?.price_usd || 0 });
     setWaiting(null);
     setCryptoPay(null);
     setPaid(true);

@@ -81,7 +81,7 @@ export async function getStatus() {
         : null,
       referral_code: 'AB12CD',
       bot_username: 'awfxapp_bot',
-      settings: { kill_switch: false, referral_enabled: true, referral_days: 7, support_url: 'https://t.me/aw_support_bot', support_bot: 'aw_support_bot', support_mode: 'bot' },
+      settings: { kill_switch: false, referral_enabled: true, referral_days: 7, support_url: '', support_bot: '', support_mode: 'app', analytics: true, pixels: {} },
     };
     if (!mock.approved) {
       // مستخدم جديد بلا ملف شخصي؛ بعد فكّ الربط يبقى اسمه وصورته (كما يعيد الخادم)
@@ -463,3 +463,49 @@ export async function getReferralStats() {
   }
   return request('GET', `/api/referral/stats?init_data=${encodeURIComponent(initData)}`, null, { silent: true });
 }
+
+// ─────────── مركز الدعم داخل التطبيق ───────────
+const devSup = { tid: null, msgs: [], typingUntil: 0, n: 0 };
+const devMsg = (role, text, extra = {}) => ({ id: `m${++devSup.n}`, role, text, at: Date.now() / 1000, ...extra });
+const DEV_SUP_CFG = {
+  enabled: true, ai_online: true, sounds: true, attachments: true, phone: '',
+  welcome: 'أهلًا بك في مركز الدعم 👋\nاكتب سؤالك أو مشكلتك، أو أرفق صورة للخطأ، وسيرد عليك المساعد الذكي فورًا. يمكنك طلب موظف في أي وقت.',
+  quick: ['دفعت ولم يتفعل اشتراكي', 'بياناتي لا تتحدث', 'مشكلة في ربط حساب MT5', 'التحدث مع موظف'],
+};
+
+export async function getSupportThread(lang) {
+  if (DEV_MOCK) {
+    await sleep(150);
+    const typing = Date.now() < devSup.typingUntil;
+    return { ticket: devSup.tid ? { id: devSup.tid, status: 'open', priority: 'medium', typing, lang } : null, messages: devSup.msgs, config: DEV_SUP_CFG };
+  }
+  return request('GET', `/api/support/thread?init_data=${encodeURIComponent(initData)}&lang=${lang}`, null, { silent: true });
+}
+
+export async function sendSupport({ text = '', image = '', errorRef = '', lang = 'ar' }) {
+  if (DEV_MOCK) {
+    await sleep(250);
+    if (!devSup.tid) {
+      devSup.tid = 'TDEV01';
+      devSup.msgs.push(devMsg('user', text || `خطأ ${errorRef}`, image ? { image } : {}));
+      devSup.msgs.push(devMsg('notice', `✅ استلمنا طلبك — تذكرة #${devSup.tid}\nالأولوية: متوسطة · الرد المتوقع خلال 60 دقيقة.`));
+    } else devSup.msgs.push(devMsg('user', text, image ? { image } : {}));
+    devSup.typingUntil = Date.now() + 1800;
+    setTimeout(() => {
+      devSup.msgs.push(devMsg('ai', 'فحصت حسابك: المزامنة متوقفة منذ ساعتين، وأعدت تشغيلها الآن ✅ ستتحدث بياناتك خلال دقائق.',
+        { buttons: [{ kind: 'human', tid: devSup.tid, label: '👤 التحدث مع موظف' }] }));
+    }, 1800);
+    return { ok: true };
+  }
+  return request('POST', '/api/support/send', { init_data: initData, text, lang, error_ref: errorRef, image });
+}
+
+export async function supportAction(kind, tid, arg) {
+  if (DEV_MOCK) {
+    devSup.msgs.push(devMsg('notice', kind === 'csat' ? '🙏 شكرًا لتقييمك — يساعدنا على التحسين.' : '👤 حوّلنا طلبك لموظف دعم وسيرد عليك هنا قريبًا.'));
+    return { ok: true };
+  }
+  return request('POST', '/api/support/action', { init_data: initData, kind, tid, arg: arg ?? null });
+}
+
+export const supportMediaUrl = (path) => (path && path.startsWith('/') ? `${API}${path}` : path);

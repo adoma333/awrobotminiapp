@@ -7,6 +7,11 @@ import '@fontsource/ibm-plex-sans-arabic/600.css';
 import './App.css';
 import App from './App.jsx';
 import { ToastProvider } from './components/Toast';
+import { applyTheme } from './theme';
+import { initTracking } from './tracking';
+
+applyTheme(); // قبل أول رسم: لا وميض بين الوضعين
+initTracking();
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
