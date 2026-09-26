@@ -64,9 +64,30 @@ DEFAULT = {
     "version": 1,
     # الشكل (يُتحكَّم به من المعاينة الحية في لوحة التحكم)
     "style": {"accent": "#ff8a00", "accent2": "#ff5a00", "bg": "#0e0b09", "text": "#f5efe8", "width": 460,
-              "position": "bottom", "radius": 26, "blur": 4},
+              "position": "bottom", "radius": 26, "blur": 4,
+              # تخصيص كامل: المظهر، الصورة، الزر، النص، الحركة
+              "theme": "custom",        # custom = ألوانك · app = يتبع وضع التطبيق (ليلي/نهاري) تلقائيًا
+              "image_mode": "top",      # top = صورة أعلى النافذة · full = صورة بعرض كامل · background = خلفية النافذة
+              "image_fit": "cover",     # cover | contain
+              "image_height": 180,      # px
+              "image_radius": 18,
+              "image_focus": "center",  # top | center | bottom (نقطة تركيز القص)
+              "overlay": 55,            # تعتيم فوق صورة الخلفية %
+              "cta_place": "inline",    # inline = بعد المحتوى · sticky = مثبّت أسفل النافذة
+              "cta_width": "full",      # full | auto
+              "align": "center",        # center | start
+              "title_size": 24,
+              "animation": "slide",     # slide | fade | zoom
+              "show_close": True},
 }
-STYLE_KEYS = {"accent", "accent2", "bg", "text", "width", "position", "radius", "blur"}
+STYLE_KEYS = {"accent", "accent2", "bg", "text", "width", "position", "radius", "blur", "theme", "image_mode", "image_fit",
+              "image_height", "image_radius", "image_focus", "overlay", "cta_place", "cta_width", "align", "title_size",
+              "animation", "show_close"}
+STYLE_ENUMS = {"position": ("bottom", "center", "fullscreen"), "theme": ("custom", "app"), "image_mode": ("top", "full", "background"),
+               "image_fit": ("cover", "contain"), "image_focus": ("top", "center", "bottom"), "cta_place": ("inline", "sticky"),
+               "cta_width": ("full", "auto"), "align": ("center", "start"), "animation": ("slide", "fade", "zoom")}
+STYLE_RANGES = {"width": (300, 760), "radius": (0, 40), "blur": (0, 12), "image_height": (80, 420), "image_radius": (0, 40),
+                "overlay": (0, 90), "title_size": (16, 40)}
 TEXT_FIELDS = ("badge_ar", "badge_en", "title_ar", "title_en", "subtitle_ar", "subtitle_en", "body_ar", "body_en",
                "footnote_ar", "footnote_en", "cta_label_ar", "cta_label_en")
 
@@ -115,12 +136,14 @@ def clean(patch: dict, current: dict | None = None) -> dict:
                 if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(v or "")):
                     raise ValueError(f"style.{k} must be #RRGGBB")
                 st[k] = str(v)
-            elif k == "position":
-                if v not in ("bottom", "center"):
-                    raise ValueError("style.position invalid")
+            elif k in STYLE_ENUMS:
+                if v not in STYLE_ENUMS[k]:
+                    raise ValueError(f"style.{k} invalid")
                 st[k] = v
+            elif k == "show_close":
+                st[k] = bool(v)
             else:
-                lim = {"width": (300, 760), "radius": (0, 40), "blur": (0, 12)}[k]
+                lim = STYLE_RANGES[k]
                 st[k] = max(lim[0], min(lim[1], int(v)))
         out["style"] = st
     merged = {**cur, **out}

@@ -516,9 +516,19 @@ def register(body: Registration):
     # بطاقات الخدش: الترحيب عند ربط حساب تجريبي، وبطاقة للمُحيل عند نجاح ربط من دعاه (مرة لكل صديق)
     if account_type == "demo":
         rewards.grant_card(db, uid, "welcome")
+    else:
+        rewards.grant_card(db, uid, "link_real")
     referrer = (previous or {}).get("referred_by")
     if referrer and str(referrer) != str(uid):
         rewards.grant_card(db, referrer, f"referral_{uid}")
+        s_ = billing.get_settings(db)
+        pct = int(s_.get("referral_friend_discount") or 0)
+        if s_.get("referral_enabled") and pct > 0 and not (previous or {}).get("referral_welcome_given"):
+            try:  # هدية الصديق المدعو: خصم فوري في محفظة مكافآته
+                rewards.admin_issue_coupon(db, uid, "discount", pct, int(s_.get("referral_friend_discount_hours") or 72))
+                user_ref(uid).set({"referral_welcome_given": True}, merge=True)
+            except rewards.RewardError:
+                log.exception("referral friend discount")
     return {"status": "approved"}
 
 
@@ -572,6 +582,10 @@ def _public_settings() -> dict:
         "maintenance_en": s.get("maintenance_en") or "",
         "referral_enabled": bool(s.get("referral_enabled")),
         "referral_days": s.get("referral_days", 7),
+        "referral_mode": s.get("referral_mode", "first"),
+        "referral_friend_discount": s.get("referral_friend_discount", 0),
+        "referral_share_ar": s.get("referral_share_ar") or "",
+        "referral_share_en": s.get("referral_share_en") or "",
         **_support_public(),
         "pay_ton": bool(s.get("pay_ton_enabled", True)),
         "pay_crypto": bool(s.get("pay_crypto_enabled", True)),
@@ -1263,6 +1277,7 @@ def admin_update_settings(patch: dict, admin_id: int = Depends(get_current_admin
     try:
         if "referral_tiers" in patch:
             patch["referral_tiers"] = growth.clean_tiers(patch["referral_tiers"])
+        patch.update(billing.clean_referral(patch))
         if "np_tolerance_pct" in patch:
             patch["np_tolerance_pct"] = max(0.0, min(5.0, float(patch["np_tolerance_pct"])))
         if patch.get("np_payout_address") and not re.fullmatch(r"[A-Za-z0-9:_-]{20,120}", str(patch["np_payout_address"])):
@@ -1334,12 +1349,46 @@ def activate_payment(order_id: str, extra: dict | None = None) -> bool:
             rewards.mark_used(db, pay["reward_id"], order_id)
         settings = billing.get_settings(db)
         if settings.get("referral_enabled"):
-            billing.grant_referral_bonus_if_eligible(db, pay["uid"], settings.get("referral_days", 7), settings.get("referral_tiers"))
+            _referral_reward(pay, pkg, settings)
+        _payment_cards(pay, order_id)
         pay_ref.set({"status": "finished", "confirmed_at": time.time(), **(extra or {})}, merge=True)
     tg("sendMessage", chat_id=pay["uid"], text=PAID_MSG)
     notifications.push(db, pay["uid"], "payment", "تم تفعيل اشتراكك ✅", "Your subscription is active ✅",
                        f"تم تأكيد الدفع وتفعيل باقة {pkg.get('name_ar') or ''}.", f"Payment confirmed — {pkg.get('name_en') or ''} plan activated.", order_id)
     return True
+
+
+def _referral_reward(pay: dict, pkg: dict, settings: dict):
+    """مكافأة الإحالة (الوضع، أقل مبلغ، الحد الشهري، المستويات) + جائزة الإنجاز للمُحيل وإشعاره. لا تعطّل الدفع أبدًا."""
+    try:
+        usd = _pay_usd(pay) or float(pkg.get("price_usd") or 0)
+        res = billing.referral_on_payment(db, pay["uid"], settings, usd)
+        if not res:
+            return
+        rid = res["referrer"]
+        if res["days"]:
+            notifications.push(db, rid, "referral", f"🎉 +{res['days']} يوم من إحالة صديق", f"🎉 +{res['days']} days from a referral",
+                               "صديقك دفع اشتراكه وأُضيفت أيامك تلقائيًا.", "Your friend subscribed and your days were added automatically.")
+        m = res.get("milestone")
+        if m:
+            rewards.admin_issue_coupon(db, rid, m["type"], m["value"], m["hours"])
+            notifications.push(db, rid, "referral", f"🏆 وصلت {m['count']} إحالة ناجحة!", f"🏆 {m['count']} successful referrals!",
+                               "جائزة الإنجاز أُضيفت لمحفظة المكافآت.", "Your milestone prize is in your rewards wallet.")
+            tg("sendMessage", chat_id=rid, text=f"🏆 مبروك! وصلت {m['count']} إحالة ناجحة — جائزتك في محفظة المكافآت داخل التطبيق.")
+    except Exception:  # noqa: BLE001
+        log.exception("referral reward")
+
+
+def _payment_cards(pay: dict, order_id: str):
+    """بطاقات خدش: أول دفعة ناجحة، ثم بطاقة لكل تجديد (كل منها قابل للإيقاف من اللوحة)."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    try:
+        prev = [d for d in db.collection("payments").where(filter=FieldFilter("uid", "==", pay["uid"])).stream()
+                if d.id != order_id and (d.to_dict() or {}).get("status") == "finished"]
+        rewards.grant_card(db, pay["uid"], "first_payment" if not prev else f"renewal_{order_id}")
+    except Exception:  # noqa: BLE001
+        log.exception("payment card")
 
 
 # ═══════════════════════════ صندوق الـ webhooks الواردة (لا يضيع إشعار دفع) ═══════════════════════════
@@ -2000,6 +2049,7 @@ class FeedbackRequest(BaseModel):
     init_data: str
     rating: int = Field(ge=1, le=5)
     message: str = Field(default="", max_length=1000)
+    lang: str = Field(default="", pattern="^(ar|en|)$")
 
 
 @app.post("/api/feedback")
@@ -2013,8 +2063,26 @@ def submit_feedback(body: FeedbackRequest):
     text = f"📝 <b>تقييم جديد</b>\n{stars}\nمن: {escape(nickname or user.get('first_name', ''))} (<code>{user['id']}</code>)"
     if body.message.strip():
         text += f"\n\n{escape(body.message.strip())}"
-    tg("sendMessage", chat_id=CHANNEL_ID, parse_mode="HTML", text=text, disable_notification=True)
-    return {"ok": True}
+    data = (snap.to_dict() or {}) if snap.exists else {}
+    lang = body.lang or data.get("language") or ("ar" if (user.get("language_code") or "").startswith("ar") else "en")
+    now = time.time()
+    if now - float(data.get("feedback_at") or 0) < 20:  # منع الإغراق: تقييم واحد كل 20 ثانية
+        raise HTTPException(429, "too_many")
+    res = support.feedback_reply(support.get_config(db), lang, body.rating, body.message.strip(), nickname or user.get("first_name", ""))
+    db.collection("feedback").document().set({"uid": str(user["id"]), "rating": body.rating, "message": body.message.strip(), "lang": lang,
+                                               "reply": res["reply"], "ai": res["ai"], "suggest_support": res["suggest_support"], "at": now})
+    ref.set({"feedback_at": now, "feedback_rating": body.rating}, merge=True)
+    tg("sendMessage", chat_id=CHANNEL_ID, parse_mode="HTML", text=text + f"\n\n🤖 الرد: {escape(res['reply'][:600])}", disable_notification=True, _card=False)
+    return {"ok": True, "reply": res["reply"], "suggest_support": res["suggest_support"]}
+
+
+@app.get("/api/admin/support/feedback")
+def admin_feedback(admin_id: int = Depends(get_current_admin)):
+    rows = [{"id": d.id, **(d.to_dict() or {})} for d in db.collection("feedback").stream()]
+    rows.sort(key=lambda r: -(r.get("at") or 0))
+    n = len(rows)
+    dist = {str(i): sum(1 for r in rows if r.get("rating") == i) for i in range(1, 6)}
+    return {"rows": rows[:300], "stats": {"count": n, "avg": round(sum(r.get("rating") or 0 for r in rows) / n, 2) if n else None, "dist": dist}}
 
 
 # ═══════════════════════════ بطاقات الخدش والمكافآت (Scratch & Win) ═══════════════════════════

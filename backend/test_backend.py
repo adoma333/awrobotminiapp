@@ -856,7 +856,7 @@ ok("نوع جائزة مجهول مرفوض", c.put("/api/admin/rewards/config",
 ok("صلاحية خارج 1..72 مرفوضة", c.put("/api/admin/rewards/config", json={"ttl_hours": 100}).status_code == 422)
 r = c.put("/api/admin/rewards/config", json={"ttl_hours": 6, "require_phone": False, "triggers": {"welcome": False},
                                              "prizes": [{"type": "discount", "value": 35, "weight": 5}, {"type": "free_days", "value": 2, "weight": 0}]})
-ok("حفظ إعدادات الأدمن", r.status_code == 200 and r.json()["ttl_hours"] == 6 and r.json()["triggers"] == {"welcome": False, "referral": True, "streak7": True})
+ok("حفظ إعدادات الأدمن", r.status_code == 200 and r.json()["ttl_hours"] == 6 and r.json()["triggers"] == {"welcome": False, "link_real": False, "referral": True, "streak7": True, "first_payment": True, "renewal": False})
 add_user(42)
 ok("محفز معطّل لا يمنح بطاقة", c.post("/api/onboarding/complete", json={"init_data": init_data()}).json()["card_id"] is None)
 rewards.grant_card(DB, 42, "referral_9")
@@ -1497,6 +1497,12 @@ announcements.seed_default(DB)
 r = c.put("/api/admin/announcements/launch", json={"style": {"accent": "#22c55e", "width": 520, "position": "center", "radius": 12, "evil": "x"}})
 ok("شكل النافذة قابل للتحكم ويُتحقق منه", r.status_code == 200 and r.json()["style"]["accent"] == "#22c55e" and r.json()["style"]["position"] == "center" and "evil" not in r.json()["style"])
 ok("لون غير صالح مرفوض", c.put("/api/admin/announcements/launch", json={"style": {"bg": "red;}"}}).status_code == 422)
+r = c.put("/api/admin/announcements/launch", json={"style": {"position": "fullscreen", "theme": "app", "image_mode": "background", "image_height": 999,
+                                                                "overlay": 40, "cta_place": "sticky", "animation": "zoom", "show_close": False}})
+ok("تخصيص كامل: ملء الشاشة + وضع التطبيق + صورة خلفية + زر مثبّت + حركة", r.status_code == 200 and r.json()["style"]["position"] == "fullscreen"
+   and r.json()["style"]["theme"] == "app" and r.json()["style"]["image_height"] == 420 and r.json()["style"]["show_close"] is False)
+ok("خيار شكل غير صالح مرفوض", c.put("/api/admin/announcements/launch", json={"style": {"animation": "explode"}}).status_code == 422)
+c.put("/api/admin/announcements/launch", json={"style": {"position": "center", "theme": "custom", "image_mode": "top", "cta_place": "inline", "animation": "slide", "show_close": True}})
 c.post("/api/admin/logout")
 
 # ═════════ 37) بوابة الدفع الخاصة AW Pay (TRON / BSC / TON) ═════════
@@ -1814,5 +1820,57 @@ admin_login(555)
 ok("قائمة النماذج الاحتياطية من اللوحة (تحقق من الصيغة)", c.put("/api/admin/support/config", json={"fallback_models": "gemini-2.5-flash, gemini-2.5-flash-lite"}).json()["fallback_models"] == ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
    and c.put("/api/admin/support/config", json={"fallback_models": ["gpt-4"]}).status_code == 422)
 c.post("/api/admin/logout")
+
+# ═════════ 41) إحالة متقدمة + محفّزات المكافآت + رد ذكي على التقييم ═════════
+import billing as _b  # noqa: E402
+admin_login(555)
+ok("إعدادات إحالة غير صالحة مرفوضة", c.put("/api/admin/settings", json={"referral_mode": "weird"}).status_code == 422
+   and c.put("/api/admin/settings", json={"referral_milestones": [{"count": 3, "type": "hack", "value": 1}]}).status_code == 422)
+r = c.put("/api/admin/settings", json={"referral_enabled": True, "referral_days": 5, "referral_tiers": [{"min": 0, "days": 7}], "referral_mode": "every",
+                                       "referral_recurring_days": 2, "referral_min_usd": 10, "referral_monthly_cap": 2, "referral_friend_discount": 15,
+                                       "referral_milestones": [{"count": 2, "type": "free_month", "value": 30, "hours": 48}], "referral_share_ar": "انضم عبر {link}"})
+ok("حفظ إعدادات الإحالة المتقدمة", r.status_code == 200 and r.json()["referral_mode"] == "every" and r.json()["referral_milestones"][0]["type"] == "free_month")
+st_ = c.post("/api/status", json={"init_data": init_data(42)}).json()["settings"]
+ok("نص المشاركة المخصص يصل للتطبيق", st_["referral_share_ar"] == "انضم عبر {link}" and st_["referral_friend_discount"] == 15)
+S_ = _b.get_settings(DB)
+add_user(900, status="approved"); add_user(901, status="approved", referred_by="900"); add_user(902, status="approved", referred_by="900"); add_user(903, status="approved", referred_by="900")
+exp0 = lambda u: float(((DB.store["users"][str(u)].get("subscription") or {}).get("expires_at")) or 0)  # noqa: E731
+ok("أقل مبلغ: دفعة أقل من الحد لا تُحتسب", _b.referral_on_payment(DB, 901, S_, 5) is None and not DB.store["users"]["901"].get("referral_reward_granted"))
+r1 = _b.referral_on_payment(DB, 901, S_, 29)
+ok("أول دفعة: الصديق + المُحيل حسب المستوى", r1["first"] and r1["days"] == 7 and exp0(901) > time.time() + 4 * 86400 and exp0(900) > time.time() + 6 * 86400)
+r2 = _b.referral_on_payment(DB, 901, S_, 29)
+ok("وضع «كل دفعة»: أيام متكررة للمُحيل عن التجديد", r2 and not r2["first"] and r2["days"] == 2)
+r3 = _b.referral_on_payment(DB, 902, S_, 29)
+ok("الحد الشهري للمُحيل (2) + جائزة الإنجاز عند إحالتين مدفوعتين", r3["capped"] and r3["days"] == 0 and r3["milestone"]["count"] == 2)
+ok("جائزة الإنجاز لا تتكرر", (_b.referral_on_payment(DB, 903, S_, 29) or {}).get("milestone") is None)
+_b.update_settings(DB, {"referral_mode": "first"})
+ok("وضع «أول دفعة فقط»: التجديد لا يُكافأ", _b.referral_on_payment(DB, 902, _b.get_settings(DB), 29) is None)
+cf = c.put("/api/admin/rewards/config", json={"streak_days": 5, "max_pending": 2, "triggers": {"first_payment": True, "renewal": True, "link_real": True},
+                                              "trigger_prizes": {"first_payment": [{"type": "free_days", "value": 9, "weight": 1, "enabled": True}]}})
+ok("مكافآت: طول السلسلة + حد البطاقات + جدول جوائز لكل محفّز", cf.status_code == 200 and cf.json()["streak_days"] == 5 and cf.json()["trigger_prizes"]["first_payment"][0]["value"] == 9)
+ok("محفّز غير معروف مرفوض", c.put("/api/admin/rewards/config", json={"trigger_prizes": {"hack": [{"type": "discount", "value": 5, "weight": 1}]}}).status_code == 422)
+add_user(910, status="approved")
+cid = rewards.grant_card(DB, 910, "first_payment")
+ok("بطاقة أول دفعة تُمنح", cid == "910_first_payment")
+rewards.grant_card(DB, 910, "renewal_o1")
+ok("حد البطاقات المعلّقة (2) يمنع التكديس", rewards.grant_card(DB, 910, "renewal_o2") is None and len(DB.store["users"]["910"]["scratch_pending"]) == 2)
+DB.store["users"]["910"].update(phone_verified=True)
+cl_ = rewards.claim(DB, {"id": 910, "is_premium": True}, cid, "sec")
+ok("جائزة البطاقة من جدول محفّزها الخاص", DB.store[rewards.CARDS][cid]["prize"] == {"type": "free_days", "value": 9})
+c.post("/api/admin/logout")
+support.llm_text = lambda cfg, system, prompt, max_tokens=400: "شكرًا يا أحمد على كلماتك الجميلة 🌟\nSUPPORT=no"
+support.ai_available = lambda *a: True
+DB.store.setdefault("config", {})["support"] = {"ai_enabled": True}; support.invalidate()
+fb = c.post("/api/feedback", json={"init_data": init_data(911), "rating": 5, "message": "تطبيق رائع", "lang": "ar"}).json()
+ok("رد ذكي على التقييم حسب الرسالة (بدون سطر التحكم)", fb["reply"] == "شكرًا يا أحمد على كلماتك الجميلة 🌟" and fb["suggest_support"] is False)
+ok("منع إغراق التقييمات", c.post("/api/feedback", json={"init_data": init_data(911), "rating": 5}).status_code == 429)
+support.llm_text = lambda *a, **k: (_ for _ in ()).throw(support.AiError("down"))
+fb2 = c.post("/api/feedback", json={"init_data": init_data(912), "rating": 2, "message": "التطبيق لا يعمل", "lang": "ar"}).json()
+ok("تعطل الذكاء: رد اعتذار جاهز + اقتراح فتح الدعم", "نعتذر" in fb2["reply"] and fb2["suggest_support"] is True)
+admin_login(555)
+af = c.get("/api/admin/support/feedback").json()
+ok("اللوحة: سجل التقييمات + المتوسط والتوزيع", af["stats"]["count"] == 2 and af["stats"]["dist"]["5"] == 1 and af["rows"][0]["reply"])
+c.post("/api/admin/logout")
+support.ai_available = lambda *a: False
 
 print("\nALL BACKEND CHECKS PASSED")
