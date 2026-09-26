@@ -2,7 +2,7 @@ import { initData, tg } from './telegram';
 
 // ─────────── تتبّع الزوار والأداء (بيانات أولية لخادمنا) + بكسلات المنصات الاختيارية ───────────
 const API = import.meta.env.VITE_API_URL ?? '';
-const OFF = import.meta.env.DEV && !initData; // معاينة المتصفح أثناء التطوير: لا إرسال
+const OFF = (import.meta.env.DEV && !initData) || new URLSearchParams(window.location.search).has('preview'); // معاينة: لا إرسال
 const QS = new URLSearchParams(window.location.search);
 const rid = () => (crypto.randomUUID?.() || `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`).replace(/[^A-Za-z0-9]/g, '').slice(0, 24);
 

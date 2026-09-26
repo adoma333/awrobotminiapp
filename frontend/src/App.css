@@ -4198,6 +4198,49 @@ html[data-theme='light'] .wn-sheet.is-app-theme { --bone: #1b1612; --ash: #6e655
 }
 .lang-perks li:nth-child(2) { animation-delay: 0.08s; }
 .lang-perks li:nth-child(3) { animation-delay: 0.16s; }
-.lang-perks li span { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--fill); font-size: 17px; }
+.lang-perks li span { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 10px; background: var(--fill); color: var(--ember); font-size: 17px; }
 @media (max-height: 700px) { .lang-perks li:nth-child(3) { display: none; } .lang-body { gap: 12px; } .lang-perks li { padding: 8px 12px; } }
 .fb-backdrop { z-index: 130; }
+
+/* ─────────── استوديو التصميم: خيارات عامة تُطبَّق من لوحة التحكم ─────────── */
+.app { max-width: var(--ui-max, 440px); zoom: var(--ui-zoom, 1); min-height: calc(100dvh / var(--ui-zoom, 1)); }
+/* شكل الأزرار */
+html[data-btn='rounded'] .btn.primary::before, html[data-btn='rounded'] .btn.soft::before, html[data-btn='rounded'] .btn.danger::before { clip-path: none; border-radius: 14px; }
+html[data-btn='pill'] .btn.primary::before, html[data-btn='pill'] .btn.soft::before, html[data-btn='pill'] .btn.danger::before { clip-path: none; border-radius: 999px; }
+html[data-btn='square'] .btn.primary::before, html[data-btn='square'] .btn.soft::before, html[data-btn='square'] .btn.danger::before { clip-path: none; border-radius: 4px; }
+html[data-btn='rounded'] .btn.small::before, html[data-btn='pill'] .btn.small::before { clip-path: none; }
+/* شكل البطاقات */
+.hero-card, .sub-card, .quick, .fb-card, .grid2, .lang-perks li { border-radius: var(--r-card, 14px); }
+.hero-card { border-radius: calc(var(--r-card, 14px) + 8px); box-shadow: 0 18px 50px -24px var(--glow-c, rgba(255, 110, 0, 0.45)), inset 0 1px 0 rgba(var(--hi), 0.05); }
+html[data-cards='solid'] .hero-card, html[data-cards='solid'] .quick, html[data-cards='solid'] .sub-card, html[data-cards='solid'] .fb-card { background: var(--surface-2); backdrop-filter: none; }
+html[data-cards='outline'] .hero-card, html[data-cards='outline'] .quick, html[data-cards='outline'] .sub-card, html[data-cards='outline'] .fb-card { background: transparent; box-shadow: none; }
+html[data-cards='gradient'] .quick, html[data-cards='gradient'] .sub-card { background: linear-gradient(145deg, var(--fill), transparent 70%), var(--surface-2); }
+/* الكثافة */
+html[data-density='compact'] .dash { gap: clamp(10px, 1.6vh, 18px); }
+html[data-density='compact'] .hero-card { padding: 14px 16px 12px; }
+html[data-density='spacious'] .dash { gap: clamp(20px, 3.4vh, 40px); }
+/* بلا حركة */
+html[data-anim='off'] *, html[data-anim='off'] *::before, html[data-anim='off'] *::after { animation: none !important; transition: none !important; }
+/* اختصارات وخلايا مخصصة */
+.quick-grid { grid-template-columns: repeat(var(--quick-cols, 4), 1fr); }
+.hero-card .hero-num { font-size: calc(clamp(36px, min(12vw, 7vh), 64px) * var(--bal-scale, 1)); }
+.bottom-nav.no-labels .bn-label { display: none; }
+.bottom-nav.no-labels .bn-item { padding-block: 12px; }
+
+/* ─────────── خارج تلجرام: صفحة الدخول مع رمز QR ─────────── */
+.landing { justify-content: flex-start; }
+.landing-top { display: flex; align-items: center; justify-content: space-between; padding-top: 6px; }
+.landing-logo { height: 30px; width: auto; mix-blend-mode: var(--logo-blend); filter: var(--logo-filter); }
+.landing-lang { min-width: 40px; height: 36px; border-radius: 12px; border: 1px solid var(--line-dim); background: rgba(var(--hi), 0.04); color: var(--bone); font: inherit; cursor: pointer; }
+.landing-body { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: clamp(12px, 2.2vh, 22px); text-align: center; padding: 20px 0; }
+.landing-body h1 { font-size: clamp(26px, min(8vw, 4.6vh), 38px); }
+.landing-body .sub { max-width: 34ch; margin: 0; }
+.landing-badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 99px; border: 1px solid var(--line); color: var(--ember); font-size: 13px; background: var(--fill); }
+.landing-qr { position: relative; width: min(64vw, 260px); aspect-ratio: 1; padding: 16px; border-radius: 26px; border: 1px solid var(--line); background: radial-gradient(circle at 50% 30%, var(--fill), transparent 70%), var(--surface-2); box-shadow: 0 20px 60px -30px var(--glow-c, rgba(255, 110, 0, 0.5)); }
+.landing-qr img { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+.landing-qr-ic { position: absolute; inset: 50% auto auto 50%; transform: translate(-50%, -50%); display: grid; place-items: center; width: 50px; height: 50px; border-radius: 14px; background: var(--grad); color: #140700; box-shadow: 0 0 0 6px var(--surface-2); }
+.landing-cta { flex: none; width: 100%; max-width: 360px; text-decoration: none; }
+.landing-link { margin: 0; color: var(--ash); font-size: 13px; }
+.landing .lang-perks { width: 100%; max-width: 420px; text-align: start; }
+@media (min-width: 900px) { .app.landing { max-width: 560px; } }
+.landing-cta { display: inline-flex; height: 54px; min-height: 54px; }

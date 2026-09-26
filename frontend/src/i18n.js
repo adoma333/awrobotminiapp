@@ -441,6 +441,12 @@ export const messages = {
 
     // التقييم والملاحظات
     feedbackBtn: 'Feedback',
+    gcTrades: 'Trades',
+    qkSupport: 'Support',
+    qkNotif: 'Alerts',
+    qkBilling: 'Payments',
+    qkFaq: 'Help',
+    qkCalc: 'Calculator',
     perk1: 'Automated trading 24/7',
     perk2: 'Live performance',
     perk3: 'Your funds stay with your broker',
@@ -939,6 +945,12 @@ export const messages = {
 
     // التقييم والملاحظات
     feedbackBtn: 'رأيك يهمنا',
+    gcTrades: 'الصفقات',
+    qkSupport: 'الدعم',
+    qkNotif: 'الإشعارات',
+    qkBilling: 'المدفوعات',
+    qkFaq: 'المساعدة',
+    qkCalc: 'الحاسبة',
     perk1: 'تداول آلي 24/7',
     perk2: 'أداء لحظي',
     perk3: 'أموالك تبقى عند وسيطك',

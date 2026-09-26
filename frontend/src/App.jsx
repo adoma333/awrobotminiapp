@@ -1,8 +1,10 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import logo from './assets/logo-wordmark.png';
 import { fill, messages } from './i18n';
-import { setupTelegram, tgLang, haptic, askWriteAccess, closeApp, openExternal } from './telegram';
-import { claimGift, completeOnboarding, errorCodeOf, trackCampaign, getAnnouncement, getNotifications, getStatus, markAnnouncementSeen, openStatusStream, register } from './api';
+import { setupTelegram, tgLang, haptic, askWriteAccess, closeApp, openExternal, initData } from './telegram';
+import { PREVIEW, blocksOf, setDesign, useDesign } from './design';
+import { setThemePref } from './theme';
+import { previewApprove, claimGift, completeOnboarding, errorCodeOf, trackCampaign, getAnnouncement, getNotifications, getStatus, markAnnouncementSeen, openStatusStream, register } from './api';
 import { onSupportOpen, openSupport, setSupportPage } from './support';
 import { setTrackingLang, setupPixels, trackEvent, trackPage } from './tracking';
 import Stepper from './components/Stepper';
@@ -34,6 +36,9 @@ const Referral = lazy(() => import('./components/Referral'));
 const TermsRisks = lazy(() => import('./components/TermsRisks'));
 const Notifications = lazy(() => import('./components/Notifications'));
 const SupportCenter = lazy(() => import('./components/SupportCenter'));
+const OutsideTelegram = lazy(() => import('./components/OutsideTelegram'));
+// فُتح الرابط من متصفح عادي (خارج تلجرام): صفحة QR + زر تلجرام بدل التطبيق
+const OUTSIDE_TG = !initData && !import.meta.env.DEV && !PREVIEW;
 
 const ONBOARD_KEY = 'aw_onboarded';
 const EMPTY_MT5 = { login: '', password: '', server: '' };
@@ -75,7 +80,10 @@ export default function App() {
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
 
-  const t = messages[lang];
+  const design = useDesign();
+  const [pvLanding, setPvLanding] = useState(false);
+  // النصوص المخصصة من استوديو التصميم تستبدل الافتراضية (أي نص في التطبيق)
+  const t = useMemo(() => ({ ...messages[lang], ...(design.texts?.[lang] || {}) }), [lang, design]);
   // لا إعادة تحميل تلقائية للتحديث أثناء الربط أو الدفع
   busyRef.current = submitting || view === 'plans' || (phase === 'flow' && step === 'mt5');
   const update = useAppUpdate(busyRef);
@@ -130,7 +138,7 @@ export default function App() {
 
   // نافذة التحديثات: تُطلب مرة واحدة لكل فتح للتطبيق، والخادم يقرر إن كان يحين عرضها
   useEffect(() => {
-    if (annAsked.current || phase === 'loading' || showOnboarding) return;
+    if (annAsked.current || phase === 'loading' || showOnboarding || PREVIEW) return;
     annAsked.current = true;
     getAnnouncement().then((r) => r?.announcement && setAnn(r.announcement)).catch(() => {});
   }, [phase, showOnboarding]);
@@ -204,7 +212,7 @@ export default function App() {
     setPhase('offline');
   }, []);
   useEffect(() => {
-    loadStart();
+    if (!PREVIEW) loadStart(); // المعاينة: الصفحة يحددها استوديو التصميم
   }, [loadStart]);
 
   // ───────── تحديث لحظي عبر SSE (الرصيد، الاشتراك/الدفع، المزامنة) ─────────
@@ -321,17 +329,59 @@ export default function App() {
     setPhase('flow');
   }
 
+  // ───────── معاينة استوديو التصميم داخل لوحة التحكم (iframe): تصميم المسودة + الصفحة المطلوبة ─────────
+  useEffect(() => {
+    if (!PREVIEW) return undefined;
+    const trusted = (o) => o === window.location.origin || import.meta.env.DEV;
+    const onMsg = (e) => {
+      if (!trusted(e.origin) || !e.data || typeof e.data !== 'object') return;
+      const m = e.data;
+      if (m.type === 'aw-design' && m.design) setDesign(m.design, { persist: false });
+      if (m.type === 'aw-theme' && ['dark', 'light'].includes(m.theme)) setThemePref(m.theme);
+      if (m.type === 'aw-lang' && ['ar', 'en'].includes(m.lang)) setLang(m.lang);
+      if (m.type === 'aw-view') {
+        setPvLanding(m.view === 'landing');
+        if (m.view === 'start') {
+          previewApprove(false);
+          setShowOnboarding(false);
+          setStep('lang');
+          setPhase('flow');
+        } else if (m.view !== 'landing') {
+          previewApprove(true);
+          refreshStatus().then(() => {
+            setPhase('dashboard');
+            setView(m.view === 'home' ? 'main' : m.view);
+          }).catch(() => {});
+        }
+      }
+    };
+    window.addEventListener('message', onMsg);
+    window.parent?.postMessage({ type: 'aw-preview-ready' }, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, [refreshStatus]);
+
   const idx = steps.indexOf(step);
   const go = (delta) => setStep(steps[Math.min(steps.length - 1, Math.max(0, idx + delta))]);
   const isHero = phase === 'flow' && step === 'lang';
+
+  if (OUTSIDE_TG || pvLanding) {
+    return (
+      <Suspense fallback={null}>
+        <OutsideTelegram t={t} lang={lang} setLang={setLang} />
+      </Suspense>
+    );
+  }
+  const startBlocks = blocksOf('start');
 
   return (
     <main className="app" dir={t.dir}>
       <NetworkBanner t={t} />
       {isHero ? (
-        <header className="brand is-hero" dir="ltr">
-          <img src={logo} alt="AW" />
-        </header>
+        startBlocks.includes('logo') && (
+          <header className="brand is-hero" dir="ltr">
+            <img src={logo} alt="AW" style={{ height: design.pages?.start?.logo_size || 54 }} />
+          </header>
+        )
       ) : (
         <TopBar t={t} showBell={phase === 'dashboard'} unread={unread} onBell={() => setView('notifications')} />
       )}
@@ -381,7 +431,7 @@ export default function App() {
 
       {phase === 'flow' && !showOnboarding && !showTerms && (
         <>
-          {steps.length > 1 && <Stepper step={idx + 1} total={steps.length} />}
+          {steps.length > 1 && (step !== 'lang' || startBlocks.includes('stepper')) && <Stepper step={idx + 1} total={steps.length} />}
           <div key={step} className="stage">
             {step === 'lang' && <LanguageStep t={t} lang={lang} setLang={setLang} onNext={() => go(1)} />}
             {step === 'profile' && (
@@ -480,14 +530,14 @@ export default function App() {
               onBack={() => setView('main')}
             />
           ) : (
-            <Dashboard t={t} lang={lang} data={info} onRenew={() => setView('plans')} onRewards={() => setView('rewards')} onReferral={() => setView('referral')} />
+            <Dashboard t={t} lang={lang} data={info} onNav={setView} />
           )}
         </div>
       )}
 
       </Suspense>
       </ErrorBoundary>
-      {phase === 'dashboard' && <BottomNav t={t} view={view} onSelect={setView} />}
+      {phase === 'dashboard' && <BottomNav t={t} lang={lang} view={view} onSelect={setView} />}
       <ErrorCenter t={t} />
       {support.open && (
         <ErrorBoundary t={t}>
