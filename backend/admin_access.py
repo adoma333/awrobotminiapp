@@ -34,7 +34,7 @@ AREAS = [
     ("/api/admin/settings", "settings"), ("/api/admin/leaderboard", "settings"), ("/api/admin/servers", "settings"),
     ("/api/admin/staff", "staff"), ("/api/admin/audit", "audit"), ("/api/system/status", "system"),
     ("/api/admin/support", "support"), ("/api/admin/errors", "support"), ("/api/admin/notifications", "notifications"),
-    ("/api/admin/announcements", "notifications"), ("/api/admin/growth", "packages"), ("/api/admin/export", "settings"), ("/api/admin/media", "notifications"), ("/api/admin/ton", "ton"), ("/api/admin/gateway", "ton"),
+    ("/api/admin/announcements", "notifications"), ("/api/admin/growth", "packages"), ("/api/admin/export", "settings"), ("/api/admin/media", "notifications"), ("/api/admin/cards", "notifications"), ("/api/admin/ton", "ton"), ("/api/admin/gateway", "ton"),
 ]
 OPEN_PATHS = {"/api/admin/verify", "/api/admin/logout", "/api/admin/me"}
 

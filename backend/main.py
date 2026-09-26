@@ -43,6 +43,7 @@ import announcements
 import notifications
 import support
 import analytics as tracking
+import cards
 import ton
 import tonadmin
 import growth
@@ -199,11 +200,94 @@ def _tg_call(method: str, params: dict) -> dict:
 
 def tg(method: str, **params) -> dict:
     """استدعاء Telegram Bot API مع إعادة محاولة بتراجع أُسّي على أعطال الشبكة و429/5xx.
-    لا يرفع استثناء؛ يرجع {'ok': False} عند الفشل النهائي."""
+    لا يرفع استثناء؛ يرجع {'ok': False} عند الفشل النهائي.
+    رسائل المستخدمين (sendMessage) تُرسل مع بطاقة GIF متحركة بتصميم AW إن كانت مفعّلة (انظر cards_send)."""
+    if method == "sendMessage":
+        res = cards_send(params)
+        if res is not None:
+            return res
+        params.pop("_card", None)
     try:
         return _tg_call(method, params)
     except (httpx.HTTPError, ValueError, RetryableError) as e:
         return {"ok": False, "description": str(e)}
+
+
+# ───────────────────────── بطاقات GIF لرسائل البوت ─────────────────────────
+CARDS_DOC = ("config", "cards")
+CARD_FILES = "card_files"  # مفتاح البطاقة → file_id في تلجرام (رفع مرة واحدة لكل تصميم)
+_CARDS_CFG = {"v": None, "at": 0.0}
+_ANIM_DROP = ("disable_web_page_preview", "link_preview_options", "entities")
+
+
+def cards_config() -> dict:
+    if _CARDS_CFG["v"] is None or time.time() - _CARDS_CFG["at"] > 30:
+        snap = db.collection(CARDS_DOC[0]).document(CARDS_DOC[1]).get()
+        cfg = {"enabled": True, "kinds": {k: True for k in cards.KINDS}}
+        if snap.exists:
+            d = snap.to_dict() or {}
+            cfg["enabled"] = bool(d.get("enabled", True))
+            cfg["kinds"].update({k: bool(v) for k, v in (d.get("kinds") or {}).items() if k in cards.KINDS})
+        _CARDS_CFG.update(v=cfg, at=time.time())
+    return _CARDS_CFG["v"]
+
+
+def _card_target(chat_id) -> bool:
+    """البطاقات للمستخدمين فقط: لا للأدمن ولا الفريق ولا القنوات/المجموعات ولا حساب تنبيهات الدعم."""
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return False
+    if cid <= 0 or cid in ADMIN_IDS or str(cid) in admin_access.staff_members(db):
+        return False
+    return str(cid) != str(support.get_config(db).get("support_chat_id") or "")
+
+
+def _tg_upload(method: str, params: dict, field: str, path: str, mime: str) -> dict:
+    data = {k: (json.dumps(v) if isinstance(v, (dict, list)) else str(v).lower() if isinstance(v, bool) else str(v)) for k, v in params.items()}
+    try:
+        with open(path, "rb") as f:
+            return raise_for_retryable(http.post(f"{TG_API}/{method}", data=data, files={field: (os.path.basename(path), f, mime)}, timeout=60)).json()
+    except (httpx.HTTPError, OSError, ValueError, RetryableError) as e:
+        return {"ok": False, "description": str(e)}
+
+
+def cards_send(params: dict) -> dict | None:
+    """يرسل الرسالة كبطاقة متحركة + النص تعليقًا. يرجع None إن لم تنطبق (فتُرسل نصًا عاديًا كما هي)."""
+    opt = params.get("_card", None)
+    text = str(params.get("text") or "")
+    if opt is False or not text or len(text) > 1000 or "token=" in text:
+        return None
+    try:
+        cfg = cards_config()
+        if not cfg["enabled"] or not _card_target(params.get("chat_id")):
+            return None
+        opt = opt if isinstance(opt, dict) else {}
+        lang = opt.get("lang") or ("ar" if re.search(r"[\u0600-\u06FF]", text) else "en")
+        spec = cards.spec_for(text, lang, opt.get("kind"), opt.get("title"), opt.get("hl"))
+        if not cfg["kinds"].get(spec["kind"], True):
+            return None
+        key = cards.cache_key(spec)
+        payload = {k: v for k, v in params.items() if k not in ("text", "_card") + _ANIM_DROP}
+        payload["caption"] = text
+        if params.get("entities"):
+            payload["caption_entities"] = params["entities"]
+        ref = db.collection(CARD_FILES).document(key)
+        snap = ref.get()
+        fid = (snap.to_dict() or {}).get("file_id") if snap.exists else None
+        if fid:
+            res = _tg_call("sendAnimation", {**payload, "animation": fid})
+        else:
+            res = _tg_upload("sendAnimation", payload, "animation", cards.get_file(spec), "image/gif")
+            anim = ((res.get("result") or {}).get("animation") or (res.get("result") or {}).get("document") or {}) if res.get("ok") else {}
+            if anim.get("file_id"):
+                ref.set({"file_id": anim["file_id"], "kind": spec["kind"], "lang": spec["lang"], "title": spec["title"], "hl": spec["hl"], "at": time.time()})
+        if res.get("ok"):
+            return res
+        log.warning("card send failed, falling back to text: %s", str(res.get("description"))[:200])
+    except Exception:  # noqa: BLE001 — البطاقة إضافة؛ الرسالة النصية تُرسل دائمًا
+        log.exception("card send")
+    return None
 
 
 # ───────────────────────── التحقق من هوية المستخدم ─────────────────────────
@@ -3285,6 +3369,7 @@ support.ACTIONS["unlink"] = do_unlink
 support.ACTIONS["app_link"] = lambda: f"{WEBAPP_URL}?view=link"  # زر داخل مركز الدعم يفتح شاشة الربط
 support.DB["v"] = db
 support.APP_URL["v"] = WEBAPP_URL
+support.bot_call = lambda _token, method, **p: tg(method, **p)  # تنبيهات الدعم تمر بنفس المسار (بطاقات GIF + إعادة المحاولة)
 SUPPORT_MEDIA = os.getenv("SUPPORT_MEDIA_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "support")
 _SUP_NAME = re.compile(r"^[A-Za-z0-9_-]{22}\.(jpg|png|webp)$")
 
@@ -3403,6 +3488,42 @@ def admin_kb_suggestion_approve(sid: str, body: KbApprove, admin_id: int = Depen
 def admin_kb_suggestion_reject(sid: str, admin_id: int = Depends(get_current_admin)):
     db.collection(support.SUGGESTIONS).document(sid).set({"status": "rejected", "reviewed_by": admin_id, "reviewed_at": time.time()}, merge=True)
     return {"ok": True}
+
+
+# ═══════════════════════════ بطاقات GIF لرسائل البوت (لوحة التحكم) ═══════════════════════════
+@app.get("/api/admin/cards")
+def admin_cards(admin_id: int = Depends(get_current_admin)):
+    cfg = cards_config()
+    return {**cfg, "catalog": [{"kind": k, "label": v[0], "title_ar": v[1], "title_en": v[2]} for k, v in cards.KINDS.items()],
+            "cached": sum(1 for _ in db.collection(CARD_FILES).stream())}
+
+
+@app.put("/api/admin/cards")
+def admin_cards_update(patch: dict, admin_id: int = Depends(get_current_admin)):
+    out = {}
+    if "enabled" in patch:
+        out["enabled"] = bool(patch["enabled"])
+    if isinstance(patch.get("kinds"), dict):
+        out["kinds"] = {k: bool(v) for k, v in patch["kinds"].items() if k in cards.KINDS}
+    db.collection(CARDS_DOC[0]).document(CARDS_DOC[1]).set(out, merge=True)
+    _CARDS_CFG["v"] = None
+    return cards_config()
+
+
+@app.get("/api/admin/cards/preview")
+def admin_cards_preview(text: str = "", kind: str = "", lang: str = "ar", title: str = "", hl: str | None = None,
+                        admin_id: int = Depends(get_current_admin)):
+    spec = cards.spec_for(text[:1000], "en" if lang == "en" else "ar", kind or None, title[:34] or None, hl[:14] if hl is not None else None)
+    return FileResponse(cards.get_file(spec), media_type="image/gif", headers={"Cache-Control": "private, max-age=600", "X-Card-Kind": spec["kind"]})
+
+
+@app.delete("/api/admin/cards/cache")
+def admin_cards_cache_clear(admin_id: int = Depends(get_current_admin)):
+    n = 0
+    for d in db.collection(CARD_FILES).stream():
+        db.collection(CARD_FILES).document(d.id).delete()
+        n += 1
+    return {"ok": True, "cleared": n}
 
 
 # ═══════════════════════════ التحليلات وتتبّع الزوار والأداء ═══════════════════════════

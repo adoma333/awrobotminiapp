@@ -1721,4 +1721,52 @@ admin_access.invalidate(); admin_login(7779)
 ok("صلاحيات: الدعم يقرأ التحليلات ولا يعدّل البكسلات", c.get("/api/admin/analytics").status_code == 200 and c.put("/api/admin/analytics/config", json={"enabled": False}).status_code == 403)
 c.post("/api/admin/logout"); admin_access.invalidate()
 
+# ═════════ 39) بطاقات GIF المتحركة مع رسائل البوت ═════════
+import cards  # noqa: E402
+cards.CACHE_DIR = tempfile.mkdtemp()
+ok("تصنيف الرسالة: هدية/عرض/اشتراك/دفعة/تذكير/دعم/تنبيه", [cards.classify(x) for x in (
+    "🎁 هديتك جاهزة", "خصم 20% لفترة محدودة", "✅ تم تفعيل اشتراكك", "Payment received", "🔔 اشتراكك ينتهي غدًا", "💬 رد جديد على تذكرتك", "❌ فشل الدفع")]
+   == ["gift", "offer", "package", "payment", "reminder", "support", "alert"])
+sp_ = cards.spec_for("🎁 هديتك: خصم 15% صالح 48 ساعة", "ar")
+ok("القيمة البارزة تُستخرج + عنوان ثابت لكل نوع (إعادة استخدام عالية)", sp_["hl"] == "15%" and sp_["title"] == "هدية خاصة لك"
+   and cards.cache_key(sp_) == cards.cache_key(cards.spec_for("🎁 مرحبًا سارة، هديتك: خصم 15%", "ar")))
+gif_ = cards.render(sp_)
+from PIL import Image as _Img  # noqa: E402
+import io as _io  # noqa: E402
+im_ = _Img.open(_io.BytesIO(gif_))
+ok("GIF متحرك بعدة إطارات ومقاس البطاقة", gif_[:6] == b"GIF89a" and im_.n_frames == cards.FRAMES and im_.size == (cards.W, cards.H) and len(gif_) < 2_000_000)
+cards.RAQM, _raqm = False, cards.RAQM
+ok("مسار بديل بلا libraqm (تشكيل + ترتيب يمين-يسار)", cards.render(cards.spec_for("💬 رد جديد", "ar"))[:6] == b"GIF89a" and cards._visual("abc 15%") == "abc 15%")
+cards.RAQM = _raqm
+UP, SENT = [], []
+main._tg_upload = lambda method, params, field, path, mime: (UP.append((method, params, path)) or {"ok": True, "result": {"message_id": 1, "animation": {"file_id": "FID-1"}}})
+_orig_call = main._tg_call
+main._tg_call = lambda method, params: (SENT.append((method, params)) or {"ok": True, "result": {"message_id": 2}})
+DB.store.setdefault("config", {}).pop("cards", None); main._CARDS_CFG["v"] = None
+r_ = main.cards_send({"chat_id": 700, "text": "🎁 هديتك: خصم 15% صالح 48 ساعة", "parse_mode": "HTML", "reply_markup": {"inline_keyboard": []}, "disable_web_page_preview": True})
+ok("أول رسالة: توليد البطاقة ورفعها مع النص تعليقًا", r_["ok"] and UP and UP[0][0] == "sendAnimation" and UP[0][1]["caption"].startswith("🎁") and UP[0][1]["parse_mode"] == "HTML"
+   and "disable_web_page_preview" not in UP[0][1] and UP[0][2].endswith(".gif"))
+main.cards_send({"chat_id": 701, "text": "🎁 مرحبًا علي، هديتك: خصم 15%"})
+ok("الرسائل التالية تعيد استخدام file_id (بلا توليد ولا رفع)", len(UP) == 1 and SENT[-1][0] == "sendAnimation" and SENT[-1][1]["animation"] == "FID-1" and SENT[-1][1]["chat_id"] == 701)
+ok("لا بطاقات للأدمن ولا القنوات ولا رسائل الدخول", main.cards_send({"chat_id": 555, "text": "🎁 x"}) is None and main.cards_send({"chat_id": -100999, "text": "🎁 x"}) is None
+   and main.cards_send({"chat_id": 702, "text": "login token=abc"}) is None)
+ok("نص أطول من حد التعليق يُرسل عاديًا", main.cards_send({"chat_id": 702, "text": "x" * 1200}) is None)
+ok("تعطيل صريح لرسالة معيّنة", main.cards_send({"chat_id": 702, "text": "🎁 x", "_card": False}) is None)
+ok("بطاقة مخصصة لرسالة معيّنة (نوع/عنوان/قيمة)", main.cards_send({"chat_id": 703, "text": "باقة VIP خاصة لك", "_card": {"kind": "package", "title": "باقة VIP خاصة", "hl": "$99"}})["ok"]
+   and len(UP) == 2)
+main._tg_upload = lambda *a: {"ok": False, "description": "boom"}
+ok("فشل الرفع → الرجوع للرسالة النصية", main.cards_send({"chat_id": 704, "text": "⚠️ تنبيه جديد"}) is None)
+main._tg_upload = lambda method, params, field, path, mime: (UP.append((method, params, path)) or {"ok": True, "result": {"message_id": 1, "animation": {"file_id": "FID-2"}}})
+admin_login(555)
+ok("اللوحة: الإعدادات + كتالوج الأنواع", len(c.get("/api/admin/cards").json()["catalog"]) == len(cards.KINDS))
+c.put("/api/admin/cards", json={"kinds": {"gift": False}})
+ok("تعطيل نوع من اللوحة", main.cards_send({"chat_id": 705, "text": "🎁 هدية"}) is None and main.cards_send({"chat_id": 705, "text": "🔔 تذكير"}) is not None)
+pv_ = c.get("/api/admin/cards/preview", params={"text": "Payment received $29", "lang": "en"})
+ok("معاينة البطاقة من اللوحة", pv_.status_code == 200 and pv_.headers["content-type"] == "image/gif" and pv_.headers["x-card-kind"] == "payment")
+ok("مسح ذاكرة البطاقات", c.delete("/api/admin/cards/cache").json()["cleared"] >= 2 and not DB.store.get("card_files"))
+c.put("/api/admin/cards", json={"enabled": False})
+ok("إيقاف البطاقات كليًا", main.cards_send({"chat_id": 705, "text": "🔔 تذكير"}) is None)
+c.post("/api/admin/logout")
+main._tg_call = _orig_call
+
 print("\nALL BACKEND CHECKS PASSED")
