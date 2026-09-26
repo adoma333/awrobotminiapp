@@ -224,4 +224,23 @@ ok("/api/status: مستخدم جديد", st2["status"] == "none")
 ok("/api/packages", [p["id"] for p in cl.get("/api/packages").json()["packages"]] == ["a"])
 ok("آخر ظهور يُكتب في SQLite", S.collection("users").document("42").get().to_dict().get("last_seen", 0) > 0)
 
+# ───── ضبط WAL والفهارس والصيانة ─────
+from google.cloud.firestore_v1.base_query import FieldFilter as _FF  # noqa: E402
+T = localdb.Client(os.path.join(tempfile.mkdtemp(), "tune.db"))
+for i in range(300):
+    T.collection("ev").document(f"e{i}").set({"uid": str(i % 7), "at": float(i), "status": "ok" if i % 2 else "bad", "when": datetime(2025, 1, 1, tzinfo=timezone.utc)})
+con = T._conn()
+ok("WAL + synchronous=NORMAL + mmap/cache مفعّلة", con.execute("PRAGMA journal_mode").fetchone()[0] == "wal" and con.execute("PRAGMA synchronous").fetchone()[0] == 1
+   and con.execute("PRAGMA mmap_size").fetchone()[0] > 0 and con.execute("PRAGMA cache_size").fetchone()[0] == -65536)
+plan = " ".join(str(r) for r in con.execute("EXPLAIN QUERY PLAN SELECT id FROM docs WHERE col=? AND json_extract(data, '$.\"uid\"') = ?", ("ev", "3")))
+ok("استعلام uid يستخدم الفهرس (لا مسح كامل)", "ix_uid" in plan)
+ok("المساواة عبر الفهرس = نفس النتيجة", len(T.collection("ev").where(filter=_FF("uid", "==", "3")).get()) == len([i for i in range(300) if i % 7 == 3]))
+ok("النطاق الرقمي (>=، >) صحيح بعد الدفع لـ SQLite", len(T.collection("ev").where(filter=_FF("at", ">=", 250.0)).get()) == 50
+   and len(T.collection("ev").where(filter=_FF("at", ">", 250)).get()) == 49)
+ok("مسار حقل غير آمن لا يُحقن في SQL", T.collection("ev").where("a') OR 1=1 --", "==", "x").get() == [])
+m_ = T.maintenance(full=True)
+ok("الصيانة: checkpoint + فحص سلامة كامل", m_["integrity"] == "ok" and not m_["checkpoint_busy"])
+h_ = T.health()
+ok("تقرير صحة القاعدة", h_["journal_mode"] == "wal" and h_["docs"] == 300 and h_["size_mb"] > 0)
+
 print(f"\nALL LOCALDB CHECKS PASSED ({N['pass']})")

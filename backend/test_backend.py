@@ -89,6 +89,10 @@ class Query:
                     good &= has and cur == v
                 elif name in ("!=", "NOT_EQUAL"):
                     good &= has and cur != v
+                elif name in (">=", "GREATER_THAN_OR_EQUAL"):
+                    good &= has and cur is not None and cur >= v
+                elif name in ("<", "LESS_THAN"):
+                    good &= has and cur is not None and cur < v
                 elif name == "IS_NOT_NULL":
                     good &= has and cur is not None
                 elif name == "IS_NULL":
@@ -201,6 +205,7 @@ def fake_tg(method, **p):
 
 main.tg = fake_tg
 import support  # noqa: E402
+import analytics  # noqa: E402
 support.bot_call = lambda token, method, **p: fake_tg(method, _token=token, **p) if method != "sendMessage" else (CALLS.append((method, {"_token": token, **p})) or {"ok": True, "result": {"message_id": len(CALLS)}})
 support.ASYNC = False
 os.environ.pop("ANTHROPIC_API_KEY", None)
@@ -1667,5 +1672,53 @@ ok("صلاحيات: الدعم لا يصل لبوابة الدفع", c.get("/api
 c.post("/api/admin/logout"); admin_access.invalidate(); admin_login(555)
 c.put("/api/admin/gateway", json={"enabled": False})
 c.post("/api/admin/logout")
+
+# ═════════ 38) التحليلات وتتبّع الزوار والأداء + البكسلات ═════════
+TR = lambda uid, sid, events, **kw: c.post("/api/track", json={"init_data": init_data(uid) if uid else "", "sid": sid, "events": events, **kw},  # noqa: E731
+                                           headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/604.1"})
+admin_login(555)
+r = TR(301, "sess-aaaa-0001", [{"type": "session_start"}, {"type": "page_view", "page": "home"}, {"type": "event", "name": "checkout_open", "props": {"pkg": "p1", "x" * 40: "y" * 500}},
+                               {"type": "perf", "props": {"ttfb": 120, "fcp": 800, "lcp": 1400, "load": 1600}}, {"type": "page_view", "page": "plans"}],
+       device={"tg_platform": "ios", "tg_version": "8.0", "w": 390, "h": 844, "theme": "dark"}, source={"start_param": "c_summer"}, lang="ar")
+ok("تتبّع: دفعة أحداث تُحفظ", r.status_code == 200 and r.json()["saved"] == 5)
+s1 = DB.store["an_sessions"]["sess-aaaa-0001"]
+ok("الجلسة: الجهاز والمصدر/الحملة والصفحات", s1["device"]["os"] == "iOS" and s1["device"]["platform"] == "ios" and s1["device"]["type"] == "mobile"
+   and s1["source"] == {"src": "campaign", "campaign": "summer", "medium": "", "start_param": "c_summer"} and s1["pages"] == 2 and s1["entry"] == "home" and s1["exit"] == "plans")
+ev_ = [e for e in DB.store["an_events"].values() if e["name"] == "checkout_open"][0]
+ok("الخصائص مقيّدة الطول (لا تضخم)", all(len(k) <= 32 and len(str(v)) <= 120 for k, v in ev_["props"].items()))
+ok("لا IP ولا بيانات دخول محفوظة", "init_data" not in json.dumps(DB.store["an_sessions"]) and "testclient" not in json.dumps(DB.store["an_sessions"]))
+ok("اسم حدث غير صالح يُتجاهل", TR(301, "sess-aaaa-0001", [{"type": "event", "name": "<script>"}]).json()["saved"] == 0)
+ok("معرّف جلسة لمستخدم آخر لا يُختطف", TR(302, "sess-aaaa-0001", [{"type": "page_view", "page": "x"}]).json()["saved"] == 0)
+ok("زائر مجهول (خارج تلجرام) يُتتبّع بمعرّفه", TR(None, "sess-bbbb-0002", [{"type": "page_view", "page": "home"}], vid="anon-visitor-01").json()["saved"] == 1)
+ok("بلا معرّف صالح يُرفض بصمت", TR(None, "x", [{"type": "page_view"}]).json()["saved"] == 0)
+TR(303, "sess-cccc-0003", [{"type": "page_view", "page": "home"}, {"type": "event", "name": "purchase", "props": {"usd": 29}}])
+DB.store["an_visitors"]["u303"]["first_day"] = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 8 * 86400))
+DB.store["an_visitors"]["u303"]["days"] = [DB.store["an_visitors"]["u303"]["first_day"], time.strftime("%Y-%m-%d", time.gmtime())]
+a_ = c.get("/api/admin/analytics", params={"days": 30}).json()
+ok("المتواجدون الآن + DAU/WAU/MAU", a_["live"]["users"] == 3 and a_["active"]["dau"] == 3 and a_["active"]["mau"] == 3)
+ok("المصادر والحملات والأجهزة واللغات", any(x["k"] == "campaign" for x in a_["sources"]) and a_["campaigns"][0]["k"] == "summer"
+   and any(x["k"] == "iOS" for x in a_["os"]) and any(x["k"] == "ar" for x in a_["langs"]))
+ok("أكثر الصفحات + التحويلات", a_["top_pages"][0]["k"] == "home" and a_["conversions"].get("purchase") == 1 and a_["conversions"].get("checkout_open") == 1)
+ok("أداء التحميل من الأجهزة (p50)", a_["perf"]["lcp"]["p50"] == 1400)
+ok("أداء الخادم: زمن كل مسار API", any(x["route"] == "POST /api/track" and x["p50"] is not None for x in a_["api"]))
+ok("الاحتفاظ: أفواج أسبوعية D1/D7", any(row["size"] >= 1 and row["d7"] == 100.0 for row in a_["retention"]))
+ok("سلسلة يومية للزوار والجدد", a_["series"][-1]["visitors"] == 3 and len(a_["series"]) == 30)
+j_ = c.get("/api/admin/analytics/user/301").json()
+ok("رحلة مستخدم كاملة", len(j_["sessions"]) == 1 and [e["type"] for e in j_["events"]].count("page_view") == 2 and j_["visitor"]["sessions"] == 1)
+ok("بكسل بمعرّف غير صالح مرفوض", c.put("/api/admin/analytics/config", json={"meta_pixel": "abc<script>"}).status_code == 422)
+ok("ضبط البكسلات من اللوحة", c.put("/api/admin/analytics/config", json={"meta_pixel": "123456789012345", "ga4_id": "G-ABC123XYZ", "retention_days": 7}).status_code == 200)
+st_ = c.post("/api/status", json={"init_data": init_data(301)}).json()["settings"]
+ok("التطبيق يستلم معرّفات البكسلات", st_["pixels"]["meta_pixel"] == "123456789012345" and st_["pixels"]["ga4_id"] == "G-ABC123XYZ" and st_["analytics"])
+for e in DB.store["an_events"].values():
+    e["at"] -= 8 * 86400
+ok("تنظيف الأحداث بعد مدة الاحتفاظ", analytics.cleanup(DB) >= 1 and not DB.store["an_events"])
+c.put("/api/admin/analytics/config", json={"enabled": False})
+ok("إيقاف التتبّع من اللوحة", TR(301, "sess-aaaa-0009", [{"type": "page_view", "page": "home"}]).json()["saved"] == 0
+   and c.post("/api/status", json={"init_data": init_data(301)}).json()["settings"]["pixels"] == {})
+c.put("/api/admin/analytics/config", json={"enabled": True, "meta_pixel": "", "ga4_id": "", "retention_days": 90})
+c.put("/api/admin/staff", json={"id": "7779", "role": "support", "name": "S2"}); c.post("/api/admin/logout")
+admin_access.invalidate(); admin_login(7779)
+ok("صلاحيات: الدعم يقرأ التحليلات ولا يعدّل البكسلات", c.get("/api/admin/analytics").status_code == 200 and c.put("/api/admin/analytics/config", json={"enabled": False}).status_code == 403)
+c.post("/api/admin/logout"); admin_access.invalidate()
 
 print("\nALL BACKEND CHECKS PASSED")

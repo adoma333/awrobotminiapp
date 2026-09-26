@@ -42,6 +42,7 @@ import admin_access
 import announcements
 import notifications
 import support
+import analytics as tracking
 import ton
 import tonadmin
 import growth
@@ -162,6 +163,7 @@ async def lifespan(_app):
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "monthly"), "cron", day=1, hour=9, id="digest_monthly")
     _scheduler.add_job(retry_inbox, "interval", seconds=60, id="webhook_inbox_retry")
     _scheduler.add_job(cleanup_share_media, "cron", hour=4, id="share_media_cleanup")
+    _scheduler.add_job(lambda: _safe(lambda: tracking.cleanup(db)), "cron", hour=4, minute=20, id="analytics_cleanup")
     _scheduler.add_job(_leaderboard_tick, "interval", seconds=leaderboard.TICK_SEC, id="leaderboard_tick")
     _scheduler.add_job(lambda: reminders.run_renewal_reminders(db, tg, WEBAPP_URL), "cron", hour=10, id="renewal_reminders")
     _scheduler.add_job(scan_ton_payments, "interval", seconds=60, id="ton_scan")  # يتجاهل الدورة إن لم تُضبط محفظة
@@ -492,6 +494,8 @@ def _public_settings() -> dict:
         "pay_stars": bool(s.get("pay_stars_enabled", True)),
         "announcement_ar": s.get("announcement_ar") or "",
         "announcement_en": s.get("announcement_en") or "",
+        "analytics": bool(tracking.get_config(db).get("enabled")),
+        "pixels": tracking.public_pixels(tracking.get_config(db)),
     }
 
 
@@ -1027,6 +1031,7 @@ class AdminGuard:
 
 
 app.add_middleware(AdminGuard)
+app.add_middleware(tracking.ApiTimer)  # زمن استجابة كل مسار API ونسبة أخطائه (لوحة التحليلات ← الأداء)
 
 
 def _account_type(server) -> str:
@@ -2584,6 +2589,8 @@ def system_status(admin_id: int = Depends(get_current_admin)):
     try:
         db.collection("config").document("settings").get()
         services["firestore"] = _timed_status(t0)
+        if hasattr(db, "health"):  # SQLite: الحجم ووضع WAL وحجم ملفه
+            services["firestore"]["db"] = db.health()
     except Exception as e:  # noqa: BLE001
         services["firestore"] = {"status": "down", "error": str(e)[:200]}
 
@@ -3092,6 +3099,9 @@ def backup_local_db(keep: int = 14):
     db.backup(os.path.join(d, f"aw-{time.strftime('%Y%m%d')}.db"))
     for old in sorted(f for f in os.listdir(d) if f.startswith("aw-") and f.endswith(".db"))[:-keep]:
         os.remove(os.path.join(d, old))
+    res = db.maintenance(full=time.gmtime().tm_wday == 6)  # بعد النسخة: دمج WAL وتقليصه + فحص سلامة (كامل أسبوعيًا)
+    if res.get("integrity") != "ok":
+        notify_admins(f"⚠️ فحص سلامة قاعدة البيانات: {res.get('integrity')}\nالنسخ الاحتياطية في data/backups.")
 
 
 def run_gateway_tick():
@@ -3393,6 +3403,64 @@ def admin_kb_suggestion_approve(sid: str, body: KbApprove, admin_id: int = Depen
 def admin_kb_suggestion_reject(sid: str, admin_id: int = Depends(get_current_admin)):
     db.collection(support.SUGGESTIONS).document(sid).set({"status": "rejected", "reviewed_by": admin_id, "reviewed_at": time.time()}, merge=True)
     return {"ok": True}
+
+
+# ═══════════════════════════ التحليلات وتتبّع الزوار والأداء ═══════════════════════════
+_TRACK_RL: dict = {}
+TRACK_RL_MAX = 120  # دفعات لكل IP في الدقيقة
+
+
+class TrackBody(BaseModel):
+    init_data: str = Field(default="", max_length=8000)
+    vid: str = Field(default="", max_length=40)
+    sid: str = Field(max_length=40)
+    lang: str = Field(default="", max_length=5)
+    device: dict = Field(default_factory=dict)
+    source: dict = Field(default_factory=dict)
+    events: list = Field(default_factory=list, max_length=40)
+
+
+@app.post("/api/track")
+def track(body: TrackBody, request: Request):
+    ip = admin_access.client_ip({k.lower(): v for k, v in request.headers.items()}, request.client.host if request.client else "")
+    now = time.time()
+    hits = [t for t in _TRACK_RL.get(ip, []) if now - t < 60]
+    if len(hits) >= TRACK_RL_MAX:
+        raise HTTPException(429, "too_many")
+    _TRACK_RL[ip] = hits + [now]
+    if len(_TRACK_RL) > 5000:
+        _TRACK_RL.clear()
+    uid = None
+    if body.init_data:
+        try:
+            uid = verify_init_data(body.init_data)["id"]
+        except HTTPException:
+            uid = None  # الزائر يُتتبّع بمعرّفه المجهول فقط
+    device = {**body.device, "ua": request.headers.get("user-agent", "")[:300]}
+    return {"ok": True, "saved": tracking.ingest(db, uid, {**body.model_dump(), "device": device})}
+
+
+@app.get("/api/admin/analytics")
+def admin_analytics(days: int = 30, admin_id: int = Depends(get_current_admin)):
+    return tracking.summary(db, days)
+
+
+@app.get("/api/admin/analytics/user/{uid}")
+def admin_analytics_user(uid: int, admin_id: int = Depends(get_current_admin)):
+    return tracking.journey(db, uid)
+
+
+@app.get("/api/admin/analytics/config")
+def admin_analytics_config(admin_id: int = Depends(get_current_admin)):
+    return tracking.get_config(db)
+
+
+@app.put("/api/admin/analytics/config")
+def admin_analytics_config_update(patch: dict, admin_id: int = Depends(get_current_admin)):
+    try:
+        return tracking.save_config(db, patch)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(422, str(e))
 
 
 # ═══════════════════════════ النمو: كوبونات، هدايا، حملات، أتمتة، قمع، إحالة متدرّجة ═══════════════════════════

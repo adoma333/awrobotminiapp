@@ -30,7 +30,7 @@ PERMS = {
 # القسم حسب بادئة المسار
 AREAS = [
     ("/api/admin/users", "users"), ("/api/admin/stats", "users"), ("/api/admin/referrals", "users"),
-    ("/api/admin/ceo", "ceo"), ("/api/admin/rewards", "rewards"), ("/api/admin/packages", "packages"),
+    ("/api/admin/ceo", "ceo"), ("/api/admin/analytics", "ceo"), ("/api/admin/rewards", "rewards"), ("/api/admin/packages", "packages"),
     ("/api/admin/settings", "settings"), ("/api/admin/leaderboard", "settings"), ("/api/admin/servers", "settings"),
     ("/api/admin/staff", "staff"), ("/api/admin/audit", "audit"), ("/api/system/status", "system"),
     ("/api/admin/support", "support"), ("/api/admin/errors", "support"), ("/api/admin/notifications", "notifications"),
