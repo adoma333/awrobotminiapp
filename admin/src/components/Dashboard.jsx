@@ -19,6 +19,8 @@ import Growth from "./Growth";
 import PaymentGateway from "./PaymentGateway";
 import Analytics from "./Analytics";
 import BotCards from "./BotCards";
+import DesignStudio from "./DesignStudio";
+import Guide from "./Guide";
 import "../dashboard.css";
 
 const I = {
@@ -39,6 +41,8 @@ const I = {
   gateway: "M2 7h20v12H2ZM2 11h20M6 15h4",
   analytics: "M3 3v18h18M7 15l4-4 3 3 5-6",
   cards: "M3 5h18v14H3ZM3 9h18M8 14l2 2 4-4",
+  design: "M12 3a9 9 0 1 0 0 18c1.2 0 1.8-.8 1.8-1.7 0-1.3-1-1.6-1-2.8 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4C21 6.3 17 3 12 3ZM7.5 11h.01M10 7h.01M15 7.5h.01",
+  guide: "M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5ZM4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5",
   ton: "M4 7h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a1 1 0 0 1-1-1V6a2 2 0 0 1 2-2h10M16 13.5h.01",
   sun: "M12 3v2M12 19v2M5 5l1.4 1.4M17.6 17.6 19 19M3 12h2M19 12h2M5 19l1.4-1.4M17.6 6.4 19 5M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8",
   moon: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z",
@@ -64,11 +68,11 @@ const GROUPS = [
     { key: "cards", label: "بطاقات رسائل البوت", area: "notifications" },
   ] },
   { title: "النمو", pages: [{ key: "growth", label: "النمو والتسويق", area: "packages" }, { key: "leaderboard", label: "ترتيب الأسبوع", area: "settings" }] },
-  { title: "الإعدادات", pages: [{ key: "control", label: "مركز التحكم", area: "settings" }, { key: "servers", label: "خوادم MT5", area: "settings" }] },
-  { title: "الإدارة", pages: [{ key: "staff", label: "فريق العمل", area: "staff" }, { key: "audit", label: "سجل العمليات", area: "audit" }] },
+  { title: "الإعدادات", pages: [{ key: "design", label: "استوديو التصميم", area: "settings" }, { key: "control", label: "مركز التحكم", area: "settings" }, { key: "servers", label: "خوادم MT5", area: "settings" }] },
+  { title: "الإدارة", pages: [{ key: "staff", label: "فريق العمل", area: "staff" }, { key: "audit", label: "سجل العمليات", area: "audit" }, { key: "guide", label: "كيف تعمل لوحة التحكم" }] },
 ];
 const ICON_OF = { ceo: I.ceo, system: I.system, users: I.users, packages: I.packages, rewards: I.rewards, leaderboard: I.leaderboard, control: I.control,
-  servers: I.servers, staff: I.staff, audit: I.audit, support: I.support, notifications: I.notifications, announcements: I.announcements, ton: I.ton, growth: I.growth, gateway: I.gateway, analytics: I.analytics, cards: I.cards };
+  servers: I.servers, staff: I.staff, audit: I.audit, support: I.support, notifications: I.notifications, announcements: I.announcements, ton: I.ton, growth: I.growth, gateway: I.gateway, analytics: I.analytics, cards: I.cards, design: I.design, guide: I.guide };
 
 function useMobile() {
   const q = "(max-width: 900px)";
@@ -96,7 +100,7 @@ function useTheme() {
 
 export default function Dashboard({ me, onLogout }) {
   const perms = me?.perms || {};
-  const groups = GROUPS.map((g) => ({ ...g, pages: g.pages.filter((p) => perms[p.area]) })).filter((g) => g.pages.length);
+  const groups = GROUPS.map((g) => ({ ...g, pages: g.pages.filter((p) => !p.area || perms[p.area]) })).filter((g) => g.pages.length);
   const first = groups[0]?.pages[0]?.key || "ceo";
   const [page, setPage] = useState(() => {
     const h = window.location.hash.slice(1);
@@ -190,6 +194,8 @@ export default function Dashboard({ me, onLogout }) {
         {page === "gateway" && <PaymentGateway canWrite={canWrite("ton")} />}
         {page === "analytics" && <Analytics canWrite={canWrite("ceo")} />}
         {page === "cards" && <BotCards canWrite={canWrite("notifications")} />}
+        {page === "design" && <DesignStudio canWrite={canWrite("settings")} />}
+        {page === "guide" && <Guide />}
       </main>
     </div>
   );

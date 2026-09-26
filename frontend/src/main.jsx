@@ -8,9 +8,11 @@ import './App.css';
 import App from './App.jsx';
 import { ToastProvider } from './components/Toast';
 import { applyTheme } from './theme';
+import { loadDesign } from './design';
 import { initTracking } from './tracking';
 
 applyTheme(); // قبل أول رسم: لا وميض بين الوضعين
+loadDesign().then(() => applyTheme());
 initTracking();
 
 ReactDOM.createRoot(document.getElementById('root')).render(

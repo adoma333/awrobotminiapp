@@ -1,6 +1,7 @@
 import React from 'react';
 import { haptic } from '../telegram';
 import Icon from './Icon';
+import { useDesign } from '../design';
 
 const ITEMS = [
   { view: 'main', label: 'navHome', icon: 'home' },
@@ -11,11 +12,17 @@ const ITEMS = [
   { view: 'settings', label: 'navSettings', icon: 'settings' },
 ];
 
-// شريط تنقل سفلي ثابت بأيقونات خطية موحّدة.
-export default function BottomNav({ t, view, onSelect }) {
+const LABELS = Object.fromEntries(ITEMS.map((i) => [i.view, i.label]));
+
+// شريط تنقل سفلي ثابت: ترتيب العناصر وإظهارها وأيقوناتها ونصوصها من استوديو التصميم
+export default function BottomNav({ t, lang, view, onSelect }) {
+  const nav = useDesign().pages?.nav;
+  const items = (nav?.items?.length ? nav.items : ITEMS.map((i) => ({ id: i.view, icon: i.icon, visible: true })))
+    .filter((i) => i.visible !== false && LABELS[i.id])
+    .map((i) => ({ view: i.id, icon: i.icon, text: i[`label_${lang}`] || t[LABELS[i.id]] }));
   return (
-    <nav className="bottom-nav" role="navigation">
-      {ITEMS.map((item) => (
+    <nav className={`bottom-nav ${nav?.labels === false ? 'no-labels' : ''}`} role="navigation">
+      {items.map((item) => (
         <button
           key={item.view}
           type="button"
@@ -27,7 +34,7 @@ export default function BottomNav({ t, view, onSelect }) {
           }}
         >
           <Icon name={item.icon} size={21} className="bn-icon" />
-          <span className="bn-label">{t[item.label]}</span>
+          <span className="bn-label">{item.text}</span>
         </button>
       ))}
     </nav>

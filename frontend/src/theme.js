@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { tg } from './telegram';
+import { getDesign } from './design';
 
 // ─────────── الوضع الليلي/النهاري: dark (الافتراضي، هوية AW) · light · auto (يتبع تلجرام/الجهاز) ───────────
 const KEY = 'aw_theme';
@@ -9,10 +10,11 @@ const EVT = 'aw:theme';
 export function getThemePref() {
   try {
     const v = localStorage.getItem(KEY);
-    return v === 'light' || v === 'auto' ? v : 'dark';
+    if (v === 'light' || v === 'auto' || v === 'dark') return v;
   } catch {
-    return 'dark';
+    /* تخزين غير متاح */
   }
+  return getDesign().tokens?.default_theme || 'dark'; // الوضع الافتراضي من استوديو التصميم
 }
 
 export function resolveTheme(pref = getThemePref()) {

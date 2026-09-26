@@ -1,18 +1,21 @@
 import React from 'react';
 import { haptic } from '../telegram';
+import Icon from './Icon';
+import { blocksOf, useDesign } from '../design';
 
 const LANGS = [
   { code: 'ar', name: 'العربية' },
   { code: 'en', name: 'English' },
 ];
 
+// صفحة البداية: ترتيب العناصر وإظهارها ونصوص الميزات وأيقوناتها من استوديو التصميم
 export default function LanguageStep({ t, lang, setLang, onNext }) {
-  return (
-    <section className="step lang-step">
-      <div className="lang-body">
-      <h1>{t.langTitle}</h1>
-
-      <div className="options" role="radiogroup" aria-label={t.langTitle}>
+  const d = useDesign();
+  const perks = (d.pages?.start?.perks || []).map((p, i) => ({ icon: p.icon, text: p[`text_${lang}`] || t[`perk${i + 1}`] || '' })).filter((p) => p.text);
+  const parts = {
+    title: <h1 key="title">{t.langTitle}</h1>,
+    options: (
+      <div key="options" className="options" role="radiogroup" aria-label={t.langTitle}>
         {LANGS.map((l) => (
           <button
             key={l.code}
@@ -32,14 +35,18 @@ export default function LanguageStep({ t, lang, setLang, onNext }) {
           </button>
         ))}
       </div>
-
-      <ul className="lang-perks" aria-label="AW">
-        {[['⚡', t.perk1], ['📊', t.perk2], ['🔒', t.perk3]].map(([ic, label]) => (
-          <li key={label}><span aria-hidden="true">{ic}</span>{label}</li>
+    ),
+    perks: perks.length > 0 && (
+      <ul key="perks" className="lang-perks" aria-label="AW">
+        {perks.map((p) => (
+          <li key={p.text}><span aria-hidden="true"><Icon name={p.icon} size={18} /></span>{p.text}</li>
         ))}
       </ul>
-      </div>
-
+    ),
+  };
+  return (
+    <section className="step lang-step">
+      <div className="lang-body">{blocksOf('start').map((id) => parts[id] || null)}</div>
       <div className="actions">
         <button type="button" className="btn primary" onClick={onNext}>
           <span>{t.next}</span>

@@ -3776,7 +3776,7 @@ def _design_http(fn, *a, **kw):
 @app.get("/api/design")
 def public_design():
     """التصميم المنشور (عام): يطبّقه التطبيق عند الفتح، ويُخزَّن على الجهاز لفتح فوري في المرة التالية."""
-    return JSONResponse(design.published(db), headers={"Cache-Control": "public, max-age=30"})
+    return JSONResponse({**design.published(db), "bot": _bot_username() or ""}, headers={"Cache-Control": "public, max-age=30"})
 
 
 @app.get("/api/admin/design")

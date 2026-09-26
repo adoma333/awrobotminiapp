@@ -1,12 +1,20 @@
 import { initData } from './telegram';
 import { emitAppError } from './errors';
 import { currentPage } from './support';
+import { PREVIEW } from './design';
 
 const API = import.meta.env.VITE_API_URL ?? '';
 
 // خارج تلجرام (معاينة المتصفح أثناء التطوير) نستخدم ردودًا وهمية لعرض كل الشاشات.
-const DEV_MOCK = import.meta.env.DEV && !initData;
+// معاينة استوديو التصميم (?preview=1 داخل لوحة التحكم): بيانات وهمية فقط، لا طلبات حقيقية
+const DEV_MOCK = (import.meta.env.DEV && !initData) || PREVIEW;
 const mock = { subAt: 0, approved: false, unlinked: false, prize: null, revealed: false };
+
+/** معاينة التصميم: حساب مربوط باشتراك فعّال (لعرض كل عناصر الرئيسية). */
+export function previewApprove(on = true) {
+  mock.approved = on;
+  mock.subAt = on ? 1 : 0;
+}
 
 // طلبات الخلفية (الاستعلام الدوري) لا تُظهر رسالة خطأ عامة؛ أما أي طلب يبادر به المستخدم ففشله في الشبكة
 // أو الخادم يظهر في ErrorCenter مع زر "تواصل مع الدعم" (أخطاء المنطق 4xx تعرضها الصفحة نفسها بجانب زر الدعم).
