@@ -53,22 +53,22 @@ const Ico = ({ d }) => (
 
 // الأقسام مجمّعة؛ كل صفحة تظهر فقط لمن يملك صلاحية قسمها
 const GROUPS = [
-  { title: "نظرة عامة", pages: [{ key: "ceo", label: "التقارير والإحصاءات", area: "ceo" }, { key: "analytics", label: "التحليلات وتتبّع الزوار", area: "ceo" }, { key: "system", label: "حالة النظام", area: "system" }] },
+  { title: "نظرة عامة", pages: [{ key: "ceo", label: "التقارير والإحصاءات", area: "ceo" }, { key: "analytics", label: "التحليلات وتتبّع الزوار", area: "analytics" }, { key: "system", label: "حالة النظام", area: "system" }] },
   { title: "المستخدمون", pages: [{ key: "users", label: "المستخدمون", area: "users" }] },
   { title: "المالية", pages: [
     { key: "packages", label: "الباقات", area: "packages" },
     { key: "rewards", label: "المكافآت والكوبونات", area: "rewards" },
-    { key: "gateway", label: "بوابة الدفع", area: "ton" },
+    { key: "gateway", label: "بوابة الدفع", area: "gateway" },
     { key: "ton", label: "محفظة TON", area: "ton" },
   ] },
   { title: "الدعم", pages: [{ key: "support", label: "الدعم الفني الذكي", area: "support" }] },
   { title: "الإشعارات", pages: [
     { key: "notifications", label: "إرسال الإشعارات", area: "notifications" },
-    { key: "announcements", label: "نافذة التحديثات", area: "notifications" },
-    { key: "cards", label: "بطاقات رسائل البوت", area: "notifications" },
+    { key: "announcements", label: "نافذة التحديثات", area: "announcements" },
+    { key: "cards", label: "بطاقات رسائل البوت", area: "cards" },
   ] },
-  { title: "النمو", pages: [{ key: "growth", label: "النمو والتسويق", area: "packages" }, { key: "leaderboard", label: "ترتيب الأسبوع", area: "settings" }] },
-  { title: "الإعدادات", pages: [{ key: "design", label: "استوديو التصميم", area: "settings" }, { key: "control", label: "مركز التحكم", area: "settings" }, { key: "servers", label: "خوادم MT5", area: "settings" }] },
+  { title: "النمو", pages: [{ key: "growth", label: "النمو والتسويق", area: "growth" }, { key: "leaderboard", label: "ترتيب الأسبوع", area: "leaderboard" }] },
+  { title: "الإعدادات", pages: [{ key: "design", label: "استوديو التصميم", area: "design" }, { key: "control", label: "مركز التحكم", area: "control" }, { key: "servers", label: "خوادم MT5", area: "servers" }] },
   { title: "الإدارة", pages: [{ key: "staff", label: "فريق العمل", area: "staff" }, { key: "audit", label: "سجل العمليات", area: "audit" }, { key: "guide", label: "كيف تعمل لوحة التحكم" }] },
 ];
 const ICON_OF = { ceo: I.ceo, system: I.system, users: I.users, packages: I.packages, rewards: I.rewards, leaderboard: I.leaderboard, control: I.control,
@@ -183,18 +183,18 @@ export default function Dashboard({ me, onLogout }) {
         {page === "leaderboard" && <><div className="topbar"><h1>ترتيب الأسبوع</h1></div><LeaderboardSettings /></>}
         {page === "control" && <AppSettings />}
         {page === "servers" && <Servers />}
-        {page === "staff" && <Staff />}
+        {page === "staff" && <Staff me={me} />}
         {page === "audit" && <Audit />}
         {page === "system" && <SystemStatus />}
-        {page === "support" && <Support canWrite={canWrite("support")} />}
+        {page === "support" && <Support canWrite={canWrite("support")} me={me} />}
         {page === "notifications" && <Notifications canWrite={canWrite("notifications")} />}
-        {page === "announcements" && <Announcements canWrite={canWrite("notifications")} />}
+        {page === "announcements" && <Announcements canWrite={canWrite("announcements")} />}
         {page === "ton" && <TonWallet canWrite={canWrite("ton")} />}
-        {page === "growth" && <Growth canWrite={canWrite("packages")} />}
-        {page === "gateway" && <PaymentGateway canWrite={canWrite("ton")} />}
-        {page === "analytics" && <Analytics canWrite={canWrite("ceo")} />}
-        {page === "cards" && <BotCards canWrite={canWrite("notifications")} />}
-        {page === "design" && <DesignStudio canWrite={canWrite("settings")} />}
+        {page === "growth" && <Growth canWrite={canWrite("growth")} />}
+        {page === "gateway" && <PaymentGateway canWrite={canWrite("gateway")} />}
+        {page === "analytics" && <Analytics canWrite={canWrite("analytics")} />}
+        {page === "cards" && <BotCards canWrite={canWrite("cards")} />}
+        {page === "design" && <DesignStudio canWrite={canWrite("design")} />}
         {page === "guide" && <Guide />}
       </main>
     </div>

@@ -188,6 +188,7 @@ async def lifespan(_app):
     _scheduler.add_job(lambda: _safe(run_gateway_tick), "interval", seconds=30, id="gw_tick", max_instances=1, coalesce=True)
     _scheduler.add_job(lambda: _safe(run_gateway_sweeps), "interval", minutes=3, id="gw_sweeps", max_instances=1, coalesce=True)
     _scheduler.add_job(lambda: _safe(run_gateway_gas_check), "interval", minutes=30, id="gw_gas")
+    _scheduler.add_job(lambda: _safe(lambda: support.reassign_stale(db)), "interval", minutes=2, id="support_reassign")
     _scheduler.start()
     yield
     _scheduler.shutdown(wait=False)
@@ -1073,7 +1074,8 @@ def admin_me(admin_id: int = Depends(get_current_admin)):
     role = admin_access.role_of(db, ADMIN_IDS, admin_id)
     member = admin_access.staff_members(db).get(str(admin_id)) or {}
     return {"admin_id": admin_id, "role": role, "role_label": admin_access.ROLE_LABEL.get(role),
-            "name": member.get("name"), "perms": admin_access.PERMS.get(role, {})}
+            "name": member.get("name"), "perms": admin_access.perms_of(db, ADMIN_IDS, admin_id),
+            "scope": admin_access.scope_of(db, ADMIN_IDS, admin_id), "agent": admin_access.clean_agent(member.get("agent"))}
 
 
 # ═══════════════════════════ سجل العمليات + الصلاحيات (كل طلب لمسارات الأدمن) ═══════════════════════════
@@ -1116,7 +1118,8 @@ class AdminGuard:
         admin_id = _session_admin(headers.get("cookie", ""))
         if admin_id and path not in admin_access.OPEN_PATHS:
             role = await run_in_threadpool(admin_access.role_of, db, ADMIN_IDS, admin_id)
-            if role and not admin_access.allowed(role, admin_access.area_for(path), method):
+            perms = await run_in_threadpool(admin_access.perms_of, db, ADMIN_IDS, admin_id) if role else {}
+            if role and not admin_access.allowed(perms, admin_access.area_for(path), method):
                 body = json.dumps({"detail": "forbidden_role"}).encode()
                 await send({"type": "http.response.start", "status": 403,
                             "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
@@ -2395,38 +2398,62 @@ def cleanup_share_media():
 @app.get("/api/admin/staff")
 def admin_staff(admin_id: int = Depends(get_current_admin)):
     members = admin_access.staff_members(db)
-    owners = [{"id": str(i), "role": "owner", "name": None, "fixed": True} for i in sorted(ADMIN_IDS)]
-    rows = [{"id": k, **v, "fixed": False} for k, v in members.items()]
+    owners = [{"id": str(i), "role": "owner", "name": None, "fixed": True, "perms": admin_access.PERMS["owner"]} for i in sorted(ADMIN_IDS)]
+    rows = [{"id": k, **v, "fixed": False, "custom_perms": isinstance(v.get("perms"), dict),
+             "perms": admin_access.perms_of(db, ADMIN_IDS, k), "scope": admin_access.clean_scope(v.get("scope")),
+             "agent": admin_access.clean_agent(v.get("agent"))} for k, v in members.items()]
+    rows.sort(key=lambda r: (r["agent"]["order"], r.get("added_at") or 0))
     return {"members": owners + rows, "roles": {r: admin_access.ROLE_LABEL[r] for r in admin_access.ROLES[1:]},
-            "perms": admin_access.PERMS}
+            "perms": admin_access.PERMS, "areas": admin_access.AREA_LABEL, "skills": admin_access.SKILLS,
+            "can_edit": admin_access.role_of(db, ADMIN_IDS, admin_id) == "owner"}
 
 
 class StaffMember(BaseModel):
     id: str = Field(pattern=r"^\d{3,15}$")
     role: str = Field(pattern="^(manager|support|viewer)$")
     name: str = Field(default="", max_length=40)
+    perms: dict | None = None     # None = صلاحيات الدور الافتراضية
+    scope: dict | None = None
+    agent: dict | None = None
+
+
+def _owner_only(admin_id: int):
+    # حتى لو مُنح عضو صلاحية «الفريق» فهي عرض فقط: الإضافة والتعديل والحذف للمالك وحده (لا تصعيد ذاتي للصلاحيات)
+    if admin_access.role_of(db, ADMIN_IDS, admin_id) != "owner":
+        raise HTTPException(403, "owner_only")
 
 
 @app.put("/api/admin/staff")
 def admin_staff_put(body: StaffMember, admin_id: int = Depends(get_current_admin)):
+    _owner_only(admin_id)
     if int(body.id) in ADMIN_IDS:
         raise HTTPException(400, "owner_is_fixed")
-    db.collection("config").document("staff").set(
-        {"members": {body.id: {"role": body.role, "name": body.name.strip(), "added_at": time.time(), "added_by": admin_id}}},
-        merge=True,
-    )
+    prev = admin_access.staff_members(db).get(body.id) or {}
+    fields = body.model_fields_set
+    row = {"role": body.role, "name": body.name.strip(), "added_at": prev.get("added_at") or time.time(),
+           "added_by": prev.get("added_by") or admin_id, "updated_at": time.time(),
+           "perms": admin_access.clean_perms(body.perms) if "perms" in fields else prev.get("perms"),
+           "scope": admin_access.clean_scope(body.scope if "scope" in fields else prev.get("scope")),
+           "agent": admin_access.clean_agent(body.agent if "agent" in fields else prev.get("agent"))}
+    ref = db.collection("config").document("staff")
+    snap = ref.get()
+    members = dict(((snap.to_dict() or {}).get("members") or {}) if snap.exists else {})
+    members[body.id] = row
+    ref.set({"members": members})
     admin_access.invalidate()
     return {"ok": True}
 
 
 @app.delete("/api/admin/staff/{member_id}")
 def admin_staff_delete(member_id: str, admin_id: int = Depends(get_current_admin)):
+    _owner_only(admin_id)
     ref = db.collection("config").document("staff")
     snap = ref.get()
     members = dict(((snap.to_dict() or {}).get("members") or {}) if snap.exists else {})
     members.pop(member_id, None)
     ref.set({"members": members})
     admin_access.invalidate()
+    support.unassign_agent(db, member_id)  # تذاكره المفتوحة تعود للتوزيع على بقية الفريق
     return {"ok": True}
 
 
@@ -3236,10 +3263,56 @@ def admin_support_config_update(patch: dict, admin_id: int = Depends(get_current
     return support.public_config(cfg)
 
 
+def _mask_id(v) -> str:
+    v = str(v or "")
+    return ("•••" + v[-3:]) if len(v) > 3 else "•••"
+
+
+def _scoped_ticket(t: dict, scope: dict) -> dict:
+    """ما يراه العضو من التذكرة حسب خيارات الرؤية الخاصة به."""
+    if scope.get("hide_contacts"):
+        t = {**t, "uid": _mask_id(t.get("uid"))}
+    return t
+
+
+def _ticket_guard(tid: str, admin_id: int) -> dict:
+    t = support.get_ticket(db, tid)
+    if not t:
+        raise HTTPException(404, "not_found")
+    scope = admin_access.scope_of(db, ADMIN_IDS, admin_id)
+    if scope["tickets"] == "assigned" and str(t.get("assigned_to") or "") != str(admin_id):
+        raise HTTPException(403, "not_your_ticket")  # العضو المقيّد يرى تذاكره المسندة فقط
+    return t
+
+
+def _support_agents() -> list:
+    return [{"id": k, "name": v.get("name") or k, **admin_access.clean_agent(v.get("agent"))}
+            for k, v in admin_access.staff_members(db).items() if (v.get("agent") or {}).get("enabled")]
+
+
+def _support_service_status() -> dict:
+    s_ = billing.get_settings(db)
+    hb = heartbeat.snapshot() or {}
+    return {"maintenance": bool(s_.get("maintenance")), "trading_paused": bool(s_.get("kill_switch")),
+            "mt5_robot": hb.get("status"), "payments": {"ton": s_.get("pay_ton_enabled", True), "crypto": s_.get("pay_crypto_enabled", True),
+                                                         "stars": s_.get("pay_stars_enabled", True)}}
+
+
+support.AGENTS["fn"] = _support_agents
+support.SERVICE["fn"] = _support_service_status
+
+
 @app.get("/api/admin/support/tickets")
-def admin_support_tickets(status: str | None = None, priority: str | None = None, q: str | None = None,
-                          admin_id: int = Depends(get_current_admin)):
+def admin_support_tickets(status: str | None = None, priority: str | None = None, q: str | None = None, mine: bool = False,
+                          assigned: str | None = None, admin_id: int = Depends(get_current_admin)):
+    scope = admin_access.scope_of(db, ADMIN_IDS, admin_id)
     rows = [{"id": d.id, **(d.to_dict() or {})} for d in db.collection(support.TICKETS).order_by("updated_at", direction="DESCENDING").limit(500).stream()]
+    if mine or scope["tickets"] == "assigned":
+        rows = [r for r in rows if str(r.get("assigned_to") or "") == str(admin_id)]
+    elif assigned == "none":
+        rows = [r for r in rows if not r.get("assigned_to")]
+    elif assigned:
+        rows = [r for r in rows if str(r.get("assigned_to") or "") == assigned]
     if status == "active":
         rows = [r for r in rows if r.get("status") in ("open", "in_progress", "escalated")]
     elif status:
@@ -3251,7 +3324,13 @@ def admin_support_tickets(status: str | None = None, priority: str | None = None
         rows = [r for r in rows if ql in f"{r['id']} {r.get('uid')} {r.get('subject')}".lower()]
     for r in rows:
         r.pop("history", None)
-    return {"rows": rows, "stats": support_stats()}
+        r.pop("assign_log", None)
+    rows = [_scoped_ticket(r, scope) for r in rows]
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    mine_open = sum(1 for d in db.collection(support.TICKETS).where(filter=FieldFilter("assigned_to", "==", str(admin_id))).stream()
+                    if (d.to_dict() or {}).get("status") in support.ACTIVE)
+    return {"rows": rows, "stats": {**support_stats(), "mine_open": mine_open}, "scope": scope}
 
 
 def support_stats() -> dict:
@@ -3266,11 +3345,17 @@ def support_stats() -> dict:
 
 @app.get("/api/admin/support/tickets/{tid}")
 def admin_support_ticket(tid: str, admin_id: int = Depends(get_current_admin)):
-    t = support.get_ticket(db, tid)
-    if not t:
-        raise HTTPException(404, "not_found")
-    return {"ticket": t, "messages": support.messages_of(db, tid), "context": support.user_context(db, t["uid"]),
-            "error": support.get_error(db, t.get("error_ref")) if t.get("error_ref") else None}
+    t = _ticket_guard(tid, admin_id)
+    scope = admin_access.scope_of(db, ADMIN_IDS, admin_id)
+    ctx = support.user_context(db, t["uid"])
+    if scope["hide_money"]:  # إخفاء الأرصدة والمبالغ عن هذا العضو
+        if ctx.get("live"):
+            ctx["live"] = {**ctx["live"], "balance": "•••", "equity": "•••"}
+        ctx["recent_payments"] = [{**p_, "usd": "•••"} for p_ in ctx.get("recent_payments") or []]
+    return {"ticket": _scoped_ticket(t, scope), "messages": support.messages_of(db, tid), "context": ctx,
+            "error": support.get_error(db, t.get("error_ref")) if t.get("error_ref") else None, "scope": scope,
+            "agents": [{"id": a["id"], "name": a["name"], "available": a["available"]} for a in support.agents()],
+            "categories": support.CATEGORY_LABEL}
 
 
 class TicketReply(BaseModel):
@@ -3279,7 +3364,12 @@ class TicketReply(BaseModel):
 
 @app.post("/api/admin/support/tickets/{tid}/reply")
 def admin_support_reply(tid: str, body: TicketReply, admin_id: int = Depends(get_current_admin)):
-    t = support.agent_reply(db, support.get_config(db), tid, body.text.strip(), by=f"admin:{admin_id}")
+    cur = _ticket_guard(tid, admin_id)
+    member = admin_access.staff_members(db).get(str(admin_id)) or {}
+    name = member.get("name") or ("المالك" if admin_id in ADMIN_IDS else str(admin_id))
+    if not cur.get("assigned_to"):  # من يرد أولًا يستلم التذكرة (لا يتدخل المساعد بعدها)
+        support.assign(db, support.get_config(db), cur, agent={"id": str(admin_id), "name": name}, by="claim", notify=False)
+    t = support.agent_reply(db, support.get_config(db), tid, body.text.strip(), by=f"admin:{admin_id}", by_name=name)
     if not t:
         raise HTTPException(404, "not_found")
     return {"ok": True, "ticket": t}
@@ -3293,11 +3383,86 @@ class TicketStatus(BaseModel):
 
 @app.post("/api/admin/support/tickets/{tid}/status")
 def admin_support_status(tid: str, body: TicketStatus, admin_id: int = Depends(get_current_admin)):
-    if not support.get_ticket(db, tid):
-        raise HTTPException(404, "not_found")
+    _ticket_guard(tid, admin_id)
     if body.priority:
         db.collection(support.TICKETS).document(tid).set({"priority": body.priority}, merge=True)
     return {"ticket": support.set_status(db, support.get_config(db), tid, body.status, by=f"admin:{admin_id}", note=body.note)}
+
+
+class TicketAssign(BaseModel):
+    agent_id: str = Field(default="", pattern=r"^\d{0,15}$")  # فارغ = التالي بالتوزيع العادل
+
+
+@app.post("/api/admin/support/tickets/{tid}/assign")
+def admin_support_assign(tid: str, body: TicketAssign, admin_id: int = Depends(get_current_admin)):
+    t = _ticket_guard(tid, admin_id)
+    if admin_access.scope_of(db, ADMIN_IDS, admin_id)["tickets"] == "assigned" and body.agent_id != str(admin_id):
+        raise HTTPException(403, "scope_assigned_only")  # العضو المقيّد لا يعيد توزيع التذاكر
+    cfg = support.get_config(db)
+    if body.agent_id:
+        a = next((x for x in support.agents() if str(x["id"]) == body.agent_id), None)
+        if not a and int(body.agent_id) not in ADMIN_IDS and body.agent_id not in admin_access.staff_members(db):
+            raise HTTPException(404, "agent_not_found")
+        a = a or {"id": body.agent_id, "name": (admin_access.staff_members(db).get(body.agent_id) or {}).get("name") or body.agent_id}
+        support.assign(db, cfg, t, agent=a, by=f"admin:{admin_id}")
+    elif not support.assign(db, {**cfg, "assign_mode": cfg.get("assign_mode") if cfg.get("assign_mode") != "off" else "round_robin"},
+                            t, by=f"admin:{admin_id}", exclude=(t.get("assigned_to"),) if t.get("assigned_to") else ()):
+        raise HTTPException(409, "no_available_agent")
+    return {"ticket": support.get_ticket(db, tid)}
+
+
+@app.post("/api/admin/support/tickets/{tid}/draft")
+def admin_support_draft(tid: str, admin_id: int = Depends(get_current_admin)):
+    _ticket_guard(tid, admin_id)
+    try:
+        return support.ai_draft(db, support.get_config(db), tid)
+    except support.AiError as e:
+        raise HTTPException(503, str(e)[:120])
+
+
+@app.get("/api/admin/support/agents")
+def admin_support_agents(admin_id: int = Depends(get_current_admin)):
+    """لوحة الفريق: الحِمل الحالي، الإسنادات، المحلولة، ومتوسط التقييم لكل موظف."""
+    loads = support.agent_loads(db)
+    rr = support._rr(db)
+    stats: dict = {}
+    for d in db.collection(support.TICKETS).order_by("updated_at", direction="DESCENDING").limit(2000).stream():
+        r = d.to_dict() or {}
+        a = str(r.get("assigned_to") or "")
+        if not a:
+            continue
+        st = stats.setdefault(a, {"resolved": 0, "scores": []})
+        if r.get("status") in ("resolved", "closed"):
+            st["resolved"] += 1
+        if isinstance(r.get("csat"), dict) and r["csat"].get("score"):
+            st["scores"].append(r["csat"]["score"])
+    rows = []
+    for a in support.agents():
+        st = stats.get(str(a["id"]), {"resolved": 0, "scores": []})
+        rows.append({**a, "active": loads.get(str(a["id"]), 0), "assigned_total": int((rr.get("counts") or {}).get(str(a["id"])) or 0),
+                     "resolved": st["resolved"], "csat_avg": round(sum(st["scores"]) / len(st["scores"]), 2) if st["scores"] else None})
+    cfg = support.get_config(db)
+    return {"rows": rows, "next": (support.pick_agent(db, cfg, {"lang": "ar"}) or {}).get("id"), "mode": cfg.get("assign_mode"),
+            "skills": admin_access.SKILLS}
+
+
+class Availability(BaseModel):
+    available: bool
+
+
+@app.post("/api/admin/support/agents/me")
+def admin_support_my_availability(body: Availability, admin_id: int = Depends(get_current_admin)):
+    """الموظف يبدّل حالته (متاح/غير متاح لاستلام تذاكر جديدة) بنفسه."""
+    ref = db.collection("config").document("staff")
+    snap = ref.get()
+    members = dict(((snap.to_dict() or {}).get("members") or {}) if snap.exists else {})
+    m = members.get(str(admin_id))
+    if not m:
+        raise HTTPException(404, "not_a_member")
+    m["agent"] = {**admin_access.clean_agent(m.get("agent")), "available": body.available}
+    ref.set({"members": members})
+    admin_access.invalidate()
+    return {"ok": True, "agent": m["agent"]}
 
 
 class KbEntry(BaseModel):

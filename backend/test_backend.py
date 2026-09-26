@@ -1936,4 +1936,84 @@ ok("حالة النظام المفصّلة: كل الفروع", all(k in ss for 
    and ss["api"]["details"]["uptime_min"] >= 0 and "jobs" in ss["scheduler"])
 c.post("/api/admin/logout")
 
+# ═════════ 42) فريق الدعم: توزيع عادل، صلاحيات مفصّلة لكل عضو، أوضاع التحويل، مسودات الذكاء ═════════
+reset(); admin_access.invalidate(); support.invalidate(); support._RL.clear()
+admin_login(555)
+AG = lambda id_, order, **kw: c.put("/api/admin/staff", json={"id": id_, "role": "support", "name": f"A{id_}", "agent": {"enabled": True, "order": order, **kw}})  # noqa: E731
+for i_, (id_, o_) in enumerate((("7801", 1), ("7802", 2), ("7803", 3))):
+    AG(id_, o_, available=(id_ != "7803"))
+ok("عضو بصلاحيات مخصّصة + رؤية مقيّدة", c.put("/api/admin/staff", json={
+    "id": "7804", "role": "support", "name": "Dina", "perms": {"support": "rw", "staff": "rw", "bogus": "rw"},
+    "scope": {"tickets": "assigned", "hide_money": True, "hide_contacts": True}, "agent": {"enabled": True, "order": 4, "langs": ["ar"]}}).status_code == 200)
+st_ = {m["id"]: m for m in c.get("/api/admin/staff").json()["members"]}
+ok("صلاحية الفريق لا تُمنح للتعديل أبدًا + الأقسام المجهولة تُحذف", st_["7804"]["perms"] == {"support": "rw", "staff": "r"} and st_["7804"]["custom_perms"])
+DB.store["config"]["support"] = {"handoff_mode": "instant", "assign_mode": "round_robin", "assign_by_skill": False, "notify_agent": True}; support.invalidate()
+for u_ in (901, 902, 903, 904):
+    add_user(u_, status="approved", live={"balance": 5000, "currency": "USD"})
+CALLS.clear()
+got = []
+for u_ in (901, 902, 903, 904):
+    SS(u_, "مشكلة في الاشتراك")
+    got.append(support.open_ticket_for(DB, u_)["assigned_to"])
+ok("وضع التحويل الفوري: كل تذكرة تذهب لموظف دون المساعد", all(support.open_ticket_for(DB, u_)["status"] == "escalated" for u_ in (901, 902, 903, 904)))
+ok("توزيع بالترتيب وعادل ويتخطى غير المتاح", got == ["7801", "7802", "7804", "7801"])
+ok("تنبيه فوري للموظف المسند إليه في البوت", any(str(p_.get("chat_id")) == "7802" and "أُسندت إليك" in p_.get("text", "") for m_, p_ in CALLS if m_ == "sendMessage"))
+DB.store["config"]["support"]["assign_mode"] = "least_load"; support.invalidate()
+ok("الأقل ضغطًا يختار من لديه أقل تذاكر مفتوحة", support.pick_agent(DB, support.get_config(DB), {"lang": "ar"})["id"] in ("7802", "7804"))
+ok("مطابقة اللغة: موظف العربية فقط لا يستلم تذكرة إنجليزية", support.pick_agent(DB, {**support.get_config(DB), "assign_mode": "round_robin"}, {"lang": "en"})["id"] in ("7801", "7802"))
+t903 = support.open_ticket_for(DB, 903)
+c.post("/api/admin/logout"); admin_access.invalidate(); admin_login(7804)
+me_ = c.get("/api/admin/me").json()
+ok("العضو يرى صلاحياته المخصّصة فقط", me_["perms"] == {"support": "rw", "staff": "r"} and me_["scope"]["tickets"] == "assigned")
+lst_ = c.get("/api/admin/support/tickets").json()
+ok("يرى التذاكر المسندة إليه فقط + إخفاء رقم المستخدم", [r_["id"] for r_ in lst_["rows"]] == [t903["id"]] and lst_["rows"][0]["uid"].startswith("•••"))
+ok("لا يفتح تذكرة زميله", c.get(f"/api/admin/support/tickets/{support.open_ticket_for(DB, 901)['id']}").status_code == 403)
+det_ = c.get(f"/api/admin/support/tickets/{t903['id']}").json()
+ok("إخفاء الأرصدة والمبالغ عنه", det_["context"]["live"]["balance"] == "•••")
+ok("قسم غير مسموح مخفي تمامًا (المستخدمون)", c.get("/api/admin/users").status_code == 403)
+ok("لا يعدّل الفريق حتى لو رأى صفحته", c.put("/api/admin/staff", json={"id": "7804", "role": "manager", "perms": {"staff": "rw"}}).status_code == 403)
+ok("العضو المقيّد لا يعيد توزيع التذاكر", c.post(f"/api/admin/support/tickets/{t903['id']}/assign", json={"agent_id": "7801"}).status_code == 403)
+ok("الموظف يبدّل توفّره بنفسه", c.post("/api/admin/support/agents/me", json={"available": False}).json()["agent"]["available"] is False)
+ok("الرد من الموظف يصل للمستخدم", c.post(f"/api/admin/support/tickets/{t903['id']}/reply", json={"text": "مرحبًا، أتابع طلبك"}).status_code == 200
+   and support.get_ticket(DB, t903["id"])["status"] == "in_progress")
+c.post("/api/admin/logout"); admin_access.invalidate(); admin_login(555)
+ok("غير المتاح لا يستلم جديدًا", "7804" not in {support.pick_agent(DB, {**support.get_config(DB), "assign_mode": "round_robin"}, {"lang": "ar"}, exclude=(x_,))["id"] for x_ in ("7801", "7802")})
+SCRIPT.clear(); SCRIPT_SEEN.clear(); support.llm = fake_llm; support.ai_available = lambda *a: True
+SS(903, "هل من جديد؟")
+ok("بعد تدخل موظف: المساعد لا يرد، والموظف يُنبَّه فقط", not SCRIPT_SEEN and support.get_ticket(DB, t903["id"])["assigned_to"] == "7804")
+ok("إعادة إسناد يدوية لموظف محدد", c.post(f"/api/admin/support/tickets/{t903['id']}/assign", json={"agent_id": "7802"}).json()["ticket"]["assigned_to"] == "7802")
+ag_ = {r_["id"]: r_ for r_ in c.get("/api/admin/support/agents").json()["rows"]}
+ok("لوحة الفريق: الحِمل وعدد الإسنادات لكل موظف", ag_["7802"]["active"] >= 2 and ag_["7801"]["assigned_total"] == 2)
+t901 = support.open_ticket_for(DB, 901)
+DB.store["support_tickets"][t901["id"]]["assigned_at"] = time.time() - 3600
+DB.store["config"]["support"].update(reassign_after_min=10, assign_mode="round_robin"); support.invalidate()
+ok("إعادة التوزيع التلقائية إن لم يرد الموظف خلال المهلة", support.reassign_stale(DB) >= 1 and support.get_ticket(DB, t901["id"])["assigned_to"] != "7801")
+support.llm_text = lambda cfg, system, prompt, max_tokens=400: "مرحبًا، راجعت دفعتك وهي مؤكدة.\nملاحظة للموظف: تحقق من الفاتورة قبل الإرسال"
+dr_ = c.post(f"/api/admin/support/tickets/{t901['id']}/draft").json()
+ok("مسودة رد بالذكاء للموظف + ملاحظة داخلية", dr_["draft"].startswith("مرحبًا") and "الفاتورة" in dr_["note"])
+c.delete("/api/admin/staff/7802")
+ok("إزالة موظف تعيد تذاكره للتوزيع", all(support.get_ticket(DB, t_["id"])["assigned_to"] != "7802" for t_ in (t903, t901)))
+
+# وضع «لا تحويل أبدًا»: المساعد يستمر، والتحويل بزر المستخدم فقط
+DB.store["config"]["support"].update(handoff_mode="never", escalation_threshold=1); support.invalidate(); support._RL.clear()
+ok("أداة التحويل لا تُعرض للمساعد في وضع never", "escalate_to_human" not in [t_["name"] for t_ in support.tools_for(support.get_config(DB))])
+add_user(905, status="approved")
+SCRIPT[:] = [G(txt("جرّب إعادة فتح التطبيق")), G(tool("escalate_to_human", {"summary": "x", "category": "general"})), G(txt("لنجرّب حلًا آخر")), G(txt("حل ثالث"))]
+for m_ in ("لا يعمل", "ما زال لا يعمل", "لم ينجح"):
+    SS(905, m_)
+t905 = support.open_ticket_for(DB, 905)
+ok("لا تحويل آلي أبدًا مهما تكررت المحاولات", t905["status"] != "escalated" and int(t905["ai_attempts"]) == 3)
+ok("تعليمات الوضع تصل للمساعد", "Automatic transfer to humans is DISABLED" in support.MODE_NOTE["never"])
+support.llm = lambda *a: (_ for _ in ()).throw(RuntimeError("provider down"))
+SS(905, "مرحبا؟")
+ok("تعطّل المساعد في وضع never: لا تحويل، ويُعرض زر الموظف", support.get_ticket(DB, t905["id"])["status"] != "escalated")
+ok("زر «موظف» يبقى متاحًا ويُسند التذكرة", ACT(905, "human", t905["id"]).status_code == 200 and support.get_ticket(DB, t905["id"])["status"] == "escalated"
+   and support.get_ticket(DB, t905["id"])["assigned_to"])
+ok("وضع تحويل غير صالح يُرفض", c.put("/api/admin/support/config", json={"handoff_mode": "sometimes"}).status_code == 422)
+cfg_r = c.put("/api/admin/support/config", json={"handoff_mode": "auto", "assign_mode": "least_load", "reassign_after_min": 99999}).json()
+ok("حفظ أوضاع التحويل والتوزيع مع حدود آمنة", cfg_r["handoff_mode"] == "auto" and cfg_r["assign_mode"] == "least_load" and cfg_r["reassign_after_min"] == 1440)
+ok("تصنيف تلقائي للتذكرة (للتخصص)", support.guess_category("دفعت عبر TON ولم يتفعل") == "payments" and support.guess_category("مشكلة في ربط حساب MT5") == "account")
+support.llm = REAL_LLM; support.ai_available = lambda *a: False
+c.post("/api/admin/logout")
+
 print("\nALL BACKEND CHECKS PASSED")
