@@ -181,7 +181,6 @@ class Client:
             c.execute("PRAGMA temp_store=MEMORY")
             c.execute("PRAGMA wal_autocheckpoint=1000")
             c.execute("PRAGMA journal_size_limit=67108864")  # ملف WAL لا يتضخم فوق 64MB بعد كل checkpoint
-            c.execute("PRAGMA optimize=0x10002")       # إحصاءات المخطِّط للفهارس (سريع عند كل اتصال)
             self._local.c = c
         return c
 
@@ -208,7 +207,10 @@ class Client:
         """صيانة دورية: دمج WAL في الملف الرئيسي وتقليصه + تحديث إحصاءات الفهارس (+ فحص سلامة كامل عند full)."""
         c = self._conn()
         busy, wal_pages, moved = c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-        c.execute("PRAGMA optimize")
+        try:
+            c.execute("PRAGMA optimize")  # قد يصطدم بكاتب آخر (SQLITE_BUSY_SNAPSHOT) — إحصاءات فقط، يُعاد غدًا
+        except sqlite3.OperationalError:
+            pass
         check = c.execute("PRAGMA integrity_check" if full else "PRAGMA quick_check").fetchone()[0]
         return {"checkpoint_busy": bool(busy), "wal_pages": wal_pages, "moved": moved, "integrity": check}
 
