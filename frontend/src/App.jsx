@@ -490,6 +490,7 @@ export default function App() {
       {phase === 'dashboard' && <BottomNav t={t} view={view} onSelect={setView} />}
       <ErrorCenter t={t} />
       {support.open && (
+        <ErrorBoundary t={t}>
         <Suspense fallback={null}>
           <SupportCenter
             t={t}
@@ -501,6 +502,7 @@ export default function App() {
             onLinkAccount={() => afterUnlink().catch(() => {})}
           />
         </Suspense>
+        </ErrorBoundary>
       )}
       {ann && <WhatsNew t={t} lang={lang} ann={ann} onClose={closeAnnouncement} />}
     </main>

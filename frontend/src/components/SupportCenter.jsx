@@ -99,7 +99,8 @@ export default function SupportCenter({ t, lang, open, errorRef, draft, onClose,
 
   const load = useCallback(async () => {
     try {
-      const d = await getSupportThread(lang);
+      const r = await getSupportThread(lang);
+      const d = { ticket: r?.ticket || null, messages: Array.isArray(r?.messages) ? r.messages : [], config: r?.config || null };
       setThread(d);
       setLoaded(true);
       const ids = new Set(d.messages.map((m) => m.id));
