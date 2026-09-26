@@ -87,6 +87,10 @@ export const api = {
   addKb: (q, a) => request("/support/kb", { method: "POST", body: JSON.stringify({ q, a }) }),
   deleteKb: (id) => request(`/support/kb/${encodeURIComponent(id)}`, { method: "DELETE" }),
   fixes: () => request("/support/fixes"),
+  assignTicket: (id, agentId = "") => request(`/support/tickets/${encodeURIComponent(id)}/assign`, { method: "POST", body: JSON.stringify({ agent_id: agentId }) }),
+  draftTicket: (id) => request(`/support/tickets/${encodeURIComponent(id)}/draft`, { method: "POST" }),
+  supportAgents: () => request("/support/agents"),
+  setMyAvailability: (available) => request("/support/agents/me", { method: "POST", body: JSON.stringify({ available }) }),
   errors: (params = {}) => request(`/errors?${new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString()}`),
   // الإشعارات ونافذة التحديثات
   notifPreview: (target) => request("/notifications/preview", { method: "POST", body: JSON.stringify(target) }),

@@ -9,17 +9,38 @@ const ROLE = { user: "المستخدم", ai: "المساعد الذكي", agent:
 const FIX = { resync_account: "إعادة مزامنة الحساب", recheck_payment: "إعادة فحص الدفع", reset_stuck_link: "فك تعليق الربط", set_language: "تغيير اللغة" };
 const KIND = { network: "اتصال", server: "خادم", operation: "عملية", ui: "واجهة" };
 const when = (ts) => (ts ? new Date(ts * 1000).toLocaleString("ar-u-nu-latn", { dateStyle: "short", timeStyle: "short" }) : "—");
+const CATEGORY = { payments: "مدفوعات", technical: "تقنية", account: "ربط حساب", general: "عام" };
+const HANDOFF = [
+  ["auto", "تلقائي ذكي", "المساعد يحاول الحل بنفسه، ويحوّل لموظف فقط عند الحاجة الفعلية أو بعد عدد المحاولات المحدد."],
+  ["instant", "تحويل فوري", "كل رسالة جديدة تذهب لموظف مباشرة دون رد المساعد (مناسب لأوقات الذروة أو الحالات الحساسة)."],
+  ["never", "لا تحويل أبدًا", "المساعد يستمر في الحل ولا يحوّل آليًا؛ المستخدم وحده يطلب موظفًا بزر «التحدث مع موظف»."],
+];
+const ASSIGN = [["round_robin", "بالترتيب (دوري)", "الأول ثم الثاني ثم الثالث… بالتساوي، مع تخطي غير المتاح ومن بلغ حده."], ["least_load", "الأقل ضغطًا", "التذكرة لمن لديه أقل عدد تذاكر مفتوحة الآن."], ["off", "بلا توزيع", "التذاكر تبقى للجميع ومن يرد أولًا يستلمها."]];
 const TABS = [["tickets", "التذاكر"], ["settings", "مركز الدعم والإعدادات"], ["learning", "التعلّم الذاتي"], ["feedback", "التقييمات"], ["prompt", "System Prompt"], ["kb", "قاعدة المعرفة"], ["fixes", "الإصلاحات الآلية"], ["errors", "سجل الأخطاء"]];
 
-export default function Support({ canWrite }) {
+export default function Support({ canWrite, me }) {
   const [tab, setTab] = useState("tickets");
+  const [avail, setAvail] = useState(me?.agent?.enabled ? me.agent.available : null);
+  const restricted = me?.scope?.tickets === "assigned";
+  const shown = restricted ? TABS.filter(([k]) => ["tickets", "kb"].includes(k)) : TABS;
+  async function toggleAvail() {
+    const r = await api.setMyAvailability(!avail).catch(() => null);
+    if (r) setAvail(r.agent.available);
+  }
   return (
     <>
-      <div className="topbar"><h1>الدعم الفني الذكي</h1></div>
-      <div className="tabs page-tabs">
-        {TABS.map(([k, l]) => <button key={k} className={`tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>{l}</button>)}
+      <div className="topbar">
+        <h1>الدعم الفني الذكي</h1>
+        {avail !== null && (
+          <button className={`avail-btn ${avail ? "on" : ""}`} onClick={toggleAvail} aria-pressed={avail}>
+            <i aria-hidden="true" />{avail ? "متاح لاستلام التذاكر" : "غير متاح (لا تُسند لي تذاكر)"}
+          </button>
+        )}
       </div>
-      {tab === "tickets" && <Tickets canWrite={canWrite} />}
+      <div className="tabs page-tabs">
+        {shown.map(([k, l]) => <button key={k} className={`tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>{l}</button>)}
+      </div>
+      {tab === "tickets" && <Tickets canWrite={canWrite} me={me} restricted={restricted} />}
       {tab === "settings" && <Settings canWrite={canWrite} />}
       {tab === "learning" && <Learning canWrite={canWrite} />}
       {tab === "feedback" && <Feedback />}
@@ -32,15 +53,15 @@ export default function Support({ canWrite }) {
 }
 
 // ───────────── التذاكر ─────────────
-function Tickets({ canWrite }) {
-  const [f, setF] = useState({ status: "active", priority: "", q: "" });
+function Tickets({ canWrite, me, restricted }) {
+  const [f, setF] = useState({ status: "active", priority: "", q: "", mine: "", assigned: "" });
   const [data, setData] = useState(null);
   const [open, setOpen] = useState(null);
   const load = () => api.tickets(f).then(setData).catch(() => setData({ rows: [], stats: {} }));
   useEffect(() => {
     const id = setTimeout(load, 250);
     return () => clearTimeout(id);
-  }, [f.status, f.priority, f.q]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [f.status, f.priority, f.q, f.mine, f.assigned]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const id = setInterval(load, 20000);
     return () => clearInterval(id);
@@ -52,6 +73,7 @@ function Tickets({ canWrite }) {
         <div className="kpi accent"><span className="kpi-label">تذاكر مفتوحة</span><span className="kpi-value">{st.open ?? "—"}</span></div>
         <div className="kpi bad"><span className="kpi-label">حرجة مفتوحة</span><span className="kpi-value">{st.critical_open ?? "—"}</span></div>
         <div className="kpi"><span className="kpi-label">مع الفريق البشري</span><span className="kpi-value">{st.escalated ?? "—"}</span></div>
+        <div className="kpi"><span className="kpi-label">تذاكري المفتوحة</span><span className="kpi-value">{st.mine_open ?? "—"}</span></div>
         <div className="kpi ok"><span className="kpi-label">محلولة</span><span className="kpi-value">{st.resolved ?? "—"}</span></div>
         <div className="kpi"><span className="kpi-label">رضا العملاء (CSAT)</span><span className="kpi-value">{st.csat_avg ? `${st.csat_avg}/5` : "—"}</span><span className="kpi-hint">{st.csat_count || 0} تقييم</span></div>
       </div>
@@ -66,6 +88,13 @@ function Tickets({ canWrite }) {
           <option value="">كل الأولويات</option>
           {Object.entries(PRIORITY).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
+        {!restricted && (
+          <select value={f.mine ? "mine" : f.assigned} onChange={(e) => setF({ ...f, mine: e.target.value === "mine" ? "1" : "", assigned: e.target.value === "mine" ? "" : e.target.value })}>
+            <option value="">كل الموظفين</option>
+            <option value="mine">تذاكري فقط</option>
+            <option value="none">غير مسندة</option>
+          </select>
+        )}
       </div>
       {!data ? <p className="muted">جارٍ التحميل…</p> : data.rows.length === 0 ? <div className="empty">لا توجد تذاكر مطابقة.</div> : (
         <div className="ticket-list">
@@ -76,6 +105,8 @@ function Tickets({ canWrite }) {
                 <span className={`badge ${PRIORITY_CLS[r.priority]}`}>{PRIORITY[r.priority]}</span>
                 <span className={`badge ${STATUS_CLS[r.status]}`}>{STATUS[r.status]}</span>
                 {r.csat?.score && <span className="badge neutral">★ {r.csat.score}</span>}
+                {r.category && <span className="badge neutral">{CATEGORY[r.category] || r.category}</span>}
+                {r.assigned_to ? <span className="assignee">👤 {String(r.assigned_to) === String(me?.admin_id) ? "أنا" : r.assigned_name}</span> : r.status === "escalated" && <span className="badge pending">بانتظار موظف</span>}
               </div>
               <div className="ticket-subject">{r.subject || "—"}</div>
               <div className="audit-meta"><span className="mono">{r.uid}</span><span>{r.lang === "ar" ? "عربي" : "English"}</span><span>{when(r.updated_at)}</span><span>ردود المساعد: {r.ai_attempts || 0}</span></div>
@@ -83,14 +114,15 @@ function Tickets({ canWrite }) {
           ))}
         </div>
       )}
-      {open && <TicketSheet id={open} canWrite={canWrite} onClose={() => { setOpen(null); load(); }} />}
+      {open && <TicketSheet id={open} canWrite={canWrite} restricted={restricted} onClose={() => { setOpen(null); load(); }} />}
     </>
   );
 }
 
-function TicketSheet({ id, canWrite, onClose }) {
+function TicketSheet({ id, canWrite, restricted, onClose }) {
   const [d, setD] = useState(null);
   const [text, setText] = useState("");
+  const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const load = () => api.ticket(id).then(setD).catch(() => setErr("تعذّر التحميل"));
@@ -113,20 +145,33 @@ function TicketSheet({ id, canWrite, onClose }) {
               <span className={`badge ${STATUS_CLS[t.status]}`}>{STATUS[t.status]}</span>
               <span className="muted mono">{t.uid}</span>
             </div>
-            {t.escalation_summary && <div className="note-box"><b>ملخص التصعيد</b><p>{t.escalation_summary}</p></div>}
+            <div className="assign-bar">
+              <span className="muted">المسؤول:</span>
+              {canWrite && !restricted ? (
+                <select value={t.assigned_to || ""} disabled={busy} onChange={(e) => act(() => api.assignTicket(id, e.target.value))}>
+                  <option value="">{t.assigned_to ? "التالي في الدور تلقائيًا" : "غير مسندة — إسناد تلقائي"}</option>
+                  {t.assigned_to && !(d.agents || []).some((a) => a.id === t.assigned_to) && <option value={t.assigned_to}>{t.assigned_name}</option>}
+                  {(d.agents || []).map((a) => <option key={a.id} value={a.id}>{a.name}{a.available ? "" : " (غير متاح)"}</option>)}
+                </select>
+              ) : <b>{t.assigned_name || "—"}</b>}
+              {t.category && <span className="badge neutral">{CATEGORY[t.category] || t.category}</span>}
+            </div>
+            {t.escalation_summary && <div className="note-box"><b>ملخص المساعد للموظف</b><p>{t.escalation_summary}</p></div>}
             {d.error && <div className="note-box bad"><b>الخطأ المرتبط {d.error.ref}</b><p>{KIND[d.error.kind]} · {d.error.code} · {d.error.message} · الصفحة: {d.error.page || "—"}</p></div>}
             <div className="chat">
               {d.messages.map((m, i) => (
                 <div key={i} className={`msg ${m.role}`}>
-                  <span className="msg-role">{ROLE[m.role] || m.role} · {when(m.at)}</span>
+                  <span className="msg-role">{ROLE[m.role] || m.role}{m.by_name ? ` · ${m.by_name}` : ""} · {when(m.at)}</span>
                   <p>{m.text}</p>
                 </div>
               ))}
             </div>
             {canWrite && (
               <div className="reject-box">
-                <textarea rows={3} placeholder="اكتب ردك للمستخدم (يصله عبر بوت الدعم فورًا)…" value={text} onChange={(e) => setText(e.target.value)} />
+                <textarea rows={4} placeholder="اكتب ردك للمستخدم (يصله داخل التطبيق فورًا مع تنبيه)…" value={text} onChange={(e) => setText(e.target.value)} />
+                {note && <div className="note-box"><b>ملاحظة الذكاء لك</b><p>{note}</p></div>}
                 <div className="row-gap">
+                  <button disabled={busy} onClick={() => act(async () => { const r = await api.draftTicket(id); setText(r.draft); setNote(r.note); })}>✨ مسودة رد بالذكاء</button>
                   <button className="primary" disabled={busy || !text.trim()} onClick={() => act(async () => { await api.replyTicket(id, text.trim()); setText(""); })}>إرسال الرد</button>
                   <select value={t.priority} disabled={busy} onChange={(e) => act(() => api.ticketStatus(id, t.status === "resolved" ? "resolved" : t.status, "", e.target.value))} style={{ width: "auto" }}>
                     {Object.entries(PRIORITY).map(([k, v]) => <option key={k} value={k}>أولوية: {v}</option>)}
@@ -178,7 +223,7 @@ function Settings({ canWrite }) {
     try {
       const keys = ["enabled", "ai_enabled", "auto_fix_enabled", "csat_enabled", "confirm_actions_enabled", "push_bot_on_reply", "attachments_enabled",
         "sounds_enabled", "learning_enabled", "ai_actions", "welcome_ar", "welcome_en", "support_chat_id", "support_phone", "model", "fallback_models",
-        "escalation_threshold", "rate_limit_count", "rate_limit_window", "eta_critical_min", "eta_medium_min", "eta_low_min", ...LIST_KEYS];
+        "escalation_threshold", "handoff_mode", "assign_mode", "assign_by_skill", "assign_by_lang", "notify_agent", "reassign_after_min", "ai_draft_enabled", "rate_limit_count", "rate_limit_window", "eta_critical_min", "eta_medium_min", "eta_low_min", ...LIST_KEYS];
       const patch = Object.fromEntries(keys.map((k) => [k, LIST_KEYS.includes(k) ? (c[k] || []).map((x) => x.trim()).filter(Boolean) : c[k]]));
       const r = await api.saveSupportConfig({ ...patch, ...extra });
       setC({ ...c, ...r });
@@ -215,6 +260,40 @@ function Settings({ canWrite }) {
       </div>
 
       <div className="panel">
+        <h2>التحويل للدعم البشري</h2>
+        <div className="mode-grid">
+          {HANDOFF.map(([k, l, hint]) => (
+            <button type="button" key={k} className={`mode-card ${c.handoff_mode === k ? "on" : ""}`} disabled={!canWrite} onClick={() => setC({ ...c, handoff_mode: k })} aria-pressed={c.handoff_mode === k}>
+              <b>{l}</b><span>{hint}</span>
+            </button>
+          ))}
+        </div>
+        {c.handoff_mode === "auto" && (
+          <div className="grid-form">
+            <label>التحويل التلقائي بعد (ردود للمساعد بلا حل)<input type="number" min="1" max="10" value={c.escalation_threshold} onChange={set("escalation_threshold")} disabled={!canWrite} /></label>
+          </div>
+        )}
+        <p className="muted small">زر «التحدث مع موظف» يبقى ظاهرًا للمستخدم في كل الأوضاع.</p>
+
+        <h3>توزيع التذاكر على الموظفين</h3>
+        <div className="mode-grid">
+          {ASSIGN.map(([k, l, hint]) => (
+            <button type="button" key={k} className={`mode-card ${c.assign_mode === k ? "on" : ""}`} disabled={!canWrite} onClick={() => setC({ ...c, assign_mode: k })} aria-pressed={c.assign_mode === k}>
+              <b>{l}</b><span>{hint}</span>
+            </button>
+          ))}
+        </div>
+        <label className="check"><input type="checkbox" checked={c.assign_by_skill !== false} onChange={set("assign_by_skill")} disabled={!canWrite} />الذكاء يصنّف التذكرة (مدفوعات، تقنية، ربط، عام) ويوجّهها لموظف بنفس التخصص</label>
+        <label className="check"><input type="checkbox" checked={c.assign_by_lang !== false} onChange={set("assign_by_lang")} disabled={!canWrite} />موظف يتحدث لغة المستخدم أولًا</label>
+        <label className="check"><input type="checkbox" checked={c.notify_agent !== false} onChange={set("notify_agent")} disabled={!canWrite} />رسالة فورية للموظف في البوت عند إسناد تذكرة له أو رد جديد عليها</label>
+        <label className="check"><input type="checkbox" checked={c.ai_draft_enabled !== false} onChange={set("ai_draft_enabled")} disabled={!canWrite} />زر «مسودة رد بالذكاء» للموظفين</label>
+        <div className="grid-form">
+          <label>إن لم يرد الموظف خلال (دقيقة) تنتقل للتالي — 0 = معطّل<input type="number" min="0" max="1440" value={c.reassign_after_min ?? 0} onChange={set("reassign_after_min")} disabled={!canWrite} /></label>
+        </div>
+        <p className="muted small">الموظفون وتخصصاتهم وحدودهم تُضبط من «فريق العمل» ← تخصيص ← موظف دعم.</p>
+      </div>
+
+      <div className="panel">
         <h2>المساعد الذكي وصلاحياته</h2>
         <p className="muted">المحرك: Google Gemini (قابل للتغيير) · الحالة: {c.ai_available
           ? <b style={{ color: "var(--ok)" }}>متصل ({c.has_gemini_key ? "مفتاح من اللوحة" : "GEMINI_API_KEY من .env"})</b>
@@ -239,7 +318,6 @@ function Settings({ canWrite }) {
         <label className="check"><input type="checkbox" checked={c.confirm_actions_enabled !== false} onChange={set("confirm_actions_enabled")} disabled={!canWrite} />الإجراءات الحساسة (إلغاء الربط، ربط حساب جديد) بعد تأكيد «نعم / لا» من المستخدم</label>
         <label className="check"><input type="checkbox" checked={c.learning_enabled !== false} onChange={set("learning_enabled")} disabled={!canWrite} />التعلّم الذاتي: كل تذكرة محلولة تقترح سؤالًا وجوابًا لقاعدة المعرفة (تعتمدها أنت من «التعلّم الذاتي»)</label>
         <div className="grid-form">
-          <label>التصعيد التلقائي بعد (ردود بلا حل)<input type="number" min="1" max="10" value={c.escalation_threshold} onChange={set("escalation_threshold")} disabled={!canWrite} /></label>
           <label>حد الرسائل (Rate limit)<input type="number" min="2" max="60" value={c.rate_limit_count} onChange={set("rate_limit_count")} disabled={!canWrite} /></label>
           <label>خلال (ثانية)<input type="number" min="10" max="3600" value={c.rate_limit_window} onChange={set("rate_limit_window")} disabled={!canWrite} /></label>
         </div>

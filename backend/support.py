@@ -38,6 +38,11 @@ KB = "support_kb"
 FIXES = "auto_fix_log"
 ERRORS = "client_errors"
 STATUSES = ("open", "in_progress", "escalated", "resolved", "closed")
+ACTIVE = ("open", "in_progress", "escalated")
+HANDOFF_MODES = ("auto", "instant", "never")
+ASSIGN_MODES = ("round_robin", "least_load", "off")
+CATEGORIES = ("payments", "technical", "account", "general")
+RR_DOC = ("config", "support_rr")
 PRIORITIES = ("critical", "medium", "low")
 PRIORITY_LABEL = {"critical": ("حرجة", "Critical"), "medium": ("متوسطة", "Medium"), "low": ("بسيطة", "Low")}
 STATUS_LABEL = {"open": ("مستلمة", "Received"), "in_progress": ("قيد المعالجة", "In progress"),
@@ -56,12 +61,15 @@ DEFAULT_PROMPT = """أنت "مساعد AW" — مساعد الدعم الفني 
 تتحدث مع المستخدم داخل «مركز الدعم» في التطبيق نفسه. يرى أزرارًا أسفل ردودك (التحدث مع موظف، التقييم، نعم/لا)، ويمكنه إرفاق صور.
 إن أرفق صورة (لقطة شاشة لخطأ أو دفع)، اقرأها بدقة واستخرج منها رقم الخطأ أو المبلغ أو الحالة، ثم تصرّف بناءً عليها.
 
-## منهج الحل (مثل أفضل فرق الدعم العالمية)
-1. شخّص قبل أن تجيب: اجمع الحقائق بالأدوات (حالة الحساب، الأخطاء الأخيرة، المدفوعات) ولا تسأل المستخدم عن شيء تستطيع معرفته بنفسك.
-2. حل المشكلة بنفسك عندما يكون ذلك ممكنًا بالإصلاح الذاتي، ثم أخبره بما فعلته بالضبط.
-3. إن احتاج الأمر خطوة من المستخدم: خطوات مرقمة قصيرة جدًا، خطوة واحدة في كل سطر.
-4. تأكد من الحل واسأله سؤالًا واحدًا واضحًا في النهاية.
-5. لا تكرر نفس الاقتراح مرتين؛ إن فشل حلّان فحوّل لموظف مع ملخص كامل.
+## منهج الحل (مثل أفضل فرق الدعم العالمية) — هدفك أن تحل المشكلة بنفسك
+1. شخّص قبل أن تجيب: اجمع الحقائق بالأدوات (get_user_context، الأخطاء، المدفوعات، get_service_status لمعرفة إن كان هناك عطل عام، get_previous_tickets لمعرفة ما جُرّب سابقًا) ولا تسأل المستخدم عن شيء تستطيع معرفته بنفسك.
+2. ابحث في قاعدة المعرفة بأكثر من صيغة (عربي وإنجليزي، كلمات مختلفة) قبل أن تقول إنك لا تعرف.
+3. حل المشكلة بنفسك عندما يكون ذلك ممكنًا بالإصلاح الذاتي، ثم أخبره بما فعلته بالضبط وما النتيجة.
+4. إن كانت المعلومات ناقصة فاسأل سؤالًا توضيحيًا واحدًا محددًا (مثل: ما رسالة الخطأ الظاهرة؟ متى بدأت المشكلة؟ أرسل لقطة شاشة).
+5. إن احتاج الأمر خطوة من المستخدم: خطوات مرقمة قصيرة جدًا، خطوة واحدة في كل سطر.
+6. لا تكرر نفس الاقتراح مرتين؛ جرّب مقاربة مختلفة فعلًا في كل مرة (تشخيص أعمق، إصلاح آخر، شرح بطريقة أبسط).
+7. تأكد من الحل واسأله سؤالًا واحدًا واضحًا في النهاية.
+8. إن كان هناك عطل عام (get_service_status) فأخبره بصراحة أن الفريق يعمل عليه وأن بياناته آمنة.
 
 ## هويتك ونبرتك
 - محترف، ودود، هادئ، ومختصر. جمل قصيرة وواضحة، بلا مبالغة ولا وعود بأرباح.
@@ -90,8 +98,9 @@ DEFAULT_PROMPT = """أنت "مساعد AW" — مساعد الدعم الفني 
 
 ## متى تحوّل للدعم البشري (escalate_to_human)
 - فورًا: طلب استرجاع أموال، نزاع مالي، شبهة اختراق، طلب صريح للتحدث مع موظف، شكوى رسمية، أي أمر يحتاج صلاحية لا تملكها.
-- بعد فشل الحل: إن استمرت المشكلة بعد محاولتين من الحلول.
-- اكتب في summary ملخصًا كاملًا: المشكلة، ما جرّبته، نتائج الإصلاحات، وبيانات الحساب ذات الصلة. ثم أخبر المستخدم أن فريق الدعم استلم تذكرته وسيرد قريبًا.
+- بعد فشل الحل: فقط إن استمرت المشكلة بعد 3 مقاربات مختلفة فعلًا، أو كانت تحتاج صلاحية أو قرارًا بشريًا.
+- لا تحوّل لمجرد أن السؤال صعب: شخّص وحاول أولًا.
+- اكتب في summary ملخصًا كاملًا: المشكلة، ما جرّبته، نتائج الإصلاحات، وبيانات الحساب ذات الصلة، واقتراحك للخطوة التالية للموظف. وحدد category (payments/technical/account/general) ليصل لموظف متخصص. ثم أخبر المستخدم أن فريق الدعم استلم تذكرته وسيرد قريبًا.
 
 ## الإجراءات التي تتطلب تأكيد المستخدم (request_confirmation)
 - unlink_account: إلغاء ربط حساب MT5 الحالي.
@@ -120,7 +129,16 @@ DEFAULT_CONFIG = {
     "fallback_models": list(FALLBACK_MODELS),
     "gemini_api_key": "",       # مشفّر في قاعدة البيانات؛ فارغ = GEMINI_API_KEY من .env
     "confirm_actions_enabled": True,  # إلغاء الربط/إعادة الربط من الشات بعد تأكيد نعم/لا
-    "escalation_threshold": 3,  # عدد ردود المساعد دون حل قبل التصعيد التلقائي
+    "escalation_threshold": 4,  # عدد ردود المساعد دون حل قبل التصعيد التلقائي (وضع auto فقط)
+    # auto = المساعد يحاول ويحوّل عند الحاجة · instant = كل تذكرة تذهب لموظف فورًا · never = لا تحويل آلي أبدًا (زر «موظف» فقط)
+    "handoff_mode": "auto",
+    # توزيع التذاكر المحوّلة على موظفي الدعم: round_robin بالترتيب · least_load الأقل ضغطًا · off بلا إسناد
+    "assign_mode": "round_robin",
+    "assign_by_skill": True,    # الذكاء يصنّف التذكرة (مدفوعات/تقنية/ربط/عام) فتذهب لموظف بنفس التخصص إن وُجد
+    "assign_by_lang": True,     # موظف يتحدث لغة المستخدم إن وُجد
+    "notify_agent": True,       # رسالة فورية للموظف المسند إليه في البوت
+    "reassign_after_min": 0,    # إن لم يرد الموظف خلال N دقيقة تنتقل للتالي (0 = معطّل)
+    "ai_draft_enabled": True,   # زر «مسودة رد بالذكاء» للموظف
     "rate_limit_count": 8,      # رسائل خلال النافذة
     "rate_limit_window": 60,    # ثانية
     "eta_critical_min": 15,
@@ -192,7 +210,7 @@ def public_config(cfg: dict) -> dict:
 def clean_config(patch: dict) -> dict:
     out = {}
     for k in ("enabled", "ai_enabled", "auto_fix_enabled", "csat_enabled", "confirm_actions_enabled", "push_bot_on_reply",
-              "attachments_enabled", "sounds_enabled", "learning_enabled"):
+              "attachments_enabled", "sounds_enabled", "learning_enabled", "assign_by_skill", "assign_by_lang", "notify_agent", "ai_draft_enabled"):
         if k in patch:
             out[k] = bool(patch[k])
     if "ai_actions" in patch:
@@ -233,7 +251,15 @@ def clean_config(patch: dict) -> dict:
         if any(not re.fullmatch(r"gemini-[a-z0-9.-]{2,40}", m) for m in ms):
             raise ValueError("invalid fallback model")
         out["fallback_models"] = list(dict.fromkeys(ms))[:4]
-    for k, lo, hi in (("escalation_threshold", 1, 10), ("rate_limit_count", 2, 60), ("rate_limit_window", 10, 3600),
+    if "handoff_mode" in patch:
+        if patch["handoff_mode"] not in HANDOFF_MODES:
+            raise ValueError("invalid handoff mode")
+        out["handoff_mode"] = patch["handoff_mode"]
+    if "assign_mode" in patch:
+        if patch["assign_mode"] not in ASSIGN_MODES:
+            raise ValueError("invalid assign mode")
+        out["assign_mode"] = patch["assign_mode"]
+    for k, lo, hi in (("escalation_threshold", 1, 10), ("reassign_after_min", 0, 1440), ("rate_limit_count", 2, 60), ("rate_limit_window", 10, 3600),
                       ("eta_critical_min", 1, 1440), ("eta_medium_min", 1, 2880), ("eta_low_min", 1, 10080)):
         if k in patch:
             out[k] = max(lo, min(hi, int(patch[k])))
@@ -605,11 +631,29 @@ TOOLS = [
     {"name": "set_ticket_priority", "description": "Re-classifies the ticket priority: critical, medium or low.",
      "parameters": {"type": "OBJECT", "properties": {"priority": {"type": "STRING", "enum": list(PRIORITIES)}, "reason": {"type": "STRING"}},
                     "required": ["priority", "reason"]}},
-    {"name": "escalate_to_human", "description": "Hands the ticket to the human support team with a complete summary (problem, what was tried, fix results, relevant account data).",
-     "parameters": {"type": "OBJECT", "properties": {"summary": {"type": "STRING"}}, "required": ["summary"]}},
+    {"name": "escalate_to_human", "description": "Hands the ticket to the human support team with a complete summary (problem, what was tried, fix results, relevant account data, suggested next step). category routes it to a specialised agent.",
+     "parameters": {"type": "OBJECT", "properties": {"summary": {"type": "STRING"}, "category": {"type": "STRING", "enum": list(CATEGORIES)}},
+                    "required": ["summary", "category"]}},
+    {"name": "get_previous_tickets", "description": "Returns this user's previous support tickets (subject, status, what resolved it). Use to avoid repeating failed solutions."},
+    {"name": "get_service_status", "description": "Returns the live status of AW services (maintenance mode, MT5 robot/bridge health, payment methods). Use when data is not updating or something fails for no clear reason, to detect a general outage."},
     {"name": "mark_resolved", "description": "Marks the ticket resolved once the user confirms the issue is fixed or the question is fully answered.",
      "parameters": {"type": "OBJECT", "properties": {"summary": {"type": "STRING"}}, "required": ["summary"]}},
 ]
+
+
+def tools_for(cfg: dict) -> list:
+    """وضع «لا تحويل أبدًا»: أداة التحويل لا تُعرض على المساعد إطلاقًا (التحويل بزر المستخدم فقط)."""
+    if (cfg.get("handoff_mode") or "auto") == "never":
+        return [t for t in TOOLS if t["name"] != "escalate_to_human"]
+    return TOOLS
+
+
+MODE_NOTE = {
+    "auto": "",
+    "never": ("\n\n[Handoff policy] Automatic transfer to humans is DISABLED by the admin. You have no escalate tool. "
+              "Keep diagnosing and solving with every tool you have; never say you transferred the ticket. "
+              "Only if the user explicitly wants a person, tell them to tap the \"Talk to a human\" button below your reply."),
+}
 
 
 def api_key(cfg: dict) -> str:
@@ -734,7 +778,7 @@ def llm(cfg: dict, system: str, contents: list) -> dict:
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": contents,
-        "tools": [{"functionDeclarations": TOOLS}],
+        "tools": [{"functionDeclarations": tools_for(cfg)}],
         "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
         "generationConfig": {"temperature": 0.35, "maxOutputTokens": 2048},
     }
@@ -828,8 +872,19 @@ def _tool(db, cfg, uid, tid, name: str, args: dict, state: dict) -> str:
             _ticket_ref(db, tid).set({"priority": args["priority"]}, merge=True)
         return json.dumps({"ok": True})
     if name == "escalate_to_human":
+        if (cfg.get("handoff_mode") or "auto") == "never":
+            return json.dumps({"ok": False, "reason": "handoff_disabled_keep_solving"})
         state["escalate"] = str(args.get("summary") or "")[:3000]
+        if args.get("category") in CATEGORIES:
+            _ticket_ref(db, tid).set({"category": args["category"]}, merge=True)
         return json.dumps({"ok": True, "note": "Tell the user the human team has the ticket."})
+    if name == "get_previous_tickets":
+        return json.dumps(previous_tickets(db, uid, tid), ensure_ascii=False, default=str)
+    if name == "get_service_status":
+        try:
+            return json.dumps(SERVICE["fn"]() if SERVICE["fn"] else {"status": "unknown"}, ensure_ascii=False, default=str)
+        except Exception as e:  # noqa: BLE001
+            return json.dumps({"status": "unknown", "error": str(e)[:120]})
     if name == "mark_resolved":
         state["resolved"] = str(args.get("summary") or "")[:1000]
         return json.dumps({"ok": True})
@@ -846,14 +901,16 @@ def _tool(db, cfg, uid, tid, name: str, args: dict, state: dict) -> str:
 def ai_reply(db, cfg: dict, uid, ticket: dict, lang: str) -> tuple[str, dict]:
     """يشغّل حلقة الأدوات حتى يرد المساعد. يرجع (النص، الحالة: escalate/resolved/confirm/failed)."""
     state: dict = {}
-    system = (cfg.get("system_prompt") or DEFAULT_PROMPT) + (
+    mode = cfg.get("handoff_mode") or "auto"
+    system = (cfg.get("system_prompt") or DEFAULT_PROMPT) + MODE_NOTE.get(mode, "") + (
         f"\n\n[Context] Ticket {ticket['id']} · priority {ticket.get('priority')} · user language: {lang} · "
-        f"channel: {ticket.get('channel')} · error ref: {ticket.get('error_ref') or 'none'}")
+        f"channel: {ticket.get('channel')} · error ref: {ticket.get('error_ref') or 'none'} · "
+        f"assistant replies so far: {int(ticket.get('ai_attempts') or 0)}")
     contents = _history(db, ticket["id"])
     if not contents:
         return "", {"failed": True}
     text = ""
-    for _ in range(6):
+    for _ in range(8):  # جولات أدوات أكثر: تشخيص أعمق قبل الرد
         try:
             content = llm(cfg, system, contents)
         except Exception as e:  # noqa: BLE001 — أي عطل في المزوّد: نرجع لقاعدة المعرفة/الموظف
@@ -949,15 +1006,200 @@ def set_status(db, cfg, tid: str, status: str, by: str = "system", note: str = "
 
 def escalate(db, cfg, ticket: dict, summary: str, reason: str = "ai"):
     tid = ticket["id"]
-    _ticket_ref(db, tid).set({"escalated": True, "escalation_summary": summary[:3000]}, merge=True)
+    patch = {"escalated": True, "escalation_summary": summary[:3000], "escalated_at": time.time()}
+    if not (get_ticket(db, tid) or ticket).get("category"):
+        patch["category"] = guess_category(" ".join(m.get("text", "") for m in messages_of(db, tid) if m.get("role") == "user")[:2000])
+    _ticket_ref(db, tid).set(patch, merge=True)
     set_status(db, cfg, tid, "escalated", by=reason)
-    alert_staff(db, cfg, get_ticket(db, tid) or ticket, summary, reason)
+    t = get_ticket(db, tid) or ticket
+    if not _agent_ok(t.get("assigned_to")):
+        assign(db, cfg, t, by="auto", notify=False)
+        t = get_ticket(db, tid) or t
+    alert_staff(db, cfg, t, summary, reason)
+
+
+# ═════════════════════════ توزيع التذاكر على موظفي الدعم (عادل) ═════════════════════════
+AGENTS = {"fn": None}   # يضبطها main: fn() -> [{id, name, enabled, available, skills, langs, max_active, order}]
+SERVICE = {"fn": None}  # يضبطها main: fn() -> حالة الخدمات المختصرة للمساعد
+CATEGORY_LABEL = {"payments": "المدفوعات والاشتراكات", "technical": "تقنية ومزامنة", "account": "ربط الحسابات", "general": "عام"}
+
+
+def guess_category(text: str) -> str:
+    t = (text or "").lower()
+    if re.search(r"دفع|اشتراك|باقة|فاتورة|ton|usdt|نجوم|stars|pay|subscri|plan|invoice|refund|استرجاع", t):
+        return "payments"
+    if re.search(r"ربط|رقم الحساب|سيرفر|كلمة المرور|mt5|link|server|login|password", t):
+        return "account"
+    if re.search(_MEDIUM, t):
+        return "technical"
+    return "general"
+
+
+def agents(db=None) -> list:
+    rows = [a for a in ((AGENTS["fn"]() if AGENTS["fn"] else []) or []) if a.get("enabled")]
+    return sorted(rows, key=lambda a: (int(a.get("order") or 0), str(a["id"])))
+
+
+def _agent_ok(aid) -> bool:
+    return bool(aid) and any(str(a["id"]) == str(aid) for a in agents())
+
+
+def agent_loads(db) -> dict:
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    loads: dict = {}
+    for st in ACTIVE:
+        for d in db.collection(TICKETS).where(filter=FieldFilter("status", "==", st)).stream():
+            a = (d.to_dict() or {}).get("assigned_to")
+            if a:
+                loads[str(a)] = loads.get(str(a), 0) + 1
+    return loads
+
+
+def _rr(db) -> dict:
+    snap = db.collection(RR_DOC[0]).document(RR_DOC[1]).get()
+    return (snap.to_dict() or {}) if snap.exists else {}
+
+
+def pick_agent(db, cfg, ticket: dict, exclude=()) -> dict | None:
+    """اختيار عادل: المتاحون فقط، ثم من لم يبلغ حده، ثم اللغة، ثم التخصص؛ وبعدها بالترتيب الدوري أو الأقل ضغطًا."""
+    mode = cfg.get("assign_mode") or "round_robin"
+    everyone = agents(db)
+    if mode == "off" or not everyone:
+        return None
+    ex = {str(x) for x in exclude}
+    pool = [a for a in everyone if a.get("available", True) and str(a["id"]) not in ex]
+    if not pool:
+        return None
+    loads = agent_loads(db)
+    free = [a for a in pool if not a.get("max_active") or loads.get(str(a["id"]), 0) < int(a["max_active"])]
+    pool = free or pool  # الكل ممتلئ: نستمر بالعدل بدل ترك التذكرة بلا مسؤول
+    if cfg.get("assign_by_lang", True):
+        pool = [a for a in pool if not a.get("langs") or ticket.get("lang") in a["langs"]] or pool
+    if cfg.get("assign_by_skill", True) and ticket.get("category"):
+        pool = [a for a in pool if ticket["category"] in (a.get("skills") or [])] or pool
+    rr = _rr(db)
+    if mode == "least_load":
+        last_at = rr.get("last_at") or {}
+        return min(pool, key=lambda a: (loads.get(str(a["id"]), 0), float(last_at.get(str(a["id"])) or 0), int(a.get("order") or 0)))
+    order = [str(a["id"]) for a in everyone]
+    ids = {str(a["id"]): a for a in pool}
+    start = order.index(str(rr.get("last"))) + 1 if str(rr.get("last")) in order else 0
+    for i in range(len(order)):
+        cand = order[(start + i) % len(order)]
+        if cand in ids:
+            return ids[cand]
+    return pool[0]
+
+
+def assign(db, cfg, ticket: dict, agent: dict | None = None, by: str = "auto", notify: bool = True, exclude=()) -> dict | None:
+    """يسند التذكرة لموظف (مختار يدويًا أو بالتوزيع العادل) ويسجّل ذلك وينبّهه في البوت."""
+    a = agent or pick_agent(db, cfg, ticket, exclude)
+    if not a:
+        return None
+    tid, aid, now = ticket["id"], str(a["id"]), time.time()
+    log_ = ((get_ticket(db, tid) or ticket).get("assign_log") or []) + [{"at": now, "to": aid, "name": a.get("name"), "by": by}]
+    _ticket_ref(db, tid).set({"assigned_to": aid, "assigned_name": a.get("name") or aid, "assigned_at": now, "assign_log": log_[-20:]}, merge=True)
+    rr = _rr(db)
+    counts, last_at = dict(rr.get("counts") or {}), dict(rr.get("last_at") or {})
+    counts[aid] = int(counts.get(aid) or 0) + 1
+    last_at[aid] = now
+    db.collection(RR_DOC[0]).document(RR_DOC[1]).set({"last": aid, "counts": counts, "last_at": last_at}, merge=True)
+    if notify:
+        notify_agent(db, cfg, get_ticket(db, tid) or ticket)
+    return a
+
+
+def notify_agent(db, cfg, ticket: dict, new_message: str = ""):
+    aid = ticket.get("assigned_to")
+    if not aid or not cfg.get("notify_agent", True):
+        return
+    tid = ticket["id"]
+    icon = {"critical": "🔴", "medium": "🟠", "low": "🟢"}.get(ticket.get("priority"), "🟢")
+    if new_message:
+        text = f"💬 رسالة جديدة على تذكرتك #{tid}:\n{new_message[:1200]}\n\nالرد من لوحة التحكم ← الدعم الفني."
+    else:
+        pr = PRIORITY_LABEL[ticket.get("priority") or "low"][0]
+        text = (f"{icon} أُسندت إليك تذكرة #{tid}\nالأولوية: {pr} · التصنيف: {CATEGORY_LABEL.get(ticket.get('category'), '—')} · "
+                f"اللغة: {ticket.get('lang')}\n\nملخص المساعد:\n{(ticket.get('escalation_summary') or ticket.get('subject') or '')[:1200]}"
+                f"\n\nالرد من لوحة التحكم ← الدعم الفني ← «تذاكري».")
+    try:
+        send(cfg, aid, text)
+    except Exception:  # noqa: BLE001
+        log.exception("agent notify")
+
+
+def reassign_stale(db) -> int:
+    """تذكرة مسندة لم يرد عليها موظفها خلال المهلة تنتقل للتالي بالعدل (مهمة دورية)."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    cfg = get_config(db)
+    mins = int(cfg.get("reassign_after_min") or 0)
+    if not mins or (cfg.get("assign_mode") or "round_robin") == "off":
+        return 0
+    n = 0
+    for d in db.collection(TICKETS).where(filter=FieldFilter("status", "==", "escalated")).stream():
+        t = {"id": d.id, **(d.to_dict() or {})}
+        if t.get("assigned_to") and time.time() - float(t.get("assigned_at") or 0) > mins * 60:
+            if assign(db, cfg, t, by="timeout", exclude=(t["assigned_to"],)):
+                n += 1
+    return n
+
+
+def unassign_agent(db, agent_id: str):
+    """عند إزالة موظف: تذاكره النشطة تعود للتوزيع على البقية."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    cfg = get_config(db)
+    for d in db.collection(TICKETS).where(filter=FieldFilter("assigned_to", "==", str(agent_id))).stream():
+        t = {"id": d.id, **(d.to_dict() or {})}
+        if t.get("status") in ACTIVE:
+            _ticket_ref(db, t["id"]).set({"assigned_to": None, "assigned_name": None}, merge=True)
+            if t.get("status") == "escalated":
+                assign(db, cfg, t, by="member_removed", exclude=(str(agent_id),))
+
+
+def previous_tickets(db, uid, current: str = "") -> list:
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    rows = [{"id": d.id, **(d.to_dict() or {})} for d in db.collection(TICKETS).where(filter=FieldFilter("uid", "==", str(uid))).stream()]
+    rows = sorted([r for r in rows if r["id"] != current], key=lambda r: r.get("created_at") or 0, reverse=True)[:5]
+    out = []
+    for r in rows:
+        last = [m for m in messages_of(db, r["id"]) if m.get("role") in ("agent", "ai")][-1:]
+        out.append({"subject": (r.get("subject") or "")[:200], "status": r.get("status"), "category": r.get("category"),
+                    "days_ago": round((time.time() - float(r.get("created_at") or 0)) / 86400, 1),
+                    "last_answer": (last[0].get("text") or "")[:400] if last else None,
+                    "escalation_summary": (r.get("escalation_summary") or "")[:400] or None})
+    return out
+
+
+DRAFT_PROMPT = """أنت مساعد لموظف دعم AW ROBOT (نظام تداول آلي يربط حسابات MetaTrader 5). اكتب مسودة رد واحد جاهز للإرسال للمستخدم بلغته ({lang_name})،
+مهنية وودودة وقصيرة (بلا Markdown)، تحل المشكلة بخطوات واضحة بناءً على المحادثة وبيانات الحساب. لا تعد بأرباح، ولا تطلب كلمات مرور، ولا تخترع إجراءات لم تحدث.
+بعد المسودة اكتب سطرًا يبدأ بـ «ملاحظة للموظف:» فيه ما يجب التحقق منه أو تنفيذه قبل الإرسال (سطر واحد)."""
+
+
+def ai_draft(db, cfg, tid: str) -> dict:
+    """مسودة رد للموظف البشري + ملاحظة داخلية، من المحادثة وسياق المستخدم."""
+    t = get_ticket(db, tid)
+    if not t:
+        raise AiError("not_found")
+    if not (cfg.get("ai_draft_enabled", True) and ai_available(cfg)):
+        raise AiError("ai_unavailable")
+    lang = t.get("lang") or "ar"
+    convo = "\n".join(f"[{m.get('role')}] {(m.get('text') or '')[:600]}" for m in messages_of(db, tid)[-16:] if m.get("role") != "system")
+    ctx = json.dumps(user_context(db, t["uid"]), ensure_ascii=False, default=str)[:3000]
+    prompt = f"ملخص التصعيد: {t.get('escalation_summary') or '-'}\nبيانات الحساب: {ctx}\n\nالمحادثة:\n{convo}"
+    raw = llm_text(cfg, DRAFT_PROMPT.replace("{lang_name}", "العربية" if lang == "ar" else "English"), prompt, max_tokens=700)
+    m = re.split(r"\n\s*ملاحظة للموظف\s*[:：]", raw, maxsplit=1)
+    return {"draft": m[0].strip()[:3000], "note": (m[1].strip()[:500] if len(m) > 1 else "")}
 
 
 def alert_staff(db, cfg, ticket: dict, summary: str = "", reason: str = "ai", new_message: str = ""):
-    """تنبيه فوري لحساب الموظف في البوت الرئيسي. الرد يتم من لوحة التحكم ← الدعم (يصل للمستخدم داخل التطبيق)."""
+    """تنبيه فوري للموظف المسند إليه + حساب المشرف في البوت الرئيسي. الرد يتم من لوحة التحكم ← الدعم."""
+    notify_agent(db, cfg, ticket, new_message)
     chat = cfg.get("support_chat_id")
-    if not chat:
+    if not chat or str(chat) == str(ticket.get("assigned_to") or ""):
         return
     tid = ticket["id"]
     icon = {"critical": "🔴", "medium": "🟠", "low": "🟢"}.get(ticket.get("priority"), "🟢")
@@ -967,12 +1209,16 @@ def alert_staff(db, cfg, ticket: dict, summary: str = "", reason: str = "ai", ne
         pr_ar = PRIORITY_LABEL[ticket.get("priority") or "low"][0]
         last = "\n".join(f"{'👤' if m.get('role') == 'user' else '🤖'} {m.get('text', '')[:300]}" for m in messages_of(db, tid)[-6:])
         text = (f"{icon} تصعيد تذكرة #{tid} · الأولوية: {pr_ar}\nالمستخدم: {ticket['uid']} · اللغة: {ticket.get('lang')}\n"
-                f"سبب التصعيد: {'تلقائي بعد محاولات فاشلة' if reason == 'threshold' else 'طلب المساعد/المستخدم'}\n\n"
+                f"سبب التصعيد: {REASON_LABEL.get(reason, 'طلب المساعد/المستخدم')}\n"
+                f"المسؤول: {ticket.get('assigned_name') or 'غير مسندة'}\n\n"
                 f"الملخص:\n{summary[:1500]}\n\nآخر الرسائل:\n{last}\n\nالرد من لوحة التحكم ← الدعم الفني (يصل للمستخدم داخل التطبيق).")
     try:
         send(cfg, chat, text)
     except Exception:  # noqa: BLE001
         log.exception("staff alert")
+
+
+REASON_LABEL = {"threshold": "تلقائي بعد محاولات فاشلة", "instant": "تحويل فوري (إعداد الدعم)", "user": "طلب المستخدم", "ai": "قرار المساعد الذكي"}
 
 
 # ═════════════════════════ التأكيد قبل الإجراءات الحساسة ═════════════════════════
@@ -1096,10 +1342,16 @@ def _process(db, cfg, uid, text, lang_hint, channel, error_ref, image=None):
         add_message(db, ticket["id"], "user", text, {"image": image["url"], "image_file": image["file"]} if image else None)
         if is_new:
             deliver(cfg, channel, uid, ack_text(cfg, ticket, lang))
-        if ticket.get("status") == "escalated":  # موظف بشري يتابعها: ننبّهه فقط، والرد من اللوحة
-            alert_staff(db, cfg, ticket, new_message=text)
+        mode = cfg.get("handoff_mode") or "auto"
+        if ticket.get("status") == "escalated" or (ticket.get("status") == "in_progress" and ticket.get("assigned_to")):
+            alert_staff(db, cfg, ticket, new_message=text)  # موظف بشري يتابعها: ننبّهه فقط، والرد من اللوحة
             return
-        if int(ticket.get("ai_attempts") or 0) >= int(cfg.get("escalation_threshold") or 3):
+        if mode == "instant":  # كل تذكرة تذهب لموظف مباشرة
+            deliver(cfg, channel, uid, _t(lang, "👤 حوّلنا طلبك مباشرة لموظف دعم، وسيرد عليك هنا قريبًا.",
+                                          "👤 Your request went straight to a support agent — they'll reply here shortly."))
+            escalate(db, cfg, get_ticket(db, ticket["id"]) or ticket, f"تحويل فوري (إعداد الدعم). رسالة المستخدم: {text[:1500]}", reason="instant")
+            return
+        if mode == "auto" and int(ticket.get("ai_attempts") or 0) >= int(cfg.get("escalation_threshold") or 4):
             summary = f"تجاوز حد المحاولات ({ticket.get('ai_attempts')}). آخر رسالة: {text[:500]}"
             deliver(cfg, channel, uid, _t(lang, "حوّلنا طلبك لفريق الدعم البشري مع ملخص كامل لمحادثتك، وسيرد عليك قريبًا.",
                                           "We've handed your request to our human support team with a full summary. They'll reply shortly."))
@@ -1121,10 +1373,16 @@ def _process(db, cfg, uid, text, lang_hint, channel, error_ref, image=None):
             if kb and kb[0]["score"] >= KB_MIN_SCORE:  # سؤال عام: إجابة قاعدة المعرفة؛ الخطأ والحالات الحرجة: موظف بشري
                 reply = kb[0]["a"]
                 state = {}
+            elif mode == "never":  # لا تحويل آلي: نترك القرار للمستخدم بزر «موظف»
+                reply = _t(lang, "لم أتمكن من إكمال الرد الآن. أعد إرسال رسالتك بعد قليل، أو اضغط «التحدث مع موظف» إن أردت موظفًا.",
+                           "I couldn't finish my answer right now. Please resend in a moment, or tap \"Talk to a human\" if you'd like an agent.")
+                state = {}
             else:
                 reply = _t(lang, "شكرًا لتوضيحك. حوّلنا طلبك لفريق الدعم البشري وسيرد عليك قريبًا.",
                            "Thanks for the details. Your request is now with our human support team; they'll reply shortly.")
                 state = {"escalate": f"المساعد الذكي غير متاح أو لم يجد إجابة. رسالة المستخدم: {text[:800]}"}
+        if mode == "never":
+            state.pop("escalate", None)
         if reply:
             add_message(db, ticket["id"], "ai", reply)
         _ticket_ref(db, ticket["id"]).set({"ai_attempts": int(ticket.get("ai_attempts") or 0) + 1}, merge=True)
@@ -1240,11 +1498,11 @@ def _score_suggestion(db, tid: str, score: int):
         ref.set({"score": score}, merge=True)
 
 
-def agent_reply(db, cfg, tid: str, text: str, by: str) -> dict | None:
+def agent_reply(db, cfg, tid: str, text: str, by: str, by_name: str = "") -> dict | None:
     t = get_ticket(db, tid)
     if not t:
         return None
-    add_message(db, tid, "agent", text, {"by": by})
+    add_message(db, tid, "agent", text, {"by": by, "by_name": by_name or None})
     lang = t.get("lang") or "ar"
     push_user(cfg, t["uid"], lang, tid, text)
     if t.get("status") in ("open", "escalated"):
