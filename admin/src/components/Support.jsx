@@ -9,7 +9,7 @@ const ROLE = { user: "المستخدم", ai: "المساعد الذكي", agent:
 const FIX = { resync_account: "إعادة مزامنة الحساب", recheck_payment: "إعادة فحص الدفع", reset_stuck_link: "فك تعليق الربط", set_language: "تغيير اللغة" };
 const KIND = { network: "اتصال", server: "خادم", operation: "عملية", ui: "واجهة" };
 const when = (ts) => (ts ? new Date(ts * 1000).toLocaleString("ar-u-nu-latn", { dateStyle: "short", timeStyle: "short" }) : "—");
-const TABS = [["tickets", "التذاكر"], ["settings", "القناة والإعدادات"], ["accounts", "حسابات تلجرام"], ["prompt", "System Prompt"], ["kb", "قاعدة المعرفة"], ["fixes", "الإصلاحات الآلية"], ["errors", "سجل الأخطاء"]];
+const TABS = [["tickets", "التذاكر"], ["settings", "مركز الدعم والإعدادات"], ["learning", "التعلّم الذاتي"], ["prompt", "System Prompt"], ["kb", "قاعدة المعرفة"], ["fixes", "الإصلاحات الآلية"], ["errors", "سجل الأخطاء"]];
 
 export default function Support({ canWrite }) {
   const [tab, setTab] = useState("tickets");
@@ -21,7 +21,7 @@ export default function Support({ canWrite }) {
       </div>
       {tab === "tickets" && <Tickets canWrite={canWrite} />}
       {tab === "settings" && <Settings canWrite={canWrite} />}
-      {tab === "accounts" && <Accounts canWrite={canWrite} />}
+      {tab === "learning" && <Learning canWrite={canWrite} />}
       {tab === "prompt" && <Prompt canWrite={canWrite} />}
       {tab === "kb" && <Kb canWrite={canWrite} />}
       {tab === "fixes" && <Fixes />}
@@ -160,217 +160,151 @@ function TicketSheet({ id, canWrite, onClose }) {
   );
 }
 
-// ───────────── القناة والإعدادات ─────────────
+// ───────────── مركز الدعم والإعدادات ─────────────
+const LIST_KEYS = ["quick_ar", "quick_en"];
 function Settings({ canWrite }) {
   const [c, setC] = useState(null);
-  const [token, setToken] = useState("");
   const [gkey, setGkey] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => { api.supportConfig().then(setC).catch(() => setMsg("تعذّر التحميل")); }, []);
   if (!c) return <p className="muted">{msg || "جارٍ التحميل…"}</p>;
   const set = (k) => (e) => setC({ ...c, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+  const setList = (k) => (e) => setC({ ...c, [k]: e.target.value.split("\n") });
+  const setAct = (a) => (e) => setC({ ...c, ai_actions: { ...(c.ai_actions || {}), [a]: e.target.checked } });
   async function save(extra = {}) {
     setBusy(true); setMsg("");
     try {
-      const keys = ["enabled", "ai_enabled", "auto_fix_enabled", "csat_enabled", "confirm_actions_enabled", "support_username", "support_chat_id", "support_phone", "model",
-        "escalation_threshold", "rate_limit_count", "rate_limit_window", "eta_critical_min", "eta_medium_min", "eta_low_min"];
-      const patch = Object.fromEntries(keys.map((k) => [k, c[k]]));
+      const keys = ["enabled", "ai_enabled", "auto_fix_enabled", "csat_enabled", "confirm_actions_enabled", "push_bot_on_reply", "attachments_enabled",
+        "sounds_enabled", "learning_enabled", "ai_actions", "welcome_ar", "welcome_en", "support_chat_id", "support_phone", "model",
+        "escalation_threshold", "rate_limit_count", "rate_limit_window", "eta_critical_min", "eta_medium_min", "eta_low_min", ...LIST_KEYS];
+      const patch = Object.fromEntries(keys.map((k) => [k, LIST_KEYS.includes(k) ? (c[k] || []).map((x) => x.trim()).filter(Boolean) : c[k]]));
       const r = await api.saveSupportConfig({ ...patch, ...extra });
       setC({ ...c, ...r });
-      setToken("");
       setGkey("");
-      setMsg("✓ تم الحفظ" + (r.webhook?.ok ? ` · تم ربط @${r.webhook.username}` : ""));
+      setMsg("✓ تم الحفظ — يُطبَّق فورًا في التطبيق");
     } catch (e) {
       setMsg(`✗ ${e.detail || "فشل الحفظ"}`);
     } finally { setBusy(false); }
   }
+  const actions = c.ai_actions || {};
   return (
     <>
       <div className="panel">
-        <h2>قناة الدعم (سماعة الرأس 🎧 وزر "تواصل مع الدعم")</h2>
-        <p className="muted">رابط الدعم الحالي في التطبيق: <a href={c.contact_url} target="_blank" rel="noreferrer" className="mono">{c.contact_url || "غير مضبوط"}</a></p>
+        <h2>مركز الدعم داخل التطبيق</h2>
+        <p className="muted">الدعم أصبح صفحة كاملة داخل الـ Mini App (سماعة الرأس 🎧، الإعدادات، رسائل الأخطاء، وزر «فتح مركز الدعم» في البوت). لا بوت دعم منفصل ولا حسابات تلجرام.</p>
+        <label className="check"><input type="checkbox" checked={!!c.enabled} onChange={set("enabled")} disabled={!canWrite} />تشغيل مركز الدعم</label>
+        <label className="check"><input type="checkbox" checked={c.attachments_enabled !== false} onChange={set("attachments_enabled")} disabled={!canWrite} />السماح بإرفاق الصور (لقطات شاشة ≤ 3MB — المساعد يقرأها)</label>
+        <label className="check"><input type="checkbox" checked={c.sounds_enabled !== false} onChange={set("sounds_enabled")} disabled={!canWrite} />أصوات الردود في التطبيق</label>
+        <label className="check"><input type="checkbox" checked={c.push_bot_on_reply !== false} onChange={set("push_bot_on_reply")} disabled={!canWrite} />تنبيه المستخدم في البوت عند رد الموظف أو حل التذكرة (مع زر يفتح مركز الدعم)</label>
+        <label className="check"><input type="checkbox" checked={!!c.csat_enabled} onChange={set("csat_enabled")} disabled={!canWrite} />طلب تقييم الرضا بعد الحل (CSAT)</label>
         <div className="grid-form">
-          <label>توكن بوت الدعم (Token/API)
-            <input type="password" autoComplete="off" placeholder={c.has_bot_token ? `مضبوط · @${c.support_bot_username || "?"} — اكتب توكنًا جديدًا للتغيير` : "فارغ = البوت الرئيسي @" + (c.main_bot_username || "")} value={token} onChange={(e) => setToken(e.target.value)} disabled={!canWrite} />
-          </label>
-          <label>الحساب المختار للرد البشري (Telegram ID)
+          <label>رسالة الترحيب (عربي)<textarea rows={3} value={c.welcome_ar || ""} onChange={set("welcome_ar")} disabled={!canWrite} /></label>
+          <label>رسالة الترحيب (English)<textarea rows={3} dir="ltr" value={c.welcome_en || ""} onChange={set("welcome_en")} disabled={!canWrite} /></label>
+          <label>الردود السريعة (عربي — سطر لكل رد، حتى 8)<textarea rows={4} value={(c.quick_ar || []).join("\n")} onChange={setList("quick_ar")} disabled={!canWrite} /></label>
+          <label>الردود السريعة (English)<textarea rows={4} dir="ltr" value={(c.quick_en || []).join("\n")} onChange={setList("quick_en")} disabled={!canWrite} /></label>
+          <label>حساب الموظف لتنبيهات التصعيد (Telegram ID)
             <input className="mono" placeholder="مثل 123456789" value={c.support_chat_id || ""} onChange={set("support_chat_id")} disabled={!canWrite} />
           </label>
-          <label>حساب دعم بشري بديل (@username)
-            <input className="mono" placeholder="اختياري إن لم يُستخدم بوت" value={c.support_username || ""} onChange={set("support_username")} disabled={!canWrite} />
-          </label>
-          <label>رقم هاتف الدعم
+          <label>رقم هاتف الدعم (يظهر في التطبيق)
             <input className="mono" placeholder="+966…" value={c.support_phone || ""} onChange={set("support_phone")} disabled={!canWrite} />
           </label>
         </div>
-        <p className="muted">التصعيدات تصل للحساب المختار عبر بوت الدعم مع الأولوية والملخص؛ يرد عليها بـ Reply فيصل الرد للمستخدم مباشرة، أو يرد من صندوق التذاكر هنا.</p>
-        {canWrite && (
-          <div className="row-gap">
-            <button className="primary" disabled={busy} onClick={() => save(token ? { support_bot_token: token } : {})}>حفظ</button>
-            {c.has_bot_token && <button className="danger-ghost" disabled={busy} onClick={() => save({ support_bot_token: "" })}>فصل بوت الدعم المستقل</button>}
-          </div>
-        )}
-        {msg && <p className={msg.startsWith("✗") ? "error-text" : "muted"}>{msg}</p>}
+        <p className="muted">التصعيدات تصل فورًا لحساب الموظف في البوت مع الأولوية والملخص، والرد يكون من «التذاكر» هنا فيظهر للمستخدم داخل التطبيق مع صوت تنبيه.</p>
       </div>
 
       <div className="panel">
-        <h2>المساعد الذكي والتصعيد</h2>
-        <p className="muted">محرك الذكاء الاصطناعي: Google Gemini Flash (مجاني، سريع وخفيف) · الحالة: {c.ai_available
+        <h2>المساعد الذكي وصلاحياته</h2>
+        <p className="muted">المحرك: Google Gemini (قابل للتغيير) · الحالة: {c.ai_available
           ? <b style={{ color: "var(--ok)" }}>متصل ({c.has_gemini_key ? "مفتاح من اللوحة" : "GEMINI_API_KEY من .env"})</b>
-          : <b style={{ color: "var(--bad)" }}>غير مضبوط — أضف مفتاح Gemini أدناه أو GEMINI_API_KEY في .env (يعمل حاليًا بقاعدة المعرفة + التحويل للبشري)</b>}</p>
+          : <b style={{ color: "var(--bad)" }}>غير مضبوط — أضف مفتاح Gemini أدناه (يعمل حاليًا بقاعدة المعرفة + التحويل للبشري)</b>}</p>
         <div className="grid-form">
           <label>مفتاح Gemini API (من aistudio.google.com)
             <input type="password" autoComplete="off" dir="ltr" placeholder={c.has_gemini_key ? "مضبوط ومشفّر — اكتب مفتاحًا جديدًا للتغيير" : c.gemini_env_key ? "يُستخدم مفتاح .env — اختياري" : "AIza…"} value={gkey} onChange={(e) => setGkey(e.target.value.trim())} disabled={!canWrite} />
           </label>
+          <label>النموذج<input className="mono" dir="ltr" placeholder={c.model_default} value={c.model} onChange={set("model")} disabled={!canWrite} /></label>
         </div>
-        <label className="check"><input type="checkbox" checked={!!c.enabled} onChange={set("enabled")} disabled={!canWrite} />تشغيل الدعم عبر البوت</label>
         <label className="check"><input type="checkbox" checked={!!c.ai_enabled} onChange={set("ai_enabled")} disabled={!canWrite} />الرد الآلي بالمساعد الذكي</label>
-        <label className="check"><input type="checkbox" checked={!!c.auto_fix_enabled} onChange={set("auto_fix_enabled")} disabled={!canWrite} />السماح بالإصلاح الذاتي (القائمة البيضاء فقط: {c.fix_actions.map((a) => FIX[a]).join("، ")})</label>
-        <label className="check"><input type="checkbox" checked={!!c.csat_enabled} onChange={set("csat_enabled")} disabled={!canWrite} />طلب تقييم الرضا بعد الحل (CSAT)</label>
-        <label className="check"><input type="checkbox" checked={c.confirm_actions_enabled !== false} onChange={set("confirm_actions_enabled")} disabled={!canWrite} />تنفيذ الإجراءات الحساسة من الشات (إلغاء الربط، ربط حساب جديد) بعد تأكيد «نعم / لا» من المستخدم</label>
+        <label className="check"><input type="checkbox" checked={!!c.auto_fix_enabled} onChange={set("auto_fix_enabled")} disabled={!canWrite} />السماح بالإصلاح الذاتي (مفتاح رئيسي)</label>
+        <div className="perm-grid">
+          {(c.fix_actions || Object.keys(FIX)).map((a) => (
+            <label key={a} className="check"><input type="checkbox" checked={actions[a] !== false} onChange={setAct(a)} disabled={!canWrite || !c.auto_fix_enabled} />{FIX[a] || a}</label>
+          ))}
+        </div>
+        <label className="check"><input type="checkbox" checked={c.confirm_actions_enabled !== false} onChange={set("confirm_actions_enabled")} disabled={!canWrite} />الإجراءات الحساسة (إلغاء الربط، ربط حساب جديد) بعد تأكيد «نعم / لا» من المستخدم</label>
+        <label className="check"><input type="checkbox" checked={c.learning_enabled !== false} onChange={set("learning_enabled")} disabled={!canWrite} />التعلّم الذاتي: كل تذكرة محلولة تقترح سؤالًا وجوابًا لقاعدة المعرفة (تعتمدها أنت من «التعلّم الذاتي»)</label>
         <div className="grid-form">
           <label>التصعيد التلقائي بعد (ردود بلا حل)<input type="number" min="1" max="10" value={c.escalation_threshold} onChange={set("escalation_threshold")} disabled={!canWrite} /></label>
           <label>حد الرسائل (Rate limit)<input type="number" min="2" max="60" value={c.rate_limit_count} onChange={set("rate_limit_count")} disabled={!canWrite} /></label>
           <label>خلال (ثانية)<input type="number" min="10" max="3600" value={c.rate_limit_window} onChange={set("rate_limit_window")} disabled={!canWrite} /></label>
-          <label>النموذج<input className="mono" dir="ltr" placeholder={c.model_default} value={c.model} onChange={set("model")} disabled={!canWrite} /></label>
         </div>
-        <h3>وقت الاستجابة المتوقع (يُرسل مع الرد الأولي الفوري)</h3>
+        <h3>وقت الاستجابة المتوقع (يظهر مع الرد الأولي الفوري)</h3>
         <div className="grid-form">
           <label>حرجة (دقيقة)<input type="number" value={c.eta_critical_min} onChange={set("eta_critical_min")} disabled={!canWrite} /></label>
           <label>متوسطة (دقيقة)<input type="number" value={c.eta_medium_min} onChange={set("eta_medium_min")} disabled={!canWrite} /></label>
           <label>بسيطة (دقيقة)<input type="number" value={c.eta_low_min} onChange={set("eta_low_min")} disabled={!canWrite} /></label>
         </div>
-        {canWrite && (
-          <div className="row-gap">
-            <button className="primary" disabled={busy} onClick={() => save(gkey ? { gemini_api_key: gkey } : {})}>حفظ</button>
-            {c.has_gemini_key && <button className="danger-ghost" disabled={busy} onClick={() => save({ gemini_api_key: "" })}>حذف مفتاح Gemini المحفوظ</button>}
-          </div>
-        )}
       </div>
+      {canWrite && (
+        <div className="row-gap sticky-save">
+          <button className="primary" disabled={busy} onClick={() => save(gkey ? { gemini_api_key: gkey } : {})}>حفظ كل الإعدادات</button>
+          {c.has_gemini_key && <button className="danger-ghost" disabled={busy} onClick={() => save({ gemini_api_key: "" })}>حذف مفتاح Gemini المحفوظ</button>}
+        </div>
+      )}
+      {msg && <p className={msg.startsWith("✗") ? "error-text" : "muted"}>{msg}</p>}
     </>
   );
 }
 
-// ───────────── حسابات تلجرام الحقيقية (احتياطية بالأولوية) ─────────────
-const ACC_STATUS = { active: ["نشط الآن", "approved"], standby: ["احتياطي جاهز", "neutral"], failed: ["متوقف", "rejected"],
-  pending_code: ["بانتظار الكود", "pending"], pending_password: ["بانتظار كلمة 2FA", "pending"] };
-
-function Accounts({ canWrite }) {
-  const [d, setD] = useState(null);
-  const [form, setForm] = useState({ phone: "", api_id: "", api_hash: "", priority: 1 });
-  const [verify, setVerify] = useState(null); // { id, code, password, needPassword }
+// ───────────── التعلّم الذاتي: اقتراحات من التذاكر المحلولة ─────────────
+function Learning({ canWrite }) {
+  const [rows, setRows] = useState(null);
+  const [edit, setEdit] = useState({});
   const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState(false);
-  const load = () => api.supportAccounts().then(setD).catch(() => setMsg("تعذّر التحميل"));
-  useEffect(() => {
+  const load = () => api.kbSuggestions().then((r) => setRows(r.rows)).catch(() => setMsg("تعذّر التحميل"));
+  useEffect(() => { load(); }, []);
+  if (!rows) return <p className="muted">{msg || "جارٍ التحميل…"}</p>;
+  const val = (r, k) => (edit[r.id]?.[k] ?? r[k]);
+  const change = (r, k) => (e) => setEdit({ ...edit, [r.id]: { ...(edit[r.id] || {}), [k]: e.target.value } });
+  async function approve(r) {
+    try {
+      await api.approveSuggestion(r.id, val(r, "q").trim().slice(0, 400), val(r, "a").trim().slice(0, 1500));
+      setMsg("✓ أُضيفت لقاعدة المعرفة — يستخدمها المساعد من الرسالة التالية");
+      load();
+    } catch (e) { setMsg(`✗ ${e.detail || "فشل"}`); }
+  }
+  async function reject(r) {
+    await api.rejectSuggestion(r.id).catch(() => {});
     load();
-    const id = setInterval(load, 15000);
-    return () => clearInterval(id);
-  }, []);
-
-  async function run(fn, ok) {
-    setBusy(true); setMsg("");
-    try { const r = await fn(); if (ok) setMsg(ok); await load(); return r; } catch (e) { setMsg(`✗ ${e.detail || "فشلت العملية"}`); throw e; } finally { setBusy(false); }
   }
-  async function begin(e) {
-    e.preventDefault();
-    try {
-      const r = await run(() => api.addSupportAccount({ phone: form.phone.replace(/[\s-]/g, ""), api_id: Number(form.api_id), api_hash: form.api_hash.trim().toLowerCase(), priority: Number(form.priority) || 1 }),
-        "✓ أُرسل كود الدخول إلى تطبيق تلجرام على هذا الرقم");
-      setVerify({ id: r.id, code: "", password: "", needPassword: false });
-      setForm({ phone: "", api_id: "", api_hash: "", priority: 1 });
-    } catch { /* الرسالة ظاهرة */ }
-  }
-  async function confirm(e) {
-    e.preventDefault();
-    try {
-      await run(() => api.verifySupportAccount(verify.id, verify.code, verify.password), "✓ تم تسجيل الدخول وأُضيف الحساب");
-      setVerify(null);
-    } catch (err) {
-      if (err.detail === "password_required") { setVerify({ ...verify, needPassword: true }); setMsg("الحساب محمي بكلمة تحقق بخطوتين — أدخلها للمتابعة"); }
-    }
-  }
-
-  if (!d) return <p className="muted">{msg || "جارٍ التحميل…"}</p>;
   return (
     <>
       <div className="panel">
-        <h2>الرد من حساب تلجرام حقيقي</h2>
-        <p className="muted">
-          عند إضافة حساب واحد أو أكثر، تصل رسائل الدعم وتُرسل الردود من <b>الحساب النشط فقط</b>. عند حظره أو تعطله ينتقل النظام تلقائيًا للحساب التالي حسب الأولوية
-          (1 = الأعلى) ويُبلغك فورًا، وإن لم يتبقَّ حساب سليم تُحفظ الرسائل حتى يعود أحدها. الجلسات وكلمات API مشفّرة ولا تُعرض أبدًا.
-        </p>
-        <div className="kpi-grid">
-          <div className="kpi accent"><span className="kpi-label">الوضع</span><span className="kpi-value">{d.account_mode ? "حساب حقيقي" : "البوت"}</span></div>
-          <div className="kpi"><span className="kpi-label">الحساب النشط</span><span className="kpi-value mono" dir="ltr">{d.active_username ? `@${d.active_username}` : "—"}</span></div>
-          <div className="kpi"><span className="kpi-label">الحسابات</span><span className="kpi-value mono">{d.rows.length}</span></div>
-        </div>
-        {!d.telethon && <p className="error-text">مكتبة telethon غير مثبتة على الخادم — شغّل aw-update لتثبيت المتطلبات.</p>}
-        <p className="muted">⚠️ استخدام حسابات شخصية للرد الآلي قد يعرّضها لقيود من تلجرام؛ استخدم أرقامًا مخصّصة للدعم، واحصل على API ID وAPI Hash من my.telegram.org ← API development tools.</p>
+        <h2>التعلّم من التذاكر المحلولة</h2>
+        <p className="muted">كل تذكرة تُحل يُستخرج منها سؤال المستخدم والجواب الذي حلّ المشكلة. راجع الصياغة ثم اعتمدها لتصبح جزءًا من معرفة المساعد (مرتبة حسب تقييم المستخدم).</p>
+        {msg && <p className={msg.startsWith("✗") ? "error-text" : "muted"}>{msg}</p>}
       </div>
-
-      {canWrite && !verify && (
-        <form className="panel" onSubmit={begin}>
-          <h2>إضافة حساب</h2>
-          <div className="grid-form">
-            <label>رقم الهاتف (بالصيغة الدولية)<input className="mono" dir="ltr" required placeholder="+9665…" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label>
-            <label>API ID<input className="mono" dir="ltr" required inputMode="numeric" value={form.api_id} onChange={(e) => setForm({ ...form, api_id: e.target.value.replace(/\D/g, "") })} /></label>
-            <label>API Hash (المفتاح السري)<input className="mono" dir="ltr" required type="password" autoComplete="off" value={form.api_hash} onChange={(e) => setForm({ ...form, api_hash: e.target.value })} /></label>
-            <label>الأولوية (1 = الأعلى)<input className="mono" type="number" min="1" max="99" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} /></label>
-          </div>
-          <div><button className="primary" disabled={busy || !d.telethon}>إرسال كود الدخول</button></div>
-        </form>
-      )}
-
-      {verify && (
-        <form className="panel" onSubmit={confirm}>
-          <h2>تأكيد تسجيل الدخول</h2>
-          <div className="grid-form">
-            <label>الكود الذي وصل في تطبيق تلجرام<input className="mono" dir="ltr" autoFocus inputMode="numeric" value={verify.code} onChange={(e) => setVerify({ ...verify, code: e.target.value.replace(/\D/g, "") })} /></label>
-            {verify.needPassword && <label>كلمة التحقق بخطوتين (2FA)<input type="password" dir="ltr" autoComplete="off" value={verify.password} onChange={(e) => setVerify({ ...verify, password: e.target.value })} /></label>}
-          </div>
-          <div className="row-gap">
-            <button className="primary" disabled={busy || (!verify.code && !verify.password)}>تأكيد</button>
-            <button type="button" onClick={() => setVerify(null)}>إلغاء</button>
-          </div>
-        </form>
-      )}
-      {msg && <p className={msg.startsWith("✗") ? "error-text" : "muted"}>{msg}</p>}
-
-      {d.rows.length > 0 && (
-        <div className="scrollx">
-          <table className="list keep">
-            <thead><tr><th>الأولوية</th><th>الحساب</th><th>الحالة</th><th>آخر خطأ</th><th /></tr></thead>
-            <tbody>
-              {d.rows.map((a) => {
-                const [label, cls] = ACC_STATUS[a.status] || [a.status || "—", "neutral"];
-                return (
-                  <tr key={a.id}>
-                    <td><input className="mono" style={{ width: 64 }} type="number" min="1" max="99" defaultValue={a.priority} disabled={!canWrite}
-                      onBlur={(e) => Number(e.target.value) !== a.priority && run(() => api.updateSupportAccount(a.id, { priority: Number(e.target.value) }), "✓ تم تحديث الأولوية").catch(() => {})} /></td>
-                    <td>{a.username ? <bdi className="mono" dir="ltr"><b>@{a.username}</b></bdi> : <span className="muted">—</span>}<div className="muted mono" dir="ltr" style={{ textAlign: "end" }}>{a.phone}</div></td>
-                    <td>
-                      <span className={`badge ${cls}`}>{label}</span>
-                      {!a.enabled && <span className="badge neutral" style={{ marginInlineStart: 6 }}>معطّل</span>}
-                    </td>
-                    <td className="muted" style={{ maxWidth: 260 }}><bdi dir="ltr">{a.last_error || "—"}</bdi>{a.failed_at ? ` · ${when(a.failed_at)}` : ""}</td>
-                    <td className="row-gap">
-                      {canWrite && (a.status === "pending_code" || a.status === "pending_password") && (
-                        <button onClick={() => setVerify({ id: a.id, code: "", password: "", needPassword: a.status === "pending_password" })}>إكمال الدخول</button>
-                      )}
-                      {canWrite && a.status === "failed" && <button disabled={busy} onClick={() => run(() => api.updateSupportAccount(a.id, { reset: true }), "✓ أُعيد للاحتياط").catch(() => {})}>إعادة المحاولة</button>}
-                      {canWrite && <button disabled={busy} onClick={() => run(() => api.updateSupportAccount(a.id, { enabled: !a.enabled })).catch(() => {})}>{a.enabled ? "تعطيل" : "تفعيل"}</button>}
-                      {canWrite && <button className="danger-ghost" disabled={busy} onClick={() => window.confirm("حذف هذا الحساب وتسجيل خروجه؟") && run(() => api.deleteSupportAccount(a.id), "✓ حُذف").catch(() => {})}>حذف</button>}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {rows.length === 0 ? <div className="empty">لا اقتراحات جديدة — ستظهر هنا بعد حل التذاكر.</div> : (
+        <div className="audit-list">
+          {rows.map((r) => (
+            <div key={r.id} className="audit">
+              <div className="audit-top">
+                <b className="mono">#{r.ticket}</b>
+                <span className="muted">{r.source === "agent" ? "رد موظف" : "رد المساعد"} · {when(r.at)}</span>
+                {r.score ? <span className={`badge ${r.score >= 4 ? "approved" : r.score <= 2 ? "rejected" : "pending"}`}>{"★".repeat(r.score)}</span> : <span className="badge neutral">بلا تقييم</span>}
+              </div>
+              <label>السؤال<textarea rows={2} value={val(r, "q")} onChange={change(r, "q")} disabled={!canWrite} dir="auto" /></label>
+              <label>الجواب المعتمد<textarea rows={4} value={val(r, "a")} onChange={change(r, "a")} disabled={!canWrite} dir="auto" /></label>
+              {canWrite && (
+                <div className="row-gap">
+                  <button className="primary" onClick={() => approve(r)}>اعتماد وإضافة للمعرفة</button>
+                  <button className="danger-ghost" onClick={() => reject(r)}>تجاهل</button>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
-      {d.rows.length === 0 && <div className="empty">لا توجد حسابات — الدعم يعمل حاليًا عبر البوت.</div>}
     </>
   );
 }

@@ -342,3 +342,19 @@ input[type="range"] { width: 100%; accent-color: var(--accent); padding: 0; bord
   .ann-split { grid-template-columns: 1fr; }
   .ann-preview { position: static; }
 }
+
+/* ─── التحليلات ─── */
+.an-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.an-top h3 { margin: 0 0 8px; }
+.an-row { position: relative; display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 8px; overflow: hidden; font-size: 13.5px; }
+.an-row span, .an-row b { position: relative; z-index: 1; }
+.an-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-row i { position: absolute; inset-block: 0; inset-inline-start: 0; background: var(--accent-dim); border-radius: 8px; }
+/* ─── صلاحيات المساعد + حفظ ثابت ─── */
+.perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 12px; margin: 4px 0 10px; padding-inline-start: 26px; }
+.sticky-save { position: sticky; bottom: 0; z-index: 5; padding: 10px 0; background: linear-gradient(transparent, var(--bg) 35%); }
+/* ─── بطاقات رسائل البوت ─── */
+.cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.card-preview { display: block; width: 100%; max-width: 480px; aspect-ratio: 16 / 9; margin: 10px 0; border-radius: 12px; border: 1px solid var(--border); background: #0a0908; object-fit: cover; }
+.card-kind.is-off .card-preview { opacity: 0.35; filter: grayscale(1); }
+.card-kind-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
