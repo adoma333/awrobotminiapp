@@ -9,6 +9,7 @@ AW LocalDB — قاعدة بيانات محلية (SQLite) بنفس واجهة F
   • المسار: DB_PATH أو <المشروع>/data/aw.db
 """
 import json
+import re
 import os
 import secrets
 import sqlite3
@@ -140,6 +141,15 @@ def _match(d: dict, field: str, op, value) -> bool:
 
 
 # ───────────────────────── الاتصال ─────────────────────────
+# الحقول الأكثر استعلامًا في المشروع (uid/status/method…) + حقول التحليلات الزمنية
+INDEXED = ("uid", "status", "method", "key", "started", "at")
+_SAFE_FIELD = re.compile(r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$")  # مسار الحقل يُكتب حرفيًا في SQL (ليطابق الفهرس) فيُقيَّد بصرامة
+
+
+def _jpath(field: str) -> str:
+    return "$." + ".".join(f'"{p}"' for p in field.split("."))
+
+
 class Client:
     def __init__(self, path: str | None = None):
         self.path = path or os.getenv("DB_PATH") or DEFAULT_PATH
@@ -153,6 +163,9 @@ class Client:
         c = self._conn()
         c.execute("CREATE TABLE IF NOT EXISTS docs (col TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, "
                   "updated REAL, PRIMARY KEY (col, id)) WITHOUT ROWID")
+        for f in INDEXED:  # فهارس تعبيرية: الاستعلام بالمساواة/النطاق على هذه الحقول لا يمسح المجموعة كاملة
+            name = "ix_" + re.sub(r"\W", "_", f)
+            c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON docs(col, json_extract(data, '{_jpath(f)}'))")
 
     def _conn(self) -> sqlite3.Connection:
         if self._mem is not None:
@@ -160,9 +173,15 @@ class Client:
         c = getattr(self._local, "c", None)
         if c is None:
             c = sqlite3.connect(self.path, timeout=30, isolation_level=None, check_same_thread=False)
-            c.execute("PRAGMA journal_mode=WAL")
-            c.execute("PRAGMA synchronous=NORMAL")
+            c.execute("PRAGMA journal_mode=WAL")       # قرّاء متزامنون مع كاتب واحد بلا حجب
+            c.execute("PRAGMA synchronous=NORMAL")     # آمن تمامًا مع WAL (لا تلف عند انقطاع الكهرباء)، وأسرع بكثير من FULL
             c.execute("PRAGMA busy_timeout=30000")
+            c.execute("PRAGMA cache_size=-65536")      # 64MB ذاكرة صفحات لكل اتصال
+            c.execute("PRAGMA mmap_size=268435456")    # قراءة عبر الذاكرة المعيّنة (256MB) بدل نسخ الصفحات
+            c.execute("PRAGMA temp_store=MEMORY")
+            c.execute("PRAGMA wal_autocheckpoint=1000")
+            c.execute("PRAGMA journal_size_limit=67108864")  # ملف WAL لا يتضخم فوق 64MB بعد كل checkpoint
+            c.execute("PRAGMA optimize=0x10002")       # إحصاءات المخطِّط للفهارس (سريع عند كل اتصال)
             self._local.c = c
         return c
 
@@ -184,6 +203,23 @@ class Client:
         self._conn().execute("INSERT INTO docs(col, id, data, updated) VALUES (?,?,?,?) "
                              "ON CONFLICT(col, id) DO UPDATE SET data=excluded.data, updated=excluded.updated",
                              (col, id_, json.dumps(data, ensure_ascii=False, separators=(",", ":")), time.time()))
+
+    def maintenance(self, full: bool = False) -> dict:
+        """صيانة دورية: دمج WAL في الملف الرئيسي وتقليصه + تحديث إحصاءات الفهارس (+ فحص سلامة كامل عند full)."""
+        c = self._conn()
+        busy, wal_pages, moved = c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        c.execute("PRAGMA optimize")
+        check = c.execute("PRAGMA integrity_check" if full else "PRAGMA quick_check").fetchone()[0]
+        return {"checkpoint_busy": bool(busy), "wal_pages": wal_pages, "moved": moved, "integrity": check}
+
+    def health(self) -> dict:
+        c = self._conn()
+        page, count, free = (c.execute(f"PRAGMA {p}").fetchone()[0] for p in ("page_size", "page_count", "freelist_count"))
+        wal = self.path + "-wal"
+        return {"backend": "sqlite", "path": self.path, "journal_mode": c.execute("PRAGMA journal_mode").fetchone()[0],
+                "size_mb": round(page * count / 1e6, 2), "free_mb": round(page * free / 1e6, 2),
+                "wal_mb": round(os.path.getsize(wal) / 1e6, 2) if os.path.exists(wal) else 0.0,
+                "docs": c.execute("SELECT COUNT(*) FROM docs").fetchone()[0], "indexes": list(INDEXED)}
 
     def backup(self, dest: str):
         """نسخة احتياطية متّسقة أثناء العمل (SQLite backup API)."""
@@ -306,10 +342,16 @@ class BaseQuery:
 
     def _rows(self) -> list:
         sql, args = "SELECT id, data FROM docs WHERE col=?", [self._col]
-        for f, op, v in self._filters:  # فلترة أولية داخل SQLite لنصوص المساواة (أسرع)؛ التحقق الكامل في بايثون
-            if getattr(op, "name", op) in ("==", "EQUAL") and isinstance(v, str):
-                sql += " AND json_extract(data, ?) = ?"
-                args += ["$." + ".".join(f'"{p}"' for p in f.split(".")), v]
+        for f, op, v in self._filters:  # فلترة أولية داخل SQLite (تستخدم الفهارس)؛ التحقق الكامل بدلالة Firestore في بايثون
+            if not _SAFE_FIELD.match(f):
+                continue
+            name = getattr(op, "name", op)
+            if name in ("==", "EQUAL") and isinstance(v, str):
+                sql += f" AND json_extract(data, '{_jpath(f)}') = ?"
+                args.append(v)
+            elif name in (">=", ">", "GREATER_THAN", "GREATER_THAN_OR_EQUAL") and isinstance(v, (int, float)) and not isinstance(v, bool):
+                sql += f" AND json_extract(data, '{_jpath(f)}') >= ?"  # مجموعة أوسع دائمًا (النصوص والكائنات > الأرقام في SQLite)
+                args.append(v)
         sql += " ORDER BY id"
         out = []
         for id_, raw in self._c._conn().execute(sql, args):

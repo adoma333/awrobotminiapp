@@ -42,7 +42,8 @@ import admin_access
 import announcements
 import notifications
 import support
-import support_accounts
+import analytics as tracking
+import cards
 import ton
 import tonadmin
 import growth
@@ -159,11 +160,11 @@ async def lifespan(_app):
     threading.Thread(target=lambda: _safe(backfill_servers), daemon=True, name="servers-backfill").start()
     _safe(lambda: tonadmin.load_override(db))
     _safe(lambda: announcements.seed_default(db))
-    _safe(lambda: support_accounts.get(db, notify_admins).start())
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "weekly"), "cron", day_of_week="mon", hour=9, id="digest_weekly")
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "monthly"), "cron", day=1, hour=9, id="digest_monthly")
     _scheduler.add_job(retry_inbox, "interval", seconds=60, id="webhook_inbox_retry")
     _scheduler.add_job(cleanup_share_media, "cron", hour=4, id="share_media_cleanup")
+    _scheduler.add_job(lambda: _safe(lambda: tracking.cleanup(db)), "cron", hour=4, minute=20, id="analytics_cleanup")
     _scheduler.add_job(_leaderboard_tick, "interval", seconds=leaderboard.TICK_SEC, id="leaderboard_tick")
     _scheduler.add_job(lambda: reminders.run_renewal_reminders(db, tg, WEBAPP_URL), "cron", hour=10, id="renewal_reminders")
     _scheduler.add_job(scan_ton_payments, "interval", seconds=60, id="ton_scan")  # يتجاهل الدورة إن لم تُضبط محفظة
@@ -199,11 +200,94 @@ def _tg_call(method: str, params: dict) -> dict:
 
 def tg(method: str, **params) -> dict:
     """استدعاء Telegram Bot API مع إعادة محاولة بتراجع أُسّي على أعطال الشبكة و429/5xx.
-    لا يرفع استثناء؛ يرجع {'ok': False} عند الفشل النهائي."""
+    لا يرفع استثناء؛ يرجع {'ok': False} عند الفشل النهائي.
+    رسائل المستخدمين (sendMessage) تُرسل مع بطاقة GIF متحركة بتصميم AW إن كانت مفعّلة (انظر cards_send)."""
+    if method == "sendMessage":
+        res = cards_send(params)
+        if res is not None:
+            return res
+        params.pop("_card", None)
     try:
         return _tg_call(method, params)
     except (httpx.HTTPError, ValueError, RetryableError) as e:
         return {"ok": False, "description": str(e)}
+
+
+# ───────────────────────── بطاقات GIF لرسائل البوت ─────────────────────────
+CARDS_DOC = ("config", "cards")
+CARD_FILES = "card_files"  # مفتاح البطاقة → file_id في تلجرام (رفع مرة واحدة لكل تصميم)
+_CARDS_CFG = {"v": None, "at": 0.0}
+_ANIM_DROP = ("disable_web_page_preview", "link_preview_options", "entities")
+
+
+def cards_config() -> dict:
+    if _CARDS_CFG["v"] is None or time.time() - _CARDS_CFG["at"] > 30:
+        snap = db.collection(CARDS_DOC[0]).document(CARDS_DOC[1]).get()
+        cfg = {"enabled": True, "kinds": {k: True for k in cards.KINDS}}
+        if snap.exists:
+            d = snap.to_dict() or {}
+            cfg["enabled"] = bool(d.get("enabled", True))
+            cfg["kinds"].update({k: bool(v) for k, v in (d.get("kinds") or {}).items() if k in cards.KINDS})
+        _CARDS_CFG.update(v=cfg, at=time.time())
+    return _CARDS_CFG["v"]
+
+
+def _card_target(chat_id) -> bool:
+    """البطاقات للمستخدمين فقط: لا للأدمن ولا الفريق ولا القنوات/المجموعات ولا حساب تنبيهات الدعم."""
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return False
+    if cid <= 0 or cid in ADMIN_IDS or str(cid) in admin_access.staff_members(db):
+        return False
+    return str(cid) != str(support.get_config(db).get("support_chat_id") or "")
+
+
+def _tg_upload(method: str, params: dict, field: str, path: str, mime: str) -> dict:
+    data = {k: (json.dumps(v) if isinstance(v, (dict, list)) else str(v).lower() if isinstance(v, bool) else str(v)) for k, v in params.items()}
+    try:
+        with open(path, "rb") as f:
+            return raise_for_retryable(http.post(f"{TG_API}/{method}", data=data, files={field: (os.path.basename(path), f, mime)}, timeout=60)).json()
+    except (httpx.HTTPError, OSError, ValueError, RetryableError) as e:
+        return {"ok": False, "description": str(e)}
+
+
+def cards_send(params: dict) -> dict | None:
+    """يرسل الرسالة كبطاقة متحركة + النص تعليقًا. يرجع None إن لم تنطبق (فتُرسل نصًا عاديًا كما هي)."""
+    opt = params.get("_card", None)
+    text = str(params.get("text") or "")
+    if opt is False or not text or len(text) > 1000 or "token=" in text:
+        return None
+    try:
+        cfg = cards_config()
+        if not cfg["enabled"] or not _card_target(params.get("chat_id")):
+            return None
+        opt = opt if isinstance(opt, dict) else {}
+        lang = opt.get("lang") or ("ar" if re.search(r"[\u0600-\u06FF]", text) else "en")
+        spec = cards.spec_for(text, lang, opt.get("kind"), opt.get("title"), opt.get("hl"))
+        if not cfg["kinds"].get(spec["kind"], True):
+            return None
+        key = cards.cache_key(spec)
+        payload = {k: v for k, v in params.items() if k not in ("text", "_card") + _ANIM_DROP}
+        payload["caption"] = text
+        if params.get("entities"):
+            payload["caption_entities"] = params["entities"]
+        ref = db.collection(CARD_FILES).document(key)
+        snap = ref.get()
+        fid = (snap.to_dict() or {}).get("file_id") if snap.exists else None
+        if fid:
+            res = _tg_call("sendAnimation", {**payload, "animation": fid})
+        else:
+            res = _tg_upload("sendAnimation", payload, "animation", cards.get_file(spec), "image/gif")
+            anim = ((res.get("result") or {}).get("animation") or (res.get("result") or {}).get("document") or {}) if res.get("ok") else {}
+            if anim.get("file_id"):
+                ref.set({"file_id": anim["file_id"], "kind": spec["kind"], "lang": spec["lang"], "title": spec["title"], "hl": spec["hl"], "at": time.time()})
+        if res.get("ok"):
+            return res
+        log.warning("card send failed, falling back to text: %s", str(res.get("description"))[:200])
+    except Exception:  # noqa: BLE001 — البطاقة إضافة؛ الرسالة النصية تُرسل دائمًا
+        log.exception("card send")
+    return None
 
 
 # ───────────────────────── التحقق من هوية المستخدم ─────────────────────────
@@ -474,15 +558,9 @@ def _bot_username():
 
 
 def _support_public() -> dict:
-    """رابط الدعم الموحّد (سماعة الرأس + زر "تواصل مع الدعم"): بوت الدعم، أو حساب بشري، أو الرابط العام."""
+    """الدعم داخل التطبيق حصريًا (مركز الدعم): لا بوت دعم ولا حسابات تلجرام."""
     cfg = support.get_config(db)
-    if support.account_mode():  # حساب تلجرام حقيقي فعّال: كل التواصل معه حصريًا
-        return {"support_url": f"https://t.me/{support.ACCOUNT['username']}", "support_bot": "", "support_mode": "account",
-                "support_phone": cfg.get("support_phone") or ""}
-    bot = cfg.get("support_bot_username") or ("" if cfg.get("support_bot_token") else _bot_username())
-    url = support.contact_link(cfg, _bot_username()) or billing.get_settings(db).get("support_url") or ""
-    return {"support_url": url, "support_bot": bot or "", "support_mode": "bot" if bot else ("account" if url else "none"),
-            "support_phone": cfg.get("support_phone") or ""}
+    return {"support_url": "", "support_bot": "", "support_mode": "app", "support_phone": cfg.get("support_phone") or ""}
 
 
 def _public_settings() -> dict:
@@ -500,6 +578,8 @@ def _public_settings() -> dict:
         "pay_stars": bool(s.get("pay_stars_enabled", True)),
         "announcement_ar": s.get("announcement_ar") or "",
         "announcement_en": s.get("announcement_en") or "",
+        "analytics": bool(tracking.get_config(db).get("enabled")),
+        "pixels": tracking.public_pixels(tracking.get_config(db)),
     }
 
 
@@ -642,8 +722,8 @@ def handle_callback(cq: dict):
 
     if data == "noop":
         return answer()
-    if support.handle_callback(db, cq):  # تقييم الدعم، طلب موظف، أزرار الموظف
-        return None
+    if re.match(r"(csat|human|act|sup):", data):  # أزرار دعم قديمة في البوت: الدعم أصبح داخل التطبيق
+        return answer("🎧 الدعم أصبح داخل التطبيق — افتح مركز الدعم من التطبيق.", True)
     if admin["id"] not in ADMIN_IDS:
         return answer("غير مصرّح لك بهذا الإجراء", True)
 
@@ -834,39 +914,17 @@ def handle_private_message(msg: dict):
 
 
 def route_to_support(msg: dict):
-    """رسائل المستخدمين للبوت الرئيسي: إن كان هو بوت الدعم يعالجها المساعد، وإلا يوجّه لبوت الدعم المستقل."""
-    cfg = support.get_config(db)
-    if support.account_mode() or cfg.get("support_bot_token"):  # الردود تصدر حصريًا من الحساب/البوت المخصص
-        if support.handle_agent_reply(db, msg):
-            return None
-        link = support.contact_link(cfg, None)
-        if link:
-            lang = "ar" if (msg["from"].get("language_code") or "ar").startswith("ar") else "en"
-            tg("sendMessage", chat_id=msg["chat"]["id"],
-               text="🎧 للدعم الفني تواصل مع مساعدنا الذكي:" if lang == "ar" else "🎧 For support, chat with our smart assistant:",
-               reply_markup={"inline_keyboard": [[{"text": "🎧 Support", "url": link}]]})
-        return None
-    support.handle_message(db, msg, _bot_username())
+    """أي رسالة نصية للبوت من مستخدم: الدعم أصبح داخل التطبيق — نرسل له زر فتح مركز الدعم مباشرة."""
+    lang = "ar" if (msg["from"].get("language_code") or "ar").startswith("ar") else "en"
+    text = (msg.get("text") or "").strip()
+    m = re.search(r"ERR-[A-Z0-9]{6}", text.upper())
+    url = f"{WEBAPP_URL}?view=support" + (f"&err={m.group(0)}" if m else "")
+    tg("sendMessage", chat_id=msg["chat"]["id"],
+       text="🎧 الدعم الفني أصبح داخل التطبيق: محادثة فورية مع المساعد الذكي وفريق الدعم، مع إرفاق الصور ومتابعة تذكرتك."
+       if lang == "ar" else "🎧 Support now lives inside the app: instant chat with our smart assistant and team, screenshots and ticket tracking.",
+       reply_markup={"inline_keyboard": [[{"text": "🎧 فتح مركز الدعم" if lang == "ar" else "🎧 Open Support Center", "web_app": {"url": url}}]]}
+       if WEBAPP_URL.startswith("https://") else None)
     return None
-
-
-def _support_secret() -> str:
-    return hmac.new(WEBHOOK_SECRET.encode(), b"support-bot", hashlib.sha256).hexdigest()[:48]
-
-
-@app.post("/api/support-webhook")
-def support_webhook(update: dict, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
-    """webhook بوت الدعم المستقل (توكن من لوحة التحكم)."""
-    if not hmac.compare_digest(x_telegram_bot_api_secret_token or "", _support_secret()):
-        raise HTTPException(403, "forbidden")
-    try:
-        if update.get("callback_query"):
-            support.handle_callback(db, update["callback_query"])
-        elif update.get("message"):
-            support.handle_message(db, update["message"])
-    except Exception:  # noqa: BLE001
-        log.exception("support webhook error")
-    return {"ok": True}
 
 
 @app.post("/api/telegram-webhook")
@@ -1057,6 +1115,7 @@ class AdminGuard:
 
 
 app.add_middleware(AdminGuard)
+app.add_middleware(tracking.ApiTimer)  # زمن استجابة كل مسار API ونسبة أخطائه (لوحة التحليلات ← الأداء)
 
 
 def _account_type(server) -> str:
@@ -2614,6 +2673,8 @@ def system_status(admin_id: int = Depends(get_current_admin)):
     try:
         db.collection("config").document("settings").get()
         services["firestore"] = _timed_status(t0)
+        if hasattr(db, "health"):  # SQLite: الحجم ووضع WAL وحجم ملفه
+            services["firestore"]["db"] = db.health()
     except Exception as e:  # noqa: BLE001
         services["firestore"] = {"status": "down", "error": str(e)[:200]}
 
@@ -2839,8 +2900,7 @@ class ClientError(BaseModel):
 
 
 def _support_start_link(ref: str) -> str:
-    cfg = support.get_config(db)
-    return support.contact_link(cfg, _bot_username(), f"err_{ref.replace('ERR-', '')}") or _support_public()["support_url"]
+    return ""  # زر «تواصل مع الدعم» يفتح مركز الدعم داخل التطبيق مع رقم الخطأ
 
 
 _ERR_RL: dict = {}
@@ -2928,8 +2988,7 @@ support.PAYMENT_CHECKER["fn"] = _recheck_payment_for
 def admin_support_config(admin_id: int = Depends(get_current_admin)):
     cfg = support.get_config(db)
     return {**support.public_config(cfg), "default_prompt": support.DEFAULT_PROMPT, "ai_available": support.ai_available(cfg), "model_default": support.MODEL_DEFAULT,
-            "main_bot_username": _bot_username(), "contact_url": _support_public()["support_url"],
-            "fix_actions": list(support.FIX_ACTIONS)}
+            "main_bot_username": _bot_username(), "fix_actions": list(support.FIX_ACTIONS)}
 
 
 @app.put("/api/admin/support/config")
@@ -2938,20 +2997,8 @@ def admin_support_config_update(patch: dict, admin_id: int = Depends(get_current
         clean = support.clean_config(patch)
     except (ValueError, TypeError) as e:
         raise HTTPException(422, str(e))
-    cur = support.get_config(db)
-    hook = None
-    if "support_bot_token" in clean and secretbox.open_(clean["support_bot_token"]) != secretbox.open_(cur.get("support_bot_token") or ""):
-        if clean["support_bot_token"]:
-            if not (WEBAPP_URL or "").startswith("https://"):
-                raise HTTPException(422, "webapp_url_required")
-            hook = support.setup_webhook({**cur, **clean}, f"{WEBAPP_URL}/api/support-webhook", _support_secret())
-            if not hook["ok"]:
-                raise HTTPException(422, f"bot_token_rejected: {hook.get('description')}")
-            clean["support_bot_username"] = hook.get("username") or ""
-        else:
-            clean["support_bot_username"] = ""
     cfg = support.save_config(db, clean)
-    return {**support.public_config(cfg), "webhook": hook}
+    return support.public_config(cfg)
 
 
 @app.get("/api/admin/support/tickets")
@@ -3136,6 +3183,9 @@ def backup_local_db(keep: int = 14):
     db.backup(os.path.join(d, f"aw-{time.strftime('%Y%m%d')}.db"))
     for old in sorted(f for f in os.listdir(d) if f.startswith("aw-") and f.endswith(".db"))[:-keep]:
         os.remove(os.path.join(d, old))
+    res = db.maintenance(full=time.gmtime().tm_wday == 6)  # بعد النسخة: دمج WAL وتقليصه + فحص سلامة (كامل أسبوعيًا)
+    if res.get("integrity") != "ok":
+        notify_admins(f"⚠️ فحص سلامة قاعدة البيانات: {res.get('integrity')}\nالنسخ الاحتياطية في data/backups.")
 
 
 def run_gateway_tick():
@@ -3314,83 +3364,224 @@ def admin_alerts(since: float = 0, admin_id: int = Depends(get_current_admin)):
     return {"now": now, "alerts": out[:60], "support": support_stats()}
 
 
-# ═══════════════════════════ حسابات تلجرام الحقيقية للدعم (Failover) ═══════════════════════════
+# ═══════════════════════════ مركز الدعم داخل التطبيق ═══════════════════════════
 support.ACTIONS["unlink"] = do_unlink
-support.ACTIONS["app_link"] = lambda: f"https://t.me/{_bot_username()}?start=relink" if _bot_username() else WEBAPP_URL
+support.ACTIONS["app_link"] = lambda: f"{WEBAPP_URL}?view=link"  # زر داخل مركز الدعم يفتح شاشة الربط
+support.DB["v"] = db
+support.APP_URL["v"] = WEBAPP_URL
+support.bot_call = lambda _token, method, **p: tg(method, **p)  # تنبيهات الدعم تمر بنفس المسار (بطاقات GIF + إعادة المحاولة)
+SUPPORT_MEDIA = os.getenv("SUPPORT_MEDIA_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "support")
+_SUP_NAME = re.compile(r"^[A-Za-z0-9_-]{22}\.(jpg|png|webp)$")
 
 
-def _accounts():
-    return support_accounts.get(db, notify_admins)
-
-
-class AccountBegin(BaseModel):
-    phone: str = Field(pattern=r"^\+?\d{7,15}$")
-    api_id: int = Field(ge=1000, le=99999999999)
-    api_hash: str = Field(pattern=r"^[a-f0-9]{32}$")
-    priority: int = Field(default=1, ge=1, le=99)
-
-
-class AccountVerify(BaseModel):
-    code: str = Field(default="", max_length=10)
-    password: str = Field(default="", max_length=200)
-
-
-class AccountPatch(BaseModel):
-    priority: int | None = Field(default=None, ge=1, le=99)
-    enabled: bool | None = None
-    reset: bool = False
-
-
-@app.get("/api/admin/support/accounts")
-def admin_support_accounts(admin_id: int = Depends(get_current_admin)):
-    m = _accounts()
-    return {"rows": [support_accounts.public_row(d) for d in sorted(db.collection(support_accounts.COL).stream(),
-                                                                    key=lambda d: int((d.to_dict() or {}).get("priority") or 99))],
-            "active": m.active_id, "active_username": support.ACCOUNT["username"], "account_mode": support.account_mode(),
-            "telethon": _telethon_ok()}
-
-
-def _telethon_ok() -> bool:
+def save_support_image(b64: str) -> dict:
+    """لقطة شاشة من المستخدم (≤ 3MB). الاسم عشوائي 128 بت (رابط غير قابل للتخمين)، والمساعد الذكي يقرأ الصورة."""
     try:
-        import telethon  # noqa: F401
-        return True
-    except ImportError:
-        return False
+        raw = base64.b64decode(b64.split(",")[-1], validate=True)
+    except (ValueError, TypeError):
+        raise HTTPException(422, "bad_image")
+    ext = _image_ext(raw)
+    if len(raw) > 3_000_000 or not ext:
+        raise HTTPException(422, "bad_image")
+    os.makedirs(SUPPORT_MEDIA, exist_ok=True)
+    name = f"{secrets.token_urlsafe(16)[:22]}.{ext}"
+    path = os.path.join(SUPPORT_MEDIA, name)
+    with open(path, "wb") as f:
+        f.write(raw)
+    return {"url": f"/api/support/media/{name}", "file": path}
 
 
-@app.post("/api/admin/support/accounts")
-def admin_support_account_begin(body: AccountBegin, admin_id: int = Depends(get_current_admin)):
-    if not _telethon_ok():
-        raise HTTPException(503, "telethon_missing")
-    try:
-        aid = _accounts().call(_accounts().begin_login(body.phone, body.api_id, body.api_hash, body.priority))
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(422, f"login_failed: {type(e).__name__}")
-    return {"id": aid, "status": "pending_code"}
+@app.get("/api/support/media/{name}")
+def support_media(name: str):
+    path = os.path.join(SUPPORT_MEDIA, name)
+    if not _SUP_NAME.match(name) or not os.path.exists(path):
+        raise HTTPException(404, "not_found")
+    return FileResponse(path, media_type=_MEDIA_TYPES[name.rsplit(".", 1)[-1]], headers={"Cache-Control": "private, max-age=86400"})
 
 
-@app.post("/api/admin/support/accounts/{aid}/verify")
-def admin_support_account_verify(aid: str, body: AccountVerify, admin_id: int = Depends(get_current_admin)):
-    try:
-        res = _accounts().call(_accounts().complete_login(aid, body.code.strip(), body.password), timeout=90)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(422, f"verify_failed: {type(e).__name__}")
+def _support_client_cfg(cfg: dict, lang: str) -> dict:
+    return {"enabled": bool(cfg.get("enabled")), "ai_online": bool(cfg.get("ai_enabled") and support.ai_available(cfg)),
+            "welcome": cfg.get(f"welcome_{lang}") or cfg.get("welcome_ar"), "quick": cfg.get(f"quick_{lang}") or [],
+            "sounds": bool(cfg.get("sounds_enabled", True)), "attachments": bool(cfg.get("attachments_enabled", True)),
+            "phone": cfg.get("support_phone") or ""}
+
+
+@app.get("/api/support/thread")
+def support_thread(init_data: str, lang: str = "ar"):
+    user = verify_init_data(init_data)
+    cfg = support.get_config(db)
+    return {**support.app_thread(db, user["id"]), "config": _support_client_cfg(cfg, "en" if lang == "en" else "ar")}
+
+
+class SupportSend(BaseModel):
+    init_data: str
+    text: str = Field(default="", max_length=2000)
+    lang: str = Field(default="ar", pattern="^(ar|en)$")
+    error_ref: str = Field(default="", max_length=12)
+    image: str = Field(default="", max_length=4_200_000)
+
+
+@app.post("/api/support/send")
+def support_send(body: SupportSend):
+    user = verify_init_data(body.init_data)
+    cfg = support.get_config(db)
+    if not cfg.get("enabled"):
+        raise HTTPException(503, "support_disabled")
+    text = body.text.strip()
+    image = None
+    if body.image:
+        if not cfg.get("attachments_enabled", True):
+            raise HTTPException(403, "attachments_disabled")
+        image = save_support_image(body.image)
+    ref = body.error_ref.strip().upper() or None
+    if ref and not re.fullmatch(r"ERR-[A-Z0-9]{6}", ref):
+        ref = None
+    if not text and not image and not ref:
+        raise HTTPException(422, "empty_message")
+    if text and not image and support.text_command(db, cfg, user["id"], text, body.lang, "app"):
+        return {"ok": True}
+    support.handle_user_text(db, user["id"], text, body.lang, "app", ref, image)
+    return {"ok": True}
+
+
+class SupportAction(BaseModel):
+    init_data: str
+    kind: str = Field(pattern="^(csat|human|act)$")
+    tid: str = Field(pattern=r"^T[A-Z0-9]{5}$")
+    arg: str | None = Field(default=None, max_length=5)
+
+
+@app.post("/api/support/action")
+def support_action(body: SupportAction):
+    user = verify_init_data(body.init_data)
+    res = support.app_action(db, user["id"], body.kind, body.tid, body.arg)
     if not res.get("ok"):
-        raise HTTPException(422, res.get("reason") or "verify_failed")
+        raise HTTPException(404 if res.get("reason") == "not_found" else 422, res.get("reason") or "invalid")
     return res
 
 
-@app.put("/api/admin/support/accounts/{aid}")
-def admin_support_account_update(aid: str, body: AccountPatch, admin_id: int = Depends(get_current_admin)):
-    _accounts().update(aid, body.model_dump(exclude_none=True))
-    return {"ok": True, "active": _accounts().active_id}
+# ─── التعلّم: اقتراحات قاعدة المعرفة من التذاكر المحلولة ───
+@app.get("/api/admin/support/suggestions")
+def admin_kb_suggestions(admin_id: int = Depends(get_current_admin)):
+    rows = [{"id": d.id, **(d.to_dict() or {})} for d in db.collection(support.SUGGESTIONS).stream()]
+    rows = [r for r in rows if r.get("status") == "pending"]
+    rows.sort(key=lambda r: (-(r.get("score") or 0), -(r.get("at") or 0)))
+    return {"rows": rows[:200]}
 
 
-@app.delete("/api/admin/support/accounts/{aid}")
-def admin_support_account_delete(aid: str, admin_id: int = Depends(get_current_admin)):
-    _accounts().remove(aid)
+class KbApprove(BaseModel):
+    q: str = Field(min_length=3, max_length=400)
+    a: str = Field(min_length=3, max_length=1500)
+
+
+@app.post("/api/admin/support/suggestions/{sid}/approve")
+def admin_kb_suggestion_approve(sid: str, body: KbApprove, admin_id: int = Depends(get_current_admin)):
+    ref = db.collection(support.SUGGESTIONS).document(sid)
+    if not ref.get().exists:
+        raise HTTPException(404, "not_found")
+    db.collection(support.KB).document().set({"q": body.q.strip(), "a": body.a.strip(), "at": time.time(), "by": admin_id, "from_ticket": sid})
+    ref.set({"status": "approved", "reviewed_by": admin_id, "reviewed_at": time.time()}, merge=True)
     return {"ok": True}
 
+
+@app.delete("/api/admin/support/suggestions/{sid}")
+def admin_kb_suggestion_reject(sid: str, admin_id: int = Depends(get_current_admin)):
+    db.collection(support.SUGGESTIONS).document(sid).set({"status": "rejected", "reviewed_by": admin_id, "reviewed_at": time.time()}, merge=True)
+    return {"ok": True}
+
+
+# ═══════════════════════════ بطاقات GIF لرسائل البوت (لوحة التحكم) ═══════════════════════════
+@app.get("/api/admin/cards")
+def admin_cards(admin_id: int = Depends(get_current_admin)):
+    cfg = cards_config()
+    return {**cfg, "catalog": [{"kind": k, "label": v[0], "title_ar": v[1], "title_en": v[2]} for k, v in cards.KINDS.items()],
+            "cached": sum(1 for _ in db.collection(CARD_FILES).stream())}
+
+
+@app.put("/api/admin/cards")
+def admin_cards_update(patch: dict, admin_id: int = Depends(get_current_admin)):
+    out = {}
+    if "enabled" in patch:
+        out["enabled"] = bool(patch["enabled"])
+    if isinstance(patch.get("kinds"), dict):
+        out["kinds"] = {k: bool(v) for k, v in patch["kinds"].items() if k in cards.KINDS}
+    db.collection(CARDS_DOC[0]).document(CARDS_DOC[1]).set(out, merge=True)
+    _CARDS_CFG["v"] = None
+    return cards_config()
+
+
+@app.get("/api/admin/cards/preview")
+def admin_cards_preview(text: str = "", kind: str = "", lang: str = "ar", title: str = "", hl: str | None = None,
+                        admin_id: int = Depends(get_current_admin)):
+    spec = cards.spec_for(text[:1000], "en" if lang == "en" else "ar", kind or None, title[:34] or None, hl[:14] if hl is not None else None)
+    return FileResponse(cards.get_file(spec), media_type="image/gif", headers={"Cache-Control": "private, max-age=600", "X-Card-Kind": spec["kind"]})
+
+
+@app.delete("/api/admin/cards/cache")
+def admin_cards_cache_clear(admin_id: int = Depends(get_current_admin)):
+    n = 0
+    for d in db.collection(CARD_FILES).stream():
+        db.collection(CARD_FILES).document(d.id).delete()
+        n += 1
+    return {"ok": True, "cleared": n}
+
+
+# ═══════════════════════════ التحليلات وتتبّع الزوار والأداء ═══════════════════════════
+_TRACK_RL: dict = {}
+TRACK_RL_MAX = 120  # دفعات لكل IP في الدقيقة
+
+
+class TrackBody(BaseModel):
+    init_data: str = Field(default="", max_length=8000)
+    vid: str = Field(default="", max_length=40)
+    sid: str = Field(max_length=40)
+    lang: str = Field(default="", max_length=5)
+    device: dict = Field(default_factory=dict)
+    source: dict = Field(default_factory=dict)
+    events: list = Field(default_factory=list, max_length=40)
+
+
+@app.post("/api/track")
+def track(body: TrackBody, request: Request):
+    ip = admin_access.client_ip({k.lower(): v for k, v in request.headers.items()}, request.client.host if request.client else "")
+    now = time.time()
+    hits = [t for t in _TRACK_RL.get(ip, []) if now - t < 60]
+    if len(hits) >= TRACK_RL_MAX:
+        raise HTTPException(429, "too_many")
+    _TRACK_RL[ip] = hits + [now]
+    if len(_TRACK_RL) > 5000:
+        _TRACK_RL.clear()
+    uid = None
+    if body.init_data:
+        try:
+            uid = verify_init_data(body.init_data)["id"]
+        except HTTPException:
+            uid = None  # الزائر يُتتبّع بمعرّفه المجهول فقط
+    device = {**body.device, "ua": request.headers.get("user-agent", "")[:300]}
+    return {"ok": True, "saved": tracking.ingest(db, uid, {**body.model_dump(), "device": device})}
+
+
+@app.get("/api/admin/analytics")
+def admin_analytics(days: int = 30, admin_id: int = Depends(get_current_admin)):
+    return tracking.summary(db, days)
+
+
+@app.get("/api/admin/analytics/user/{uid}")
+def admin_analytics_user(uid: int, admin_id: int = Depends(get_current_admin)):
+    return tracking.journey(db, uid)
+
+
+@app.get("/api/admin/analytics/config")
+def admin_analytics_config(admin_id: int = Depends(get_current_admin)):
+    return tracking.get_config(db)
+
+
+@app.put("/api/admin/analytics/config")
+def admin_analytics_config_update(patch: dict, admin_id: int = Depends(get_current_admin)):
+    try:
+        return tracking.save_config(db, patch)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(422, str(e))
 
 
 # ═══════════════════════════ النمو: كوبونات، هدايا، حملات، أتمتة، قمع، إحالة متدرّجة ═══════════════════════════

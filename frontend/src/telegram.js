@@ -6,8 +6,6 @@ export function setupTelegram() {
   if (!tg) return;
   tg.ready();
   tg.expand();
-  tg.setHeaderColor?.('#000000');
-  tg.setBackgroundColor?.('#000000');
   tg.disableVerticalSwipes?.();
 }
 

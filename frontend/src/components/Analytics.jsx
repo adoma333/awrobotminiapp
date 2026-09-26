@@ -14,7 +14,7 @@ import AnimIcon from './AnimIcon';
 const UP = '#1fa7a0';
 const DOWN = '#e5574b';
 const LINE = '#ff8a00';
-const GRID = 'rgba(255,255,255,0.07)';
+const GRID = 'rgba(128,128,128,0.16)';
 const AXIS = { fill: '#8c8378', fontSize: 11 };
 const compact = (v) => new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(v);
 
@@ -137,7 +137,7 @@ export default function Analytics({ t, lang, data, onReferral }) {
                 <CartesianGrid stroke={GRID} vertical={false} />
                 <XAxis dataKey="k" tick={AXIS} axisLine={false} tickLine={false} />
                 <YAxis tick={AXIS} axisLine={false} tickLine={false} width={40} tickFormatter={compact} />
-                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.04)' }} content={<ChartTip cur={cur} name={t.anPnl} />} />
+                <Tooltip cursor={{ fill: 'rgba(128,128,128,0.08)' }} content={<ChartTip cur={cur} name={t.anPnl} />} />
                 <Bar dataKey="v" shape={<PolarBar />} isAnimationActive />
               </BarChart>
             </ResponsiveContainer>
@@ -154,7 +154,7 @@ export default function Analytics({ t, lang, data, onReferral }) {
                 <CartesianGrid stroke={GRID} vertical={false} />
                 <XAxis dataKey="k" tick={AXIS} axisLine={false} tickLine={false} minTickGap={28} />
                 <YAxis tick={AXIS} axisLine={false} tickLine={false} width={40} tickFormatter={compact} />
-                <Tooltip cursor={{ stroke: 'rgba(255,255,255,0.25)' }} content={<ChartTip cur={cur} name={t.anCumulative} />} />
+                <Tooltip cursor={{ stroke: 'rgba(128,128,128,0.4)' }} content={<ChartTip cur={cur} name={t.anCumulative} />} />
                 <Area type="monotone" dataKey="v" stroke={LINE} strokeWidth={2} fill={LINE} fillOpacity={0.1} activeDot={{ r: 4, stroke: '#100e0c', strokeWidth: 2 }} dot={false} />
               </AreaChart>
             </ResponsiveContainer>

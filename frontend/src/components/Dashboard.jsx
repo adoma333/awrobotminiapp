@@ -63,7 +63,8 @@ export default function Dashboard({ t, lang, data, onRenew, onRewards }) {
         <div className="note announce" role="status">{lang === 'ar' ? data.settings.announcement_ar : data.settings.announcement_en}</div>
       )}
 
-      {!sub?.active && (
+      {/* بطاقة كشط جديدة تأخذ مكان تنبيه «التداول غير مفعّل» حتى لا تتكدّس المستطيلات */}
+      {!sub?.active && !(data.scratch_pending > 0) && (
         <div className="note warn sub-note" role="status">
           <span>{sub ? t.subExpired : t.subNone}</span>
           <button type="button" className="btn soft small" onClick={onRenew}><span>{sub ? t.renew : t.subscribe}</span></button>

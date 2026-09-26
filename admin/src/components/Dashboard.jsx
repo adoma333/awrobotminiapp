@@ -17,6 +17,8 @@ import TonWallet from "./TonWallet";
 import Alerts from "./Alerts";
 import Growth from "./Growth";
 import PaymentGateway from "./PaymentGateway";
+import Analytics from "./Analytics";
+import BotCards from "./BotCards";
 import "../dashboard.css";
 
 const I = {
@@ -35,6 +37,8 @@ const I = {
   announcements: "M4 10v4a1 1 0 0 0 1 1h2l6 4V5L7 9H5a1 1 0 0 0-1 1ZM17 9a4 4 0 0 1 0 6",
   growth: "M3 17l6-6 4 4 8-8M15 7h6v6",
   gateway: "M2 7h20v12H2ZM2 11h20M6 15h4",
+  analytics: "M3 3v18h18M7 15l4-4 3 3 5-6",
+  cards: "M3 5h18v14H3ZM3 9h18M8 14l2 2 4-4",
   ton: "M4 7h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a1 1 0 0 1-1-1V6a2 2 0 0 1 2-2h10M16 13.5h.01",
   sun: "M12 3v2M12 19v2M5 5l1.4 1.4M17.6 17.6 19 19M3 12h2M19 12h2M5 19l1.4-1.4M17.6 6.4 19 5M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8",
   moon: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z",
@@ -45,7 +49,7 @@ const Ico = ({ d }) => (
 
 // الأقسام مجمّعة؛ كل صفحة تظهر فقط لمن يملك صلاحية قسمها
 const GROUPS = [
-  { title: "نظرة عامة", pages: [{ key: "ceo", label: "التقارير والإحصاءات", area: "ceo" }, { key: "system", label: "حالة النظام", area: "system" }] },
+  { title: "نظرة عامة", pages: [{ key: "ceo", label: "التقارير والإحصاءات", area: "ceo" }, { key: "analytics", label: "التحليلات وتتبّع الزوار", area: "ceo" }, { key: "system", label: "حالة النظام", area: "system" }] },
   { title: "المستخدمون", pages: [{ key: "users", label: "المستخدمون", area: "users" }] },
   { title: "المالية", pages: [
     { key: "packages", label: "الباقات", area: "packages" },
@@ -57,13 +61,14 @@ const GROUPS = [
   { title: "الإشعارات", pages: [
     { key: "notifications", label: "إرسال الإشعارات", area: "notifications" },
     { key: "announcements", label: "نافذة التحديثات", area: "notifications" },
+    { key: "cards", label: "بطاقات رسائل البوت", area: "notifications" },
   ] },
   { title: "النمو", pages: [{ key: "growth", label: "النمو والتسويق", area: "packages" }, { key: "leaderboard", label: "ترتيب الأسبوع", area: "settings" }] },
   { title: "الإعدادات", pages: [{ key: "control", label: "مركز التحكم", area: "settings" }, { key: "servers", label: "خوادم MT5", area: "settings" }] },
   { title: "الإدارة", pages: [{ key: "staff", label: "فريق العمل", area: "staff" }, { key: "audit", label: "سجل العمليات", area: "audit" }] },
 ];
 const ICON_OF = { ceo: I.ceo, system: I.system, users: I.users, packages: I.packages, rewards: I.rewards, leaderboard: I.leaderboard, control: I.control,
-  servers: I.servers, staff: I.staff, audit: I.audit, support: I.support, notifications: I.notifications, announcements: I.announcements, ton: I.ton, growth: I.growth, gateway: I.gateway };
+  servers: I.servers, staff: I.staff, audit: I.audit, support: I.support, notifications: I.notifications, announcements: I.announcements, ton: I.ton, growth: I.growth, gateway: I.gateway, analytics: I.analytics, cards: I.cards };
 
 function useMobile() {
   const q = "(max-width: 900px)";
@@ -183,6 +188,8 @@ export default function Dashboard({ me, onLogout }) {
         {page === "ton" && <TonWallet canWrite={canWrite("ton")} />}
         {page === "growth" && <Growth canWrite={canWrite("packages")} />}
         {page === "gateway" && <PaymentGateway canWrite={canWrite("ton")} />}
+        {page === "analytics" && <Analytics canWrite={canWrite("ceo")} />}
+        {page === "cards" && <BotCards canWrite={canWrite("notifications")} />}
       </main>
     </div>
   );

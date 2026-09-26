@@ -104,13 +104,19 @@ export const api = {
   tonExecute: (otp_id, code) => request("/ton/execute", { method: "POST", body: JSON.stringify({ otp_id, code }) }),
   tonTransferResult: (data) => request("/ton/transfer-result", { method: "POST", body: JSON.stringify(data) }),
   tonLog: () => request("/ton/log"),
-  // حسابات تلجرام الحقيقية للدعم (احتياطية بالأولوية)
-  supportAccounts: () => request("/support/accounts"),
-  addSupportAccount: (data) => request("/support/accounts", { method: "POST", body: JSON.stringify(data) }),
-  verifySupportAccount: (id, code, password) =>
-    request(`/support/accounts/${encodeURIComponent(id)}/verify`, { method: "POST", body: JSON.stringify({ code, password }) }),
-  updateSupportAccount: (id, patch) => request(`/support/accounts/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }),
-  deleteSupportAccount: (id) => request(`/support/accounts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  // التعلّم الذاتي للدعم
+  kbSuggestions: () => request("/support/suggestions"),
+  approveSuggestion: (id, q, a) => request(`/support/suggestions/${encodeURIComponent(id)}/approve`, { method: "POST", body: JSON.stringify({ q, a }) }),
+  rejectSuggestion: (id) => request(`/support/suggestions/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  // التحليلات وتتبّع الزوار
+  analytics: (days) => request(`/analytics?days=${days || 30}`),
+  analyticsUser: (uid) => request(`/analytics/user/${encodeURIComponent(uid)}`),
+  analyticsConfig: () => request("/analytics/config"),
+  saveAnalyticsConfig: (patch) => request("/analytics/config", { method: "PUT", body: JSON.stringify(patch) }),
+  // بطاقات GIF لرسائل البوت
+  cards: () => request("/cards"),
+  saveCards: (patch) => request("/cards", { method: "PUT", body: JSON.stringify(patch) }),
+  clearCards: () => request("/cards/cache", { method: "DELETE" }),
   // النمو والتسويق
   funnel: (campaign) => request(`/growth/funnel${campaign ? `?campaign=${encodeURIComponent(campaign)}` : ""}`),
   coupons: () => request("/growth/coupons"),

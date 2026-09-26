@@ -3,13 +3,27 @@ import logo from '../assets/logo-wordmark.png';
 import Icon from './Icon';
 import { haptic } from '../telegram';
 import { openSupport } from '../support';
+import { useTheme } from '../theme';
 
 /** الشريط العلوي الثابت: الشعار يسارًا دائمًا، وعلى الجهة المقابلة سماعة الدعم والإشعارات. */
 export default function TopBar({ t, showBell, unread = 0, onBell }) {
+  const [, setPref, theme] = useTheme();
   return (
     <header className="app-bar top-bar" dir="ltr">
       <img src={logo} alt="AW Robot" />
       <div className="top-actions">
+        <button
+          type="button"
+          className="top-btn"
+          aria-label={t.themeToggle}
+          title={t.themeToggle}
+          onClick={() => {
+            haptic.select();
+            setPref(theme === 'dark' ? 'light' : 'dark');
+          }}
+        >
+          <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={20} />
+        </button>
         <button
           type="button"
           className="top-btn"

@@ -7,6 +7,8 @@ import { fill } from '../i18n';
 import { fmtDate } from '../format';
 import { copyText, haptic, openTelegramLink } from '../telegram';
 import { openSupport } from '../support';
+import { useTheme } from '../theme';
+import Icon from './Icon';
 import LangSwitch from './LangSwitch';
 import ErrorNote from './ErrorNote';
 
@@ -17,6 +19,7 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
   const code = data.referral_code;
   const link = code && data.bot_username ? `https://t.me/${data.bot_username}?start=${code}` : null;
 
+  const [themePref, setThemePref] = useTheme();
   const [copied, setCopied] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -120,6 +123,18 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
       )}
 
       <div className="section">
+        <h2>{t.themeTitle}</h2>
+        <div className="theme-seg" role="radiogroup" aria-label={t.themeTitle}>
+          {[['dark', 'moon', t.themeDark], ['light', 'sun', t.themeLight], ['auto', 'globe', t.themeAuto]].map(([k, ic, label]) => (
+            <button key={k} type="button" role="radio" aria-checked={themePref === k} className={themePref === k ? 'is-on' : ''} onClick={() => setThemePref(k)}>
+              <Icon name={ic} size={18} />
+              <span>{label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="section">
         <h2>{t.faqTitle}</h2>
         <div className="rows">
           <button type="button" className="row row-link" onClick={onFaq}>
@@ -139,12 +154,10 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
             <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
           </button>
           <FeedbackButton t={t} />
-          {cfg.support_url && (
-            <button type="button" className="row row-link" onClick={openSupport}>
-              <span className="row-label">{t.supportLink}</span>
-              <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
-            </button>
-          )}
+          <button type="button" className="row row-link" onClick={() => openSupport()}>
+            <span className="row-label">{t.supportLink}</span>
+            <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+          </button>
         </div>
       </div>
 
