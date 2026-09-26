@@ -1789,7 +1789,7 @@ support._gemini_post = _fake_post
 os.environ["GEMINI_API_KEY"] = "AIza" + "t" * 35
 support._GOOD_MODEL.update(m=None, until=0)
 support.llm = REAL_LLM
-cfg_ = {**support.DEFAULT_CONFIG}
+cfg_ = {**support.DEFAULT_CONFIG, "fallback_models": ["gemini-flash-lite-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite"]}
 r_ = support.llm(cfg_, "sys", [{"role": "user", "parts": [{"text": "hi"}]}])
 ok("503 على الأساسي و404 على الاحتياطي الأول → رد من الاحتياطي التالي", r_["parts"][0]["text"] == "OK from gemini-2.5-flash"
    and SEEN_M == ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"])
@@ -1803,6 +1803,12 @@ except support.AiError as e:
 ok("كل النماذج مزدحمة → خطأ واضح بكل المحاولات", _failed)
 support._gemini_post = _orig_post
 os.environ.pop("GEMINI_API_KEY", None)
+support.add_message(DB, "THIST1", "user", "Hi")
+support.add_message(DB, "THIST1", "notice", "✅ استلمنا طلبك — تذكرة #THIST1")
+support.add_message(DB, "THIST1", "user", "")
+support.add_message(DB, "THIST1", "notice", "🔔 تحديث التذكرة")
+h_ = support._history(DB, "THIST1")
+ok("سجل Gemini ينتهي دائمًا برسالة المستخدم وبلا نص فارغ (لا 400)", h_[-1]["role"] == "user" and all(p_.get("text", "x").strip() for c_ in h_ for p_ in c_["parts"]))
 support._GOOD_MODEL.update(m=None, until=0)
 admin_login(555)
 ok("قائمة النماذج الاحتياطية من اللوحة (تحقق من الصيغة)", c.put("/api/admin/support/config", json={"fallback_models": "gemini-2.5-flash, gemini-2.5-flash-lite"}).json()["fallback_models"] == ["gemini-2.5-flash", "gemini-2.5-flash-lite"]

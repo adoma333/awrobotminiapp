@@ -46,7 +46,7 @@ STATUS_LABEL = {"open": ("مستلمة", "Received"), "in_progress": ("قيد ا
 ASYNC = True  # الاختبارات تجعلها False لتنفيذ متزامن
 MODEL_DEFAULT = "gemini-flash-latest"  # أحدث Gemini Flash (مجاني، سريع)؛ قابل للتغيير من اللوحة
 # نماذج احتياطية: عند ازدحام النموذج الأساسي (503/429) أو إيقافه (404) ينتقل الطلب فورًا للتالي
-FALLBACK_MODELS = ["gemini-flash-lite-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+FALLBACK_MODELS = ["gemini-flash-lite-latest"]  # أسماء «latest» تتبع أحدث نموذج متاح تلقائيًا (نماذج 2.x أُوقفت للمفاتيح الجديدة)
 AI_RETRY_DELAY = 4.0  # ثوانٍ قبل محاولة كاملة ثانية إن فشلت كل النماذج (قبل التحويل للبشري)
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -635,7 +635,11 @@ class ModelUnavailable(AiError):
 def _gemini_post(url: str, key: str, body: dict) -> dict:
     res = raise_for_retryable(_ai_http.post(url, json=body, headers={"x-goog-api-key": key}))
     if res.status_code >= 400:
-        raise ModelUnavailable(f"HTTP {res.status_code}: {res.text[:160]}")
+        try:
+            detail = (res.json().get("error") or {}).get("message") or res.text
+        except ValueError:
+            detail = res.text
+        raise ModelUnavailable(f"HTTP {res.status_code}: {' '.join(str(detail).split())[:300]}")
     return res.json()
 
 
@@ -720,6 +724,13 @@ def _history(db, tid: str) -> list:
             out.append({"role": role, "parts": parts})
     while out and out[0]["role"] != "user":
         out.pop(0)
+    # Gemini يرفض (400) محادثة تنتهي بدور model: الرد الأولي/إشعارات الحالة بعد آخر رسالة للمستخدم لا تُرسل
+    while out and out[-1]["role"] != "user":
+        out.pop()
+    for c in out:  # لا أجزاء نصية فارغة
+        for p in c["parts"]:
+            if "text" in p and not p["text"].strip():
+                p["text"] = "[صورة]" if len(c["parts"]) > 1 else "…"
     return out
 
 
