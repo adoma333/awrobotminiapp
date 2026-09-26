@@ -200,8 +200,8 @@ def clean_config(patch: dict) -> dict:
         if k in patch:
             out[k] = [str(x)[:60] for x in (patch[k] or []) if str(x).strip()][:8]
     if "gemini_api_key" in patch:
-        key = str(patch["gemini_api_key"] or "").strip()
-        if key and not re.fullmatch(r"[A-Za-z0-9_-]{30,80}", key):
+        key = re.sub(r"\s+", "", str(patch["gemini_api_key"] or "")).strip("\"'")  # نسخ من المتصفح قد يضيف مسافات/أسطر/علامات تنصيص
+        if key and not re.fullmatch(r"[A-Za-z0-9._-]{20,200}", key):  # يشمل صيغ مفاتيح Google الأحدث (قد تحتوي نقطة وأطول)
             raise ValueError("invalid gemini key")
         out["gemini_api_key"] = secretbox.seal(key)
     if "support_chat_id" in patch:
