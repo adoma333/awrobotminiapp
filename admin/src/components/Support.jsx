@@ -224,7 +224,7 @@ function Settings({ canWrite }) {
           </label>
           <label>النموذج<input className="mono" dir="ltr" placeholder={c.model_default} value={c.model} onChange={set("model")} disabled={!canWrite} /></label>
           <label>نماذج احتياطية عند الازدحام (بفواصل)
-            <input className="mono" dir="ltr" placeholder="gemini-flash-lite-latest, gemini-2.5-flash" value={Array.isArray(c.fallback_models) ? c.fallback_models.join(", ") : c.fallback_models || ""}
+            <input className="mono" dir="ltr" placeholder="gemini-flash-lite-latest" value={Array.isArray(c.fallback_models) ? c.fallback_models.join(", ") : c.fallback_models || ""}
               onChange={(e) => setC({ ...c, fallback_models: e.target.value })} disabled={!canWrite} />
           </label>
         </div>
