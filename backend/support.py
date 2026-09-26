@@ -45,6 +45,9 @@ STATUS_LABEL = {"open": ("مستلمة", "Received"), "in_progress": ("قيد ا
                 "closed": ("مغلقة", "Closed")}
 ASYNC = True  # الاختبارات تجعلها False لتنفيذ متزامن
 MODEL_DEFAULT = "gemini-flash-latest"  # أحدث Gemini Flash (مجاني، سريع)؛ قابل للتغيير من اللوحة
+# نماذج احتياطية: عند ازدحام النموذج الأساسي (503/429) أو إيقافه (404) ينتقل الطلب فورًا للتالي
+FALLBACK_MODELS = ["gemini-flash-lite-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+AI_RETRY_DELAY = 4.0  # ثوانٍ قبل محاولة كاملة ثانية إن فشلت كل النماذج (قبل التحويل للبشري)
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
 
 DEFAULT_PROMPT = """أنت "مساعد AW" — مساعد الدعم الفني الذكي لنظام AW ROBOT، وهو نظام تداول آلي (خوارزمي) يربط حسابات MetaTrader 5 ويديرها ويعرض أداءها داخل Mini App في تلجرام.
@@ -114,6 +117,7 @@ DEFAULT_CONFIG = {
     "support_phone": "",
     "system_prompt": "",        # فارغ = DEFAULT_PROMPT
     "model": MODEL_DEFAULT,
+    "fallback_models": list(FALLBACK_MODELS),
     "gemini_api_key": "",       # مشفّر في قاعدة البيانات؛ فارغ = GEMINI_API_KEY من .env
     "confirm_actions_enabled": True,  # إلغاء الربط/إعادة الربط من الشات بعد تأكيد نعم/لا
     "escalation_threshold": 3,  # عدد ردود المساعد دون حل قبل التصعيد التلقائي
@@ -222,6 +226,13 @@ def clean_config(patch: dict) -> dict:
         if m and not re.fullmatch(r"gemini-[a-z0-9.-]{2,40}", m):
             raise ValueError("invalid model")
         out["model"] = m or MODEL_DEFAULT
+    if "fallback_models" in patch:
+        raw = patch["fallback_models"]
+        items = raw.split(",") if isinstance(raw, str) else list(raw or [])
+        ms = [str(x).strip() for x in items if str(x).strip()]
+        if any(not re.fullmatch(r"gemini-[a-z0-9.-]{2,40}", m) for m in ms):
+            raise ValueError("invalid fallback model")
+        out["fallback_models"] = list(dict.fromkeys(ms))[:4]
     for k, lo, hi in (("escalation_threshold", 1, 10), ("rate_limit_count", 2, 60), ("rate_limit_window", 10, 3600),
                       ("eta_critical_min", 1, 1440), ("eta_medium_min", 1, 2880), ("eta_low_min", 1, 10080)):
         if k in patch:
@@ -616,9 +627,30 @@ class AiError(Exception):
 _ai_http = httpx.Client(timeout=40)
 
 
-@with_backoff(attempts=3)
+class ModelUnavailable(AiError):
+    """النموذج مزدحم/غير متاح (429/5xx/404…) — يُجرَّب النموذج الاحتياطي التالي."""
+
+
+@with_backoff(attempts=2)
 def _gemini_post(url: str, key: str, body: dict) -> dict:
-    return raise_for_retryable(_ai_http.post(url, json=body, headers={"x-goog-api-key": key})).json()
+    res = raise_for_retryable(_ai_http.post(url, json=body, headers={"x-goog-api-key": key}))
+    if res.status_code >= 400:
+        raise ModelUnavailable(f"HTTP {res.status_code}: {res.text[:160]}")
+    return res.json()
+
+
+_GOOD_MODEL = {"m": None, "until": 0.0}  # نموذج احتياطي نجح مؤخرًا: يُجرَّب أولًا لبضع دقائق (ويبقى ثابتًا داخل المحادثة)
+
+
+def _models(cfg: dict) -> list:
+    primary = cfg.get("model") or MODEL_DEFAULT
+    fb = cfg.get("fallback_models")
+    ms = [primary] + [m for m in (FALLBACK_MODELS if fb is None else fb) if m != primary]
+    good = _GOOD_MODEL["m"]
+    if good in ms and time.time() < _GOOD_MODEL["until"]:
+        ms.remove(good)
+        ms.insert(0, good)
+    return ms
 
 
 def llm(cfg: dict, system: str, contents: list) -> dict:
@@ -633,10 +665,24 @@ def llm(cfg: dict, system: str, contents: list) -> dict:
         "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
         "generationConfig": {"temperature": 0.35, "maxOutputTokens": 2048},
     }
-    try:
-        data = _gemini_post(f"{GEMINI_API}/models/{cfg.get('model') or MODEL_DEFAULT}:generateContent", key, body)
-    except (httpx.HTTPError, RetryableError, ValueError) as e:
-        raise AiError(str(e)[:200])
+    data, errors = None, []
+    ms = _models(cfg)
+    for m in ms:
+        try:
+            data = _gemini_post(f"{GEMINI_API}/models/{m}:generateContent", key, body)
+        except (httpx.HTTPError, RetryableError, ValueError, ModelUnavailable) as e:
+            errors.append(f"{m}: {str(e)[:120]}")
+            continue
+        primary = cfg.get("model") or MODEL_DEFAULT
+        if m == primary:
+            _GOOD_MODEL["m"] = None
+        elif errors:  # الأساسي ما زال مزدحمًا: نثبت على الاحتياطي الناجح 5 دقائق
+            _GOOD_MODEL.update(m=m, until=time.time() + 300)
+        if errors:
+            log.warning("gemini fallback used: %s (after %s)", m, "; ".join(errors))
+        break
+    if data is None:
+        raise AiError(" | ".join(errors)[:400])
     cands = data.get("candidates") or []
     if not cands or not (cands[0].get("content") or {}).get("parts"):
         raise AiError(f"blocked/empty: {(data.get('promptFeedback') or {}).get('blockReason') or (cands[0].get('finishReason') if cands else '')}")
@@ -982,6 +1028,10 @@ def _process(db, cfg, uid, text, lang_hint, channel, error_ref, image=None):
             _ticket_ref(db, ticket["id"]).set({"typing": True, "typing_at": time.time()}, merge=True)  # «المساعد يكتب…» في التطبيق
             try:
                 reply, state = ai_reply(db, cfg, uid, get_ticket(db, ticket["id"]) or ticket, lang)
+                if state.get("failed") and not reply:  # كل النماذج مزدحمة لحظيًا: محاولة كاملة ثانية قبل التحويل للبشري
+                    if ASYNC:
+                        time.sleep(AI_RETRY_DELAY)
+                    reply, state = ai_reply(db, cfg, uid, get_ticket(db, ticket["id"]) or ticket, lang)
             finally:
                 _ticket_ref(db, ticket["id"]).set({"typing": False}, merge=True)
         if (state.get("failed") or not reply) and not state.get("confirm"):

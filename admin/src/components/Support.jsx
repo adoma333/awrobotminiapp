@@ -176,7 +176,7 @@ function Settings({ canWrite }) {
     setBusy(true); setMsg("");
     try {
       const keys = ["enabled", "ai_enabled", "auto_fix_enabled", "csat_enabled", "confirm_actions_enabled", "push_bot_on_reply", "attachments_enabled",
-        "sounds_enabled", "learning_enabled", "ai_actions", "welcome_ar", "welcome_en", "support_chat_id", "support_phone", "model",
+        "sounds_enabled", "learning_enabled", "ai_actions", "welcome_ar", "welcome_en", "support_chat_id", "support_phone", "model", "fallback_models",
         "escalation_threshold", "rate_limit_count", "rate_limit_window", "eta_critical_min", "eta_medium_min", "eta_low_min", ...LIST_KEYS];
       const patch = Object.fromEntries(keys.map((k) => [k, LIST_KEYS.includes(k) ? (c[k] || []).map((x) => x.trim()).filter(Boolean) : c[k]]));
       const r = await api.saveSupportConfig({ ...patch, ...extra });
@@ -223,6 +223,10 @@ function Settings({ canWrite }) {
             <input type="password" autoComplete="off" dir="ltr" placeholder={c.has_gemini_key ? "مضبوط ومشفّر — اكتب مفتاحًا جديدًا للتغيير" : c.gemini_env_key ? "يُستخدم مفتاح .env — اختياري" : "AIza…"} value={gkey} onChange={(e) => setGkey(e.target.value.trim())} disabled={!canWrite} />
           </label>
           <label>النموذج<input className="mono" dir="ltr" placeholder={c.model_default} value={c.model} onChange={set("model")} disabled={!canWrite} /></label>
+          <label>نماذج احتياطية عند الازدحام (بفواصل)
+            <input className="mono" dir="ltr" placeholder="gemini-flash-lite-latest, gemini-2.5-flash" value={Array.isArray(c.fallback_models) ? c.fallback_models.join(", ") : c.fallback_models || ""}
+              onChange={(e) => setC({ ...c, fallback_models: e.target.value })} disabled={!canWrite} />
+          </label>
         </div>
         <label className="check"><input type="checkbox" checked={!!c.ai_enabled} onChange={set("ai_enabled")} disabled={!canWrite} />الرد الآلي بالمساعد الذكي</label>
         <label className="check"><input type="checkbox" checked={!!c.auto_fix_enabled} onChange={set("auto_fix_enabled")} disabled={!canWrite} />السماح بالإصلاح الذاتي (مفتاح رئيسي)</label>
