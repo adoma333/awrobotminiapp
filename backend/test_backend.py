@@ -1873,4 +1873,67 @@ ok("اللوحة: سجل التقييمات + المتوسط والتوزيع", 
 c.post("/api/admin/logout")
 support.ai_available = lambda *a: False
 
+# ═════════ 42) استوديو التصميم + SEO + حالة النظام المفصّلة ═════════
+import design  # noqa: E402
+pub0 = c.get("/api/design").json()
+ok("التصميم العام الافتراضي متاح بلا تسجيل دخول", pub0["tokens"]["dark"]["accent"] == "#ff8a00" and pub0["pages"]["home"]["blocks"][0]["id"] == "who")
+ok("الاختصارات الافتراضية لا تكرر الشريط السفلي", not {x["id"] for x in pub0["pages"]["home"]["quick"]["items"]} & {"plans", "rewards", "referral", "analytics", "settings"})
+admin_login(555)
+ad = c.get("/api/admin/design").json()
+ok("اللوحة: مسودة + كتالوج (أيقونات، عناصر، قوالب جاهزة)", "draft" in ad and "rocket" in ad["catalog"]["icons"] and "midnight_gold" in ad["catalog"]["presets"])
+d_ = ad["draft"]
+bad = json.loads(json.dumps(d_)); bad["tokens"]["dark"]["accent"] = "red;}"
+ok("لون غير صالح مرفوض (لا حقن CSS)", c.put("/api/admin/design/draft", json={"design": bad}).status_code == 422)
+bad = json.loads(json.dumps(d_)); bad["pages"]["home"]["blocks"].append({"id": "<script>", "visible": True})
+ok("عنصر غير معروف مرفوض", c.put("/api/admin/design/draft", json={"design": bad}).status_code == 422)
+bad = json.loads(json.dumps(d_)); bad["pages"]["nav"]["items"][0]["icon"] = "evil"
+ok("أيقونة غير معتمدة مرفوضة", c.put("/api/admin/design/draft", json={"design": bad}).status_code == 422)
+new = json.loads(json.dumps(d_))
+new["tokens"]["dark"]["accent"] = "#22C55E"
+new["pages"]["home"]["blocks"] = list(reversed(new["pages"]["home"]["blocks"]))
+new["pages"]["home"]["blocks"][0]["visible"] = False
+new["texts"]["ar"]["balance"] = "رصيدك <b>"
+r = c.put("/api/admin/design/draft", json={"design": new}).json()["draft"]
+ok("حفظ المسودة: ألوان + ترتيب بالسحب + إخفاء + نص مخصص (منقّى)", r["tokens"]["dark"]["accent"] == "#22c55e" and r["pages"]["home"]["blocks"][0]["id"] == "growth"
+   and r["pages"]["home"]["blocks"][0]["visible"] is False and r["texts"]["ar"]["balance"] == "رصيدك b")
+ok("المسودة لا تظهر للمستخدمين قبل النشر", c.get("/api/design").json()["tokens"]["dark"]["accent"] == "#ff8a00")
+p1 = c.post("/api/admin/design/publish", json={"design": r, "note": "لون أخضر"}).json()
+design._PUB["v"] = None
+ok("النشر: يظهر للجميع + رقم إصدار", p1["version"] == 1 and c.get("/api/design").json()["tokens"]["dark"]["accent"] == "#22c55e")
+r2 = json.loads(json.dumps(r)); r2["tokens"]["radius"] = 28
+c.post("/api/admin/design/publish", json={"design": r2, "note": "زوايا"})
+hist = c.get("/api/admin/design/history").json()["rows"]
+ok("سجل التحديثات", [h["version"] for h in hist][:2] == [2, 1] and hist[1]["note"] == "لون أخضر")
+rs = c.post(f"/api/admin/design/history/{hist[1]['id']}/restore").json()
+design._PUB["v"] = None
+ok("الرجوع عن تحديث (استرجاع إصدار سابق كإصدار جديد)", rs["version"] == 3 and c.get("/api/design").json()["tokens"]["radius"] == 14)
+th = c.post("/api/admin/design/themes", json={"name": "صيف", "scopes": ["global", "home"], "tag": "موسمي"}).json()
+ok("حفظ قالب لعدة صفحات (مجموعة قوالب)", set(th["scopes"]) == {"global", "home"} and "tokens" not in th["data"] and "dark" in th["data"]["global"])
+c.post("/api/admin/design/presets/midnight_gold/apply")
+ok("قالب جاهز يُطبَّق على المسودة", c.get("/api/admin/design").json()["draft"]["tokens"]["dark"]["accent"] == "#e5b84b")
+ap = c.post(f"/api/admin/design/themes/{th['id']}/apply", json={"scopes": ["global"]}).json()["draft"]
+ok("تطبيق قالب محفوظ (صفحة محددة من المجموعة)", ap["tokens"]["dark"]["accent"] == "#22c55e")
+support.ai_available = lambda *a: True
+support.llm_text = lambda cfg, system, prompt, max_tokens=400: json.dumps({"explanation": "زدت التباين", "patch": {"radius": 20, "card_style": "gradient"}})
+ai_ = c.post("/api/admin/design/ai", json={"scope": "global", "question": "اجعلها أفخم"}).json()
+ok("اقتراح الذكاء الاصطناعي: شرح + تعديل صالح قبل التطبيق", ai_["explanation"] == "زدت التباين" and ai_["preview"]["tokens"]["radius"] == 20)
+support.llm_text = lambda *a, **k: json.dumps({"explanation": "x", "patch": {"dark": {"accent": "javascript:"}}})
+ok("اقتراح ذكاء غير صالح يُرفض", c.post("/api/admin/design/ai", json={"scope": "global"}).status_code == 422)
+support.llm_text = lambda *a, **k: '{"icon": "rocket", "alternatives": ["bolt", "evil"], "reason": "انطلاقة"}'
+ic = c.post("/api/admin/design/ai-icon", json={"label": "الباقات", "current": "plans"}).json()
+ok("رأي الذكاء في الأيقونة (من القائمة المعتمدة فقط)", ic["icon"] == "rocket" and ic["alternatives"] == ["bolt"])
+support.ai_available = lambda *a: False
+tmp_idx = os.path.join(tempfile.mkdtemp(), "index.html")
+open(tmp_idx, "w").write("<html><head><!--aw-seo--><title>AW</title><!--/aw-seo--></head></html>")
+design.write_seo(tmp_idx, {**design.default()["seo"], "title": 'AW "Pro" <x>', "og_image": "https://cdn.test/og.png"}, "https://example.test")
+html_ = open(tmp_idx).read()
+ok("SEO يُكتب في صفحة التطبيق (عنوان/وصف/OG/canonical) مع تهريب آمن", "<title>AW &quot;Pro&quot; &lt;x&gt;</title>" in html_ and 'og:image" content="https://cdn.test/og.png"' in html_ and "canonical" in html_)
+bad = json.loads(json.dumps(d_)); bad["seo"]["og_image"] = "javascript:alert(1)"
+ok("صورة SEO غير آمنة مرفوضة", c.put("/api/admin/design/draft", json={"design": bad}).status_code == 422)
+main._st_nowpayments = lambda: {"status": "up"}
+ss = c.get("/api/system/status").json()["services"]
+ok("حالة النظام المفصّلة: كل الفروع", all(k in ss for k in ("api", "telegram", "scheduler", "sync", "gateway", "nowpayments", "ai", "storage", "errors", "analytics"))
+   and ss["api"]["details"]["uptime_min"] >= 0 and "jobs" in ss["scheduler"])
+c.post("/api/admin/logout")
+
 print("\nALL BACKEND CHECKS PASSED")

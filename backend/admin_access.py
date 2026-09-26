@@ -31,7 +31,7 @@ PERMS = {
 AREAS = [
     ("/api/admin/users", "users"), ("/api/admin/stats", "users"), ("/api/admin/referrals", "users"),
     ("/api/admin/ceo", "ceo"), ("/api/admin/analytics", "ceo"), ("/api/admin/rewards", "rewards"), ("/api/admin/packages", "packages"),
-    ("/api/admin/settings", "settings"), ("/api/admin/leaderboard", "settings"), ("/api/admin/servers", "settings"),
+    ("/api/admin/settings", "settings"), ("/api/admin/design", "settings"), ("/api/admin/leaderboard", "settings"), ("/api/admin/servers", "settings"),
     ("/api/admin/staff", "staff"), ("/api/admin/audit", "audit"), ("/api/system/status", "system"),
     ("/api/admin/support", "support"), ("/api/admin/errors", "support"), ("/api/admin/notifications", "notifications"),
     ("/api/admin/announcements", "notifications"), ("/api/admin/growth", "packages"), ("/api/admin/export", "settings"), ("/api/admin/media", "notifications"), ("/api/admin/cards", "notifications"), ("/api/admin/ton", "ton"), ("/api/admin/gateway", "ton"),

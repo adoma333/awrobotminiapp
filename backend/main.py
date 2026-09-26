@@ -28,7 +28,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response, Depends
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 import base64
 import billing
 import payments
@@ -44,6 +44,7 @@ import notifications
 import support
 import analytics as tracking
 import cards
+import design
 import ton
 import tonadmin
 import growth
@@ -139,11 +140,17 @@ def notify_admins(text: str):
         tg("sendMessage", chat_id=chat, text=text)
 
 
+_BG = {"err": None, "err_at": 0.0, "count": 0}  # آخر خطأ في المهام الخلفية (لحالة النظام)
+_JOBS: dict = {}  # job_id → {"last": ts, "ok": bool}
+_APP_STARTED = time.time()
+
+
 def _safe(fn):
     try:
         fn()
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
         log.exception("background task %s", getattr(fn, "__name__", fn))
+        _BG.update(err=f"{type(e).__name__}: {str(e)[:160]}", err_at=time.time(), count=_BG["count"] + 1)
 
 
 def record_system_event(kind: str, detail: dict):
@@ -160,6 +167,12 @@ async def lifespan(_app):
     threading.Thread(target=lambda: _safe(backfill_servers), daemon=True, name="servers-backfill").start()
     _safe(lambda: tonadmin.load_override(db))
     _safe(lambda: announcements.seed_default(db))
+    _safe(lambda: design.write_seo(FRONTEND_INDEX, design.published(db)["seo"], WEBAPP_URL))  # SEO المنشور بعد كل بناء للتطبيق
+    from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, EVENT_JOB_MISSED
+
+    def _job_event(ev):
+        _JOBS[ev.job_id] = {"last": time.time(), "ok": ev.code == EVENT_JOB_EXECUTED, "missed": ev.code == EVENT_JOB_MISSED}
+    _scheduler.add_listener(_job_event, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR | EVENT_JOB_MISSED)
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "weekly"), "cron", day_of_week="mon", hour=9, id="digest_weekly")
     _scheduler.add_job(lambda: digest.run_digest(db, tg, "monthly"), "cron", day=1, hour=9, id="digest_monthly")
     _scheduler.add_job(retry_inbox, "interval", seconds=60, id="webhook_inbox_retry")
@@ -2771,9 +2784,163 @@ def system_status(admin_id: int = Depends(get_current_admin)):
         except httpx.HTTPError as e:
             services["n8n"] = {"status": "down", "error": str(e)[:200]}
 
+    services.update(_extended_status())
     order = {"up": 0, "idle": 0, "degraded": 1, "not_configured": 2, "unknown": 2, "down": 3}
     overall = max((s["status"] for s in services.values()), key=lambda s: order.get(s, 1))
     return {"overall": overall, "services": services, "checked_at": time.time()}
+
+
+_STATUS_CACHE: dict = {}
+
+
+def _cached(key: str, ttl: float, fn):
+    hit = _STATUS_CACHE.get(key)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    try:
+        val = fn()
+    except Exception as e:  # noqa: BLE001 — فحص واحد لا يعطّل صفحة الحالة
+        val = {"status": "down", "error": f"{type(e).__name__}: {str(e)[:160]}"}
+    _STATUS_CACHE[key] = (time.time(), val)
+    return val
+
+
+def _st_api():
+    import resource
+    import sys as _sys
+
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    return {"status": "up", "details": {"uptime_min": round((time.time() - _APP_STARTED) / 60), "python": _sys.version.split()[0],
+                                        "memory_mb": round(rss), "threads": threading.active_count(), "pid": os.getpid()},
+            "note": f"آخر خطأ في مهمة خلفية: {_BG['err']}" if _BG["err"] and time.time() - _BG["err_at"] < 3600 else ""}
+
+
+def _st_telegram():
+    t0 = time.time()
+    info = (tg("getWebhookInfo") or {}).get("result") or {}
+    lat = round((time.time() - t0) * 1000)
+    pending = int(info.get("pending_update_count") or 0)
+    err_at = int(info.get("last_error_date") or 0)
+    recent_err = err_at and time.time() - err_at < 900
+    status = "down" if not info else "degraded" if (recent_err or pending > 50) else "up"
+    return {"status": status, "latency_ms": lat, "details": {"webhook": bool(info.get("url")), "pending_updates": pending,
+            "max_connections": info.get("max_connections"), "ip": info.get("ip_address")},
+            "error": (info.get("last_error_message") or "")[:160] if recent_err else ""}
+
+
+def _st_scheduler():
+    jobs = []
+    now = time.time()
+    for j in _scheduler.get_jobs():
+        st = _JOBS.get(j.id) or {}
+        jobs.append({"id": j.id, "next": j.next_run_time.timestamp() if j.next_run_time else None, "last": st.get("last"),
+                     "ok": st.get("ok", True), "missed": st.get("missed", False)})
+    bad = [j for j in jobs if not j["ok"] or j["missed"]]
+    return {"status": "down" if not _scheduler.running else "degraded" if bad else "up",
+            "details": {"running": _scheduler.running, "jobs": len(jobs), "failing": len(bad)}, "jobs": jobs[:40],
+            "note": ", ".join(j["id"] for j in bad)[:200]}
+
+
+def _st_sync():
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    now = time.time()
+    total = err = stale = 0
+    newest = 0.0
+    for d in db.collection("users").where(filter=FieldFilter("status", "==", "approved")).stream():
+        u = d.to_dict() or {}
+        total += 1
+        sy = u.get("sync") or {}
+        if sy.get("state") == "error":
+            err += 1
+        last = float(sy.get("last_ok") or 0)
+        newest = max(newest, last)
+        if last and now - last > 3 * 3600:
+            stale += 1
+    status = "idle" if not total else "down" if newest and now - newest > 6 * 3600 else "degraded" if total and (err + stale) / total > 0.2 else "up"
+    return {"status": status, "details": {"linked_accounts": total, "sync_errors": err, "stale_3h": stale,
+                                          "last_sync_min": round((now - newest) / 60) if newest else None}, "unit": _unit_state("aw-sync")}
+
+
+def _st_gateway():
+    cfg = gateway.get_config(db)
+    if not gateway.active(cfg):
+        return {"status": "not_configured", "note": "بوابة AW Pay غير مفعّلة"}
+    last = (_JOBS.get("gw_tick_run") or {}).get("last") or (_JOBS.get("gw_tick") or {}).get("last")
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    waiting = sum(1 for d in db.collection("payments").where(filter=FieldFilter("status", "==", "waiting")).stream()
+                  if (d.to_dict() or {}).get("method") == "gateway")
+    nets = [n for n in gateway.NETWORKS if gateway.network_ready(cfg, n)]
+    status = "degraded" if last and time.time() - last > 180 else "up"
+    return {"status": status, "details": {"networks": nets, "waiting_invoices": waiting, "last_scan_sec": round(time.time() - last) if last else None}}
+
+
+def _st_nowpayments():
+    if not payments.NP_API_KEY:
+        return {"status": "not_configured"}
+    t0 = time.time()
+    r = http.get("https://api.nowpayments.io/v1/status", timeout=6)
+    lat = round((time.time() - t0) * 1000)
+    ok = r.status_code == 200 and (r.json() or {}).get("message") == "OK"
+    last = (_JOBS.get("np_reconcile") or {})
+    return {"status": "up" if ok else "down", "latency_ms": lat, "details": {"reconcile_ok": last.get("ok", True),
+            "last_reconcile_min": round((time.time() - last["last"]) / 60) if last.get("last") else None}}
+
+
+def _st_ai():
+    cfg = support.get_config(db)
+    if not support.ai_available(cfg):
+        return {"status": "not_configured", "note": "أضف مفتاح Gemini من الدعم الفني ← الإعدادات"}
+    stt = support.AI_STATE
+    recent_err = stt.get("err_at", 0) > stt.get("ok_at", 0) and time.time() - stt.get("err_at", 0) < 1800
+    return {"status": "degraded" if recent_err else "up",
+            "details": {"model": cfg.get("model"), "fallbacks": cfg.get("fallback_models"), "last_ok_min": round((time.time() - stt["ok_at"]) / 60) if stt.get("ok_at") else None,
+                        "calls": stt.get("calls", 0), "failures": stt.get("fails", 0)},
+            "error": stt.get("err", "")[:160] if recent_err else ""}
+
+
+def _st_storage():
+    import shutil
+
+    base = os.path.dirname(getattr(db, "path", "") or os.path.abspath(__file__))
+    du = shutil.disk_usage(base)
+    free_pct = du.free / du.total * 100
+    bdir = os.path.join(base, "backups")
+    newest = max((os.path.getmtime(os.path.join(bdir, f)) for f in os.listdir(bdir) if f.endswith(".db")), default=0) if os.path.isdir(bdir) else 0
+    backup_h = round((time.time() - newest) / 3600, 1) if newest else None
+    status = "down" if free_pct < 5 else "degraded" if free_pct < 15 or (hasattr(db, "health") and (backup_h is None or backup_h > 30)) else "up"
+    return {"status": status, "details": {"disk_free_gb": round(du.free / 1e9, 1), "disk_free_pct": round(free_pct, 1), "last_backup_h": backup_h}}
+
+
+def _st_errors():
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    since = time.time() - 3600
+    rows = [d.to_dict() or {} for d in db.collection("client_errors").where(filter=FieldFilter("at", ">=", since)).stream()]
+    crit = sum(1 for r in rows if r.get("priority") == "critical")
+    return {"status": "down" if crit >= 10 else "degraded" if crit or len(rows) > 50 else "up",
+            "details": {"errors_1h": len(rows), "critical_1h": crit, "network_1h": sum(1 for r in rows if r.get("kind") == "network")}}
+
+
+def _st_analytics():
+    s = tracking.summary(db, 1)
+    return {"status": "up", "details": {"live_users": s["live"]["users"], "dau": s["active"]["dau"], "sessions_today": s["totals"]["sessions"]}}
+
+
+def _extended_status() -> dict:
+    return {
+        "api": _st_api(),
+        "telegram": _cached("telegram", 30, _st_telegram),
+        "scheduler": _st_scheduler(),
+        "sync": _cached("sync", 60, _st_sync),
+        "gateway": _cached("gateway", 30, _st_gateway),
+        "nowpayments": _cached("nowpayments", 120, _st_nowpayments),
+        "ai": _st_ai(),
+        "storage": _cached("storage", 120, _st_storage),
+        "errors": _cached("errors", 30, _st_errors),
+        "analytics": _cached("analytics", 60, _st_analytics),
+    }
 
 
 @app.get("/api/billing/history")
@@ -3259,6 +3426,7 @@ def backup_local_db(keep: int = 14):
 def run_gateway_tick():
     if gateway.active(gateway.get_config(db)):
         gateway.tick(db, gw_hooks())
+        _JOBS["gw_tick_run"] = {"last": time.time(), "ok": True}
 
 
 def run_gateway_sweeps():
@@ -3592,6 +3760,152 @@ def admin_cards_cache_clear(admin_id: int = Depends(get_current_admin)):
         db.collection(CARD_FILES).document(d.id).delete()
         n += 1
     return {"ok": True, "cleared": n}
+
+
+# ═══════════════════════════ استوديو التصميم ═══════════════════════════
+FRONTEND_INDEX = os.getenv("FRONTEND_INDEX") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "dist", "index.html")
+
+
+def _design_http(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except design.DesignError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/api/design")
+def public_design():
+    """التصميم المنشور (عام): يطبّقه التطبيق عند الفتح، ويُخزَّن على الجهاز لفتح فوري في المرة التالية."""
+    return JSONResponse(design.published(db), headers={"Cache-Control": "public, max-age=30"})
+
+
+@app.get("/api/admin/design")
+def admin_design(admin_id: int = Depends(get_current_admin)):
+    st = design.load(db)
+    return {**st, "default": design.default(), "catalog": {
+        "icons": list(design.ICONS), "home_blocks": list(design.HOME_BLOCKS), "start_blocks": list(design.START_BLOCKS),
+        "quick_items": list(design.QUICK_ITEMS), "growth_cells": list(design.GROWTH_CELLS), "nav_items": list(design.NAV_ITEMS),
+        "enums": design.ENUMS, "ranges": design.RANGES, "pages": list(design.PAGES),
+        "presets": {k: {"name": v["name"], "desc": v["desc"]} for k, v in design.PRESETS.items()}},
+        "bot_username": _bot_username() or "", "app_url": WEBAPP_URL}
+
+
+class DesignBody(BaseModel):
+    design: dict
+    note: str = Field(default="", max_length=200)
+
+
+@app.put("/api/admin/design/draft")
+def admin_design_draft(body: DesignBody, admin_id: int = Depends(get_current_admin)):
+    return {"draft": _design_http(design.save_draft, db, body.design)}
+
+
+def _publish_design(d, admin_id, note, source):
+    res = _design_http(design.publish, db, d, admin_id, note, source)
+    _safe(lambda: design.write_seo(FRONTEND_INDEX, res["published"]["seo"], WEBAPP_URL))
+    return res
+
+
+@app.post("/api/admin/design/publish")
+def admin_design_publish(body: DesignBody, admin_id: int = Depends(get_current_admin)):
+    return _publish_design(body.design, admin_id, body.note, "manual")
+
+
+@app.get("/api/admin/design/history")
+def admin_design_history(admin_id: int = Depends(get_current_admin)):
+    return {"rows": design.history(db)}
+
+
+@app.get("/api/admin/design/history/{hid}")
+def admin_design_history_item(hid: str, admin_id: int = Depends(get_current_admin)):
+    row = design.history_item(db, hid)
+    if not row:
+        raise HTTPException(404, "not_found")
+    return row
+
+
+@app.post("/api/admin/design/history/{hid}/restore")
+def admin_design_restore(hid: str, admin_id: int = Depends(get_current_admin)):
+    res = _design_http(design.restore, db, hid, admin_id)
+    _safe(lambda: design.write_seo(FRONTEND_INDEX, res["published"]["seo"], WEBAPP_URL))
+    return res
+
+
+@app.get("/api/admin/design/themes")
+def admin_design_themes(admin_id: int = Depends(get_current_admin)):
+    return {"rows": design.themes(db)}
+
+
+class ThemeBody(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    scopes: list[str]
+    tag: str = Field(default="", max_length=30)
+
+
+@app.post("/api/admin/design/themes")
+def admin_design_theme_save(body: ThemeBody, admin_id: int = Depends(get_current_admin)):
+    return _design_http(design.save_theme, db, body.name, body.scopes, design.load(db)["draft"], admin_id, body.tag)
+
+
+class ThemeApply(BaseModel):
+    scopes: list[str] | None = None
+
+
+@app.post("/api/admin/design/themes/{tid}/apply")
+def admin_design_theme_apply(tid: str, body: ThemeApply, admin_id: int = Depends(get_current_admin)):
+    return {"draft": _design_http(design.apply_theme, db, tid, body.scopes)}
+
+
+@app.delete("/api/admin/design/themes/{tid}")
+def admin_design_theme_delete(tid: str, admin_id: int = Depends(get_current_admin)):
+    db.collection(design.THEMES).document(tid).delete()
+    return {"ok": True}
+
+
+@app.post("/api/admin/design/presets/{key}/apply")
+def admin_design_preset(key: str, admin_id: int = Depends(get_current_admin)):
+    return {"draft": _design_http(design.apply_preset, db, key)}
+
+
+class DesignAi(BaseModel):
+    scope: str = Field(pattern="^(global|start|home|nav|topbar|landing)$")
+    question: str = Field(default="", max_length=600)
+    design: dict | None = None
+
+
+def _ai_cfg():
+    cfg = support.get_config(db)
+    if not support.ai_available(cfg):
+        raise HTTPException(503, "ai_not_configured")
+    return cfg
+
+
+@app.post("/api/admin/design/ai")
+def admin_design_ai(body: DesignAi, admin_id: int = Depends(get_current_admin)):
+    cfg = _ai_cfg()
+    draft = _design_http(design.clean, body.design) if body.design else design.load(db)["draft"]
+    try:
+        return design.ai_suggest(support.llm_text, cfg, draft, body.scope, body.question)
+    except design.DesignError as e:
+        raise HTTPException(422, str(e))
+    except support.AiError as e:
+        raise HTTPException(502, f"ai_failed: {str(e)[:160]}")
+
+
+class IconAi(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    current: str = Field(default="", max_length=30)
+
+
+@app.post("/api/admin/design/ai-icon")
+def admin_design_ai_icon(body: IconAi, admin_id: int = Depends(get_current_admin)):
+    cfg = _ai_cfg()
+    try:
+        return design.ai_icon(support.llm_text, cfg, body.label, body.current)
+    except design.DesignError as e:
+        raise HTTPException(422, str(e))
+    except support.AiError as e:
+        raise HTTPException(502, f"ai_failed: {str(e)[:160]}")
 
 
 # ═══════════════════════════ التحليلات وتتبّع الزوار والأداء ═══════════════════════════

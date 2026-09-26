@@ -627,6 +627,17 @@ class AiError(Exception):
 _ai_http = httpx.Client(timeout=40)
 
 
+AI_STATE = {"ok_at": 0.0, "err_at": 0.0, "err": "", "calls": 0, "fails": 0}  # لحالة النظام
+
+
+def _ai_mark(ok: bool, err: str = ""):
+    AI_STATE["calls"] += 1
+    if ok:
+        AI_STATE["ok_at"] = time.time()
+    else:
+        AI_STATE.update(err_at=time.time(), err=err[:300], fails=AI_STATE["fails"] + 1)
+
+
 class ModelUnavailable(AiError):
     """النموذج مزدحم/غير متاح (429/5xx/404…) — يُجرَّب النموذج الاحتياطي التالي."""
 
@@ -674,8 +685,10 @@ def llm_text(cfg: dict, system: str, prompt: str, max_tokens: int = 400) -> str:
         parts = ((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
         text = "\n".join(p["text"] for p in parts if p.get("text") and not p.get("thought")).strip()
         if text:
+            _ai_mark(True)
             return text
         errors.append(f"{m}: empty")
+    _ai_mark(False, " | ".join(errors))
     raise AiError(" | ".join(errors)[:400])
 
 
@@ -742,7 +755,9 @@ def llm(cfg: dict, system: str, contents: list) -> dict:
             log.warning("gemini fallback used: %s (after %s)", m, "; ".join(errors))
         break
     if data is None:
+        _ai_mark(False, " | ".join(errors))
         raise AiError(" | ".join(errors)[:400])
+    _ai_mark(True)
     cands = data.get("candidates") or []
     if not cands or not (cands[0].get("content") or {}).get("parts"):
         raise AiError(f"blocked/empty: {(data.get('promptFeedback') or {}).get('blockReason') or (cands[0].get('finishReason') if cands else '')}")
