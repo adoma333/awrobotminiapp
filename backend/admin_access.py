@@ -33,7 +33,6 @@ AREAS = [
     ("/api/admin/ceo", "ceo"), ("/api/admin/rewards", "rewards"), ("/api/admin/packages", "packages"),
     ("/api/admin/settings", "settings"), ("/api/admin/leaderboard", "settings"), ("/api/admin/servers", "settings"),
     ("/api/admin/staff", "staff"), ("/api/admin/audit", "audit"), ("/api/system/status", "system"),
-    ("/api/admin/support/accounts", "settings"),  # حسابات تلجرام الحقيقية: المالك والمدير فقط
     ("/api/admin/support", "support"), ("/api/admin/errors", "support"), ("/api/admin/notifications", "notifications"),
     ("/api/admin/announcements", "notifications"), ("/api/admin/growth", "packages"), ("/api/admin/export", "settings"), ("/api/admin/media", "notifications"), ("/api/admin/ton", "ton"), ("/api/admin/gateway", "ton"),
 ]
@@ -154,10 +153,6 @@ ACTION_LABEL = [
     (r"^PUT /api/admin/staff$", "إضافة/تعديل عضو فريق"),
     (r"^DELETE /api/admin/staff/", "إزالة عضو فريق"),
     (r"^PUT /api/admin/support/config$", "تعديل إعدادات الدعم"),
-    (r"^POST /api/admin/support/accounts$", "إضافة حساب دعم (طلب رمز)"),
-    (r"^POST /api/admin/support/accounts/[^/]+/verify$", "تأكيد دخول حساب دعم"),
-    (r"^PUT /api/admin/support/accounts/", "تعديل حساب دعم"),
-    (r"^DELETE /api/admin/support/accounts/", "حذف حساب دعم"),
     (r"^POST /api/admin/support/tickets/[^/]+/reply$", "رد على تذكرة دعم"),
     (r"^POST /api/admin/support/tickets/[^/]+/status$", "تغيير حالة تذكرة"),
     (r"^POST /api/admin/support/kb$", "إضافة لقاعدة المعرفة"),
@@ -168,6 +163,8 @@ ACTION_LABEL = [
     (r"^PUT /api/admin/announcements/", "تعديل نافذة تحديثات"),
     (r"^DELETE /api/admin/announcements/", "حذف نافذة تحديثات"),
     (r"^POST /api/admin/media/image$", "رفع صورة"),
+    (r"^POST /api/admin/support/suggestions/[^/]+/approve$", "اعتماد اقتراح لقاعدة المعرفة"),
+    (r"^DELETE /api/admin/support/suggestions/[^/]+$", "رفض اقتراح لقاعدة المعرفة"),
     (r"^PUT /api/admin/gateway$", "تعديل إعدادات بوابة الدفع"),
     (r"^POST /api/admin/gateway/invoices/[^/]+/accept$", "قبول فاتورة يدويًا (بوابة الدفع)"),
     (r"^POST /api/admin/gateway/invoices/[^/]+/cancel$", "إلغاء فاتورة (بوابة الدفع)"),

@@ -1,20 +1,15 @@
 """
-AW Support — الدعم الفني الذكي (Gemini Flash المجاني) مع التذاكر والتصعيد والإصلاح الذاتي.
+AW Support — مركز الدعم الفني داخل التطبيق (Gemini Flash) مع التذاكر والتصعيد والإصلاح الذاتي والتعلّم.
 
-قنوات الرد (حصرية حسب الإعداد):
-  • حسابات تلجرام حقيقية (support_accounts.py): عند وجود حساب فعّال تصدر كل الردود منه وحده
-    (الرئيسي أو الاحتياطي النشط حسب الأولوية)، والبوت يوجّه المستخدم إليه.
-  • بوت الدعم (توكن مستقل أو البوت الرئيسي) عند عدم وجود حساب مربوط.
+القناة الوحيدة: صفحة «الدعم» داخل الـ Mini App (لا بوت دعم ولا حسابات تلجرام).
+  • المستخدم يكتب (أو يرفق صورة) → رد فوري بالاستلام (رقم التذكرة + الأولوية + الوقت المتوقع) → رد المساعد الذكي.
+  • كل رسالة تُحفظ في support_messages وتظهر لحظيًا في التطبيق (مع أزرار: تقييم، موظف، تأكيد نعم/لا).
+  • الموظف البشري يرد من لوحة التحكم؛ تنبيه التصعيد يصل لحساب الموظف (support_chat_id) عبر البوت الرئيسي للعلم فقط.
+  • تنبيه اختياري للمستخدم في البوت عند رد الموظف أو تغيّر حالة التذكرة (والتطبيق مغلق).
+  • الأخطاء: كل خطأ برقم مرجعي (ERR-XXXXXX) وزر «تواصل مع الدعم» يفتح المركز ويبدأ المعالجة بتفاصيله.
+  • التعلّم: كل تذكرة تُحل تقترح سؤالًا/جوابًا لقاعدة المعرفة (يعتمده الأدمن)، فتتحسن الإجابات مع الوقت.
 
-القنوات:
-  • بوت الدعم: توكن مستقل من لوحة التحكم (support_bot_token) أو البوت الرئيسي نفسه عند تركه فارغًا.
-    المستخدم يراسله → رد فوري بالاستلام (رقم التذكرة + الأولوية + الوقت المتوقع) → رد المساعد الذكي.
-  • الموظف البشري: support_chat_id (حساب تلجرام يستقبل التصعيدات). يرد على رسالة التصعيد
-    (Reply) فيصل الرد للمستخدم، أو يرد من لوحة التحكم.
-  • الأخطاء: كل خطأ يُسجَّل برقم مرجعي (ERR-XXXXXX). زر "تواصل مع الدعم" يفتح بوت الدعم بـ
-    /start err_<ref> فيبدأ المساعد المعالجة مباشرة بتفاصيل الخطأ.
-
-الإصلاح الذاتي — قائمة بيضاء صارمة (كل تنفيذ يُسجَّل في auto_fix_log):
+الإصلاح الذاتي — قائمة بيضاء صارمة، وكل إجراء قابل للإيقاف من اللوحة (ai_actions) ويُسجَّل في auto_fix_log:
   resync_account     users.sync.state → "new"       (حساب مربوط فقط: يعيد المزامنة فورًا)
   recheck_payment    يسأل مزوّد الدفع عن آخر طلب غير مكتمل (التفعيل لا يتم إلا بتأكيد المزوّد نفسه)
   reset_stuck_link   users.status "pending" أقدم من 30 دقيقة → "none"   (يسمح بإعادة الربط)
@@ -42,7 +37,6 @@ MESSAGES = "support_messages"
 KB = "support_kb"
 FIXES = "auto_fix_log"
 ERRORS = "client_errors"
-RELAY = "support_relay"
 STATUSES = ("open", "in_progress", "escalated", "resolved", "closed")
 PRIORITIES = ("critical", "medium", "low")
 PRIORITY_LABEL = {"critical": ("حرجة", "Critical"), "medium": ("متوسطة", "Medium"), "low": ("بسيطة", "Low")}
@@ -54,6 +48,17 @@ MODEL_DEFAULT = "gemini-flash-latest"  # أحدث Gemini Flash (مجاني، س�
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
 
 DEFAULT_PROMPT = """أنت "مساعد AW" — مساعد الدعم الفني الذكي لنظام AW ROBOT، وهو نظام تداول آلي (خوارزمي) يربط حسابات MetaTrader 5 ويديرها ويعرض أداءها داخل Mini App في تلجرام.
+
+## القناة
+تتحدث مع المستخدم داخل «مركز الدعم» في التطبيق نفسه. يرى أزرارًا أسفل ردودك (التحدث مع موظف، التقييم، نعم/لا)، ويمكنه إرفاق صور.
+إن أرفق صورة (لقطة شاشة لخطأ أو دفع)، اقرأها بدقة واستخرج منها رقم الخطأ أو المبلغ أو الحالة، ثم تصرّف بناءً عليها.
+
+## منهج الحل (مثل أفضل فرق الدعم العالمية)
+1. شخّص قبل أن تجيب: اجمع الحقائق بالأدوات (حالة الحساب، الأخطاء الأخيرة، المدفوعات) ولا تسأل المستخدم عن شيء تستطيع معرفته بنفسك.
+2. حل المشكلة بنفسك عندما يكون ذلك ممكنًا بالإصلاح الذاتي، ثم أخبره بما فعلته بالضبط.
+3. إن احتاج الأمر خطوة من المستخدم: خطوات مرقمة قصيرة جدًا، خطوة واحدة في كل سطر.
+4. تأكد من الحل واسأله سؤالًا واحدًا واضحًا في النهاية.
+5. لا تكرر نفس الاقتراح مرتين؛ إن فشل حلّان فحوّل لموظف مع ملخص كامل.
 
 ## هويتك ونبرتك
 - محترف، ودود، هادئ، ومختصر. جمل قصيرة وواضحة، بلا مبالغة ولا وعود بأرباح.
@@ -105,10 +110,7 @@ DEFAULT_CONFIG = {
     "ai_enabled": True,
     "auto_fix_enabled": True,
     "csat_enabled": True,
-    "support_bot_token": "",
-    "support_bot_username": "",
-    "support_username": "",     # حساب تلجرام بشري بديل (t.me/<username>) إن لم يُستخدم بوت
-    "support_chat_id": "",      # Telegram ID للموظف الذي يستقبل التصعيدات
+    "support_chat_id": "",      # Telegram ID للموظف: تنبيه فوري بالتصعيدات (الرد من لوحة التحكم)
     "support_phone": "",
     "system_prompt": "",        # فارغ = DEFAULT_PROMPT
     "model": MODEL_DEFAULT,
@@ -120,6 +122,16 @@ DEFAULT_CONFIG = {
     "eta_critical_min": 15,
     "eta_medium_min": 60,
     "eta_low_min": 240,
+    # مركز الدعم داخل التطبيق
+    "push_bot_on_reply": True,  # تنبيه في البوت عند رد موظف/تحديث تذكرة (للمستخدم خارج التطبيق)
+    "attachments_enabled": True,
+    "sounds_enabled": True,
+    "learning_enabled": True,   # اقتراح أسئلة/أجوبة لقاعدة المعرفة من التذاكر المحلولة
+    "ai_actions": {"resync_account": True, "recheck_payment": True, "reset_stuck_link": True, "set_language": True},
+    "welcome_ar": "أهلًا بك في مركز الدعم 👋\nاكتب سؤالك أو مشكلتك، أو أرفق صورة للخطأ، وسيرد عليك المساعد الذكي فورًا. يمكنك طلب موظف في أي وقت.",
+    "welcome_en": "Welcome to the Support Center 👋\nDescribe your question or issue, or attach a screenshot, and our smart assistant will reply instantly. You can ask for a human anytime.",
+    "quick_ar": ["دفعت ولم يتفعل اشتراكي", "بياناتي لا تتحدث", "مشكلة في ربط حساب MT5", "التحدث مع موظف"],
+    "quick_en": ["I paid but my plan isn't active", "My data isn't updating", "Problem linking my MT5 account", "Talk to a human"],
 }
 
 DEFAULT_KB = [
@@ -165,8 +177,7 @@ def invalidate():
 
 def public_config(cfg: dict) -> dict:
     """للأدمن: التوكن لا يُعاد أبدًا، فقط هل هو مضبوط."""
-    out = {k: v for k, v in cfg.items() if k not in ("support_bot_token", "gemini_api_key")}
-    out["has_bot_token"] = bool(cfg.get("support_bot_token"))
+    out = {k: v for k, v in cfg.items() if k not in ("gemini_api_key",)}
     out["has_gemini_key"] = bool(cfg.get("gemini_api_key"))
     out["gemini_env_key"] = bool(os.getenv("GEMINI_API_KEY"))
     out["system_prompt"] = cfg.get("system_prompt") or DEFAULT_PROMPT
@@ -176,24 +187,23 @@ def public_config(cfg: dict) -> dict:
 
 def clean_config(patch: dict) -> dict:
     out = {}
-    for k in ("enabled", "ai_enabled", "auto_fix_enabled", "csat_enabled", "confirm_actions_enabled"):
+    for k in ("enabled", "ai_enabled", "auto_fix_enabled", "csat_enabled", "confirm_actions_enabled", "push_bot_on_reply",
+              "attachments_enabled", "sounds_enabled", "learning_enabled"):
         if k in patch:
             out[k] = bool(patch[k])
-    if "support_bot_token" in patch:
-        tok = str(patch["support_bot_token"] or "").strip()
-        if tok and not re.fullmatch(r"\d{5,15}:[A-Za-z0-9_-]{30,64}", tok):
-            raise ValueError("invalid bot token")
-        out["support_bot_token"] = secretbox.seal(tok)
+    if "ai_actions" in patch:
+        out["ai_actions"] = {a: bool((patch["ai_actions"] or {}).get(a, True)) for a in DEFAULT_CONFIG["ai_actions"]}
+    for k in ("welcome_ar", "welcome_en"):
+        if k in patch:
+            out[k] = str(patch[k] or "")[:600]
+    for k in ("quick_ar", "quick_en"):
+        if k in patch:
+            out[k] = [str(x)[:60] for x in (patch[k] or []) if str(x).strip()][:8]
     if "gemini_api_key" in patch:
         key = str(patch["gemini_api_key"] or "").strip()
         if key and not re.fullmatch(r"[A-Za-z0-9_-]{30,80}", key):
             raise ValueError("invalid gemini key")
         out["gemini_api_key"] = secretbox.seal(key)
-    if "support_username" in patch:
-        u = str(patch["support_username"] or "").strip().lstrip("@").replace("https://t.me/", "")
-        if u and not re.fullmatch(r"[A-Za-z0-9_]{4,32}", u):
-            raise ValueError("invalid username")
-        out["support_username"] = u
     if "support_chat_id" in patch:
         v = str(patch["support_chat_id"] or "").strip()
         if v and not re.fullmatch(r"-?\d{3,16}", v):
@@ -243,48 +253,73 @@ def bot_call(token: str, method: str, **params) -> dict:
 
 
 def bot_token(cfg: dict) -> str:
-    return secretbox.open_(cfg.get("support_bot_token") or "") or MAIN_TOKEN
+    return MAIN_TOKEN
 
 
 def send(cfg: dict, chat_id, text: str, markup: dict | None = None) -> dict:
+    """رسالة عبر البوت الرئيسي (تنبيهات الموظف + تنبيه المستخدم بوجود رد). لا محادثة دعم عبر البوت."""
     p = {"chat_id": chat_id, "text": text[:4000], "disable_web_page_preview": True}
     if markup:
         p["reply_markup"] = markup
     return bot_call(bot_token(cfg), "sendMessage", **p)
 
 
-# ─── قناة حسابات تلجرام الحقيقية (يضبطها support_accounts عند تشغيل حساب) ───
-ACCOUNT = {"send": None, "username": None}
+# ─── قناة التطبيق (مركز الدعم) ───
+DB = {"v": None}        # يضبطها main
+APP_URL = {"v": ""}     # يضبطها main: رابط الـ Mini App (لزر «فتح الدعم» في تنبيه البوت)
+_BTN_RE = re.compile(r"(csat|human|act):(T[A-Z0-9]{5})(?::(\w+))?")
 
 
-def account_mode() -> bool:
-    return bool(ACCOUNT["send"] and ACCOUNT["username"])
+def _buttons(markup: dict | None) -> list:
+    out = []
+    for row in (markup or {}).get("inline_keyboard") or []:
+        for b in row:
+            m = _BTN_RE.fullmatch(b.get("callback_data") or "")
+            if m:
+                out.append({"kind": m.group(1), "tid": m.group(2), "arg": m.group(3), "label": b.get("text")})
+            elif b.get("url"):
+                out.append({"kind": "url", "url": b["url"], "label": b.get("text")})
+    return out
+
+
+def latest_ticket_for(db, uid) -> dict | None:
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    rows = [{"id": d.id, **(d.to_dict() or {})} for d in db.collection(TICKETS).where(filter=FieldFilter("uid", "==", str(uid))).stream()]
+    return max(rows, key=lambda r: r.get("updated_at") or 0) if rows else None
 
 
 def deliver(cfg: dict, channel: str, uid, text: str, markup: dict | None = None, hint: str = "") -> bool:
-    """يرسل للمستخدم عبر قناة تذكرته فقط. قناة الحساب لا تدعم الأزرار، فتُضاف تعليمات نصية بدلها."""
-    if channel == "account":
-        body = text + (f"\n\n{hint}" if hint else "")
-        if ACCOUNT["send"]:
-            return bool(ACCOUNT["send"](uid, body))
-        OUTBOX.append((uid, body))  # لا حساب فعّال الآن: يُرسل من الحساب التالي عند تشغيله (لا يصدر من مصدر آخر)
+    """رسالة للمستخدم في مركز الدعم داخل التطبيق. لا تكرار: إن كانت آخر رسالة محفوظة هي نفسها تُضاف لها الأزرار فقط."""
+    db = DB["v"]
+    if db is None:
         return False
-    return bool(send(cfg, uid, text, markup).get("ok"))
+    t = open_ticket_for(db, uid) or latest_ticket_for(db, uid)
+    if not t:
+        return False
+    buttons = _buttons(markup)
+    msgs = messages_of(db, t["id"])
+    last = msgs[-1] if msgs else None
+    if last and last.get("role") in ("ai", "agent", "notice") and last.get("text") and text.endswith(last["text"]):
+        if buttons:
+            db.collection(MESSAGES).document(last["id"]).set({"buttons": buttons}, merge=True)
+    else:
+        add_message(db, t["id"], "notice", text, {"buttons": buttons} if buttons else None)
+    return True
 
 
-OUTBOX: list = []
-
-
-def contact_link(cfg: dict, main_bot_username: str | None, payload: str = "") -> str:
-    """رابط فتح محادثة الدعم (يعمل عبر تلجرام حتى لو تعطل الاتصال بخادمنا)."""
-    if account_mode():
-        return f"https://t.me/{ACCOUNT['username']}"
-    bot = cfg.get("support_bot_username") or (main_bot_username if not cfg.get("support_bot_token") else "")
-    if bot:
-        return f"https://t.me/{bot}" + (f"?start={payload}" if payload else "")
-    if cfg.get("support_username"):
-        return f"https://t.me/{cfg['support_username']}"
-    return ""
+def push_user(cfg: dict, uid, lang: str, tid: str, preview: str = ""):
+    """تنبيه في البوت بوجود رد جديد (للمستخدم الذي أغلق التطبيق)، مع زر يفتح مركز الدعم مباشرة."""
+    if not cfg.get("push_bot_on_reply", True) or not MAIN_TOKEN:
+        return
+    url = APP_URL["v"]
+    text = _t(lang, f"💬 رد جديد على تذكرتك #{tid}", f"💬 New reply on your ticket #{tid}") + (f"\n\n{preview[:300]}" if preview else "")
+    markup = {"inline_keyboard": [[{"text": _t(lang, "🎧 فتح مركز الدعم", "🎧 Open Support Center"),
+                                    "web_app": {"url": f"{url}?view=support"}}]]} if url.startswith("https://") else None
+    try:
+        send(cfg, uid, text, markup)
+    except Exception:  # noqa: BLE001 — التنبيه اختياري
+        log.exception("support push")
 
 
 # ═════════════════════════ اللغة والأولوية وحد الرسائل ═════════════════════════
@@ -436,7 +471,7 @@ def add_message(db, tid: str, role: str, text: str, meta: dict | None = None):
 def messages_of(db, tid: str) -> list:
     from google.cloud.firestore_v1.base_query import FieldFilter
 
-    rows = [d.to_dict() or {} for d in db.collection(MESSAGES).where(filter=FieldFilter("ticket", "==", tid)).stream()]
+    rows = [{"id": d.id, **(d.to_dict() or {})} for d in db.collection(MESSAGES).where(filter=FieldFilter("ticket", "==", tid)).stream()]
     return sorted(rows, key=lambda r: r.get("at") or 0)
 
 
@@ -611,17 +646,32 @@ def llm(cfg: dict, system: str, contents: list) -> dict:
 def _history(db, tid: str) -> list:
     """رسائل التذكرة بصيغة Gemini: user / model بالتناوب، تبدأ بـ user."""
     out = []
-    for m in messages_of(db, tid)[-24:]:
+    msgs = messages_of(db, tid)[-24:]
+    with_img = [m for m in msgs if m.get("image_file")][-2:]  # آخر صورتين يرفقهما المستخدم يراهما المساعد
+    for m in msgs:
         role = "user" if m.get("role") == "user" else "model"
         text = m.get("text") or ""
         if m.get("role") == "agent":
             text = "[رد موظف الدعم البشري] " + text
+        elif m.get("role") == "notice":
+            text = "[رسالة النظام للمستخدم] " + text
         elif m.get("role") == "system":
             continue
+        parts = [{"text": text or "[صورة]"}]
+        if m in with_img:
+            try:
+                import base64
+
+                mime = {"png": "image/png", "webp": "image/webp"}.get(m["image_file"].rsplit(".", 1)[-1], "image/jpeg")
+                with open(m["image_file"], "rb") as f:
+                    parts.append({"inlineData": {"mimeType": mime, "data": base64.b64encode(f.read()).decode()}})
+            except OSError:
+                pass
         if out and out[-1]["role"] == role:
             out[-1]["parts"][0]["text"] += "\n\n" + text
+            out[-1]["parts"] += parts[1:]
         else:
-            out.append({"role": role, "parts": [{"text": text}]})
+            out.append({"role": role, "parts": parts})
     while out and out[0]["role"] != "user":
         out.pop(0)
     return out
@@ -641,6 +691,8 @@ def _tool(db, cfg, uid, tid, name: str, args: dict, state: dict) -> str:
     if name == "run_auto_fix":
         if not cfg.get("auto_fix_enabled"):
             return json.dumps({"ok": False, "reason": "auto_fix_disabled_by_admin"})
+        if not (cfg.get("ai_actions") or {}).get(args.get("action"), True):
+            return json.dumps({"ok": False, "reason": "action_disabled_by_admin"})
         params = {"language": args["language"]} if args.get("language") else {}
         return json.dumps(run_fix(db, uid, args.get("action"), tid, params), ensure_ascii=False, default=str)
     if name == "set_ticket_priority":
@@ -760,6 +812,10 @@ def set_status(db, cfg, tid: str, status: str, by: str = "system", note: str = "
     if csat_ask:
         deliver(cfg, ch, t["uid"], _t(lang, "كيف تقيّم تجربتك مع الدعم؟", "How would you rate your support experience?"),
                 csat_markup(tid), _hint(HINT_CSAT, lang))
+    if status in ("resolved", "closed") and by != "ai":
+        push_user(cfg, t["uid"], lang, tid, _t(lang, f"الحالة: {ar}", f"Status: {en}"))
+    if status == "resolved" and cfg.get("learning_enabled", True):
+        suggest_kb(db, tid)
     return get_ticket(db, tid)
 
 
@@ -767,21 +823,28 @@ def escalate(db, cfg, ticket: dict, summary: str, reason: str = "ai"):
     tid = ticket["id"]
     _ticket_ref(db, tid).set({"escalated": True, "escalation_summary": summary[:3000]}, merge=True)
     set_status(db, cfg, tid, "escalated", by=reason)
+    alert_staff(db, cfg, get_ticket(db, tid) or ticket, summary, reason)
+
+
+def alert_staff(db, cfg, ticket: dict, summary: str = "", reason: str = "ai", new_message: str = ""):
+    """تنبيه فوري لحساب الموظف في البوت الرئيسي. الرد يتم من لوحة التحكم ← الدعم (يصل للمستخدم داخل التطبيق)."""
     chat = cfg.get("support_chat_id")
     if not chat:
         return
-    pr_ar = PRIORITY_LABEL[ticket.get("priority") or "low"][0]
+    tid = ticket["id"]
     icon = {"critical": "🔴", "medium": "🟠", "low": "🟢"}.get(ticket.get("priority"), "🟢")
-    last = "\n".join(f"{'👤' if m.get('role') == 'user' else '🤖'} {m.get('text', '')[:300]}" for m in messages_of(db, tid)[-6:])
-    text = (f"{icon} تصعيد تذكرة #{tid} · الأولوية: {pr_ar}\nالمستخدم: {ticket['uid']} · اللغة: {ticket.get('lang')} · القناة: {ticket.get('channel')}\n"
-            f"سبب التصعيد: {'تلقائي بعد محاولات فاشلة' if reason == 'threshold' else 'طلب المساعد/المستخدم'}\n\n"
-            f"الملخص:\n{summary[:1500]}\n\nآخر الرسائل:\n{last}\n\n↩️ رد على هذه الرسالة ليصل ردك للمستخدم مباشرة.")
-    markup = {"inline_keyboard": [[{"text": "⏳ قيد المعالجة", "callback_data": f"sup:{tid}:in_progress"},
-                                   {"text": "✅ تم الحل", "callback_data": f"sup:{tid}:resolved"}]]}
-    res = send(cfg, chat, text, markup)  # قناة داخلية للموظف (البوت)، لا تصل للمستخدم
-    mid = ((res or {}).get("result") or {}).get("message_id")
-    if mid:
-        db.collection(RELAY).document(f"{chat}_{mid}").set({"ticket": tid, "at": time.time()})
+    if new_message:
+        text = f"💬 رسالة جديدة على التذكرة المصعّدة #{tid} من {ticket['uid']}:\n{new_message[:1500]}\n\nالرد من لوحة التحكم ← الدعم الفني."
+    else:
+        pr_ar = PRIORITY_LABEL[ticket.get("priority") or "low"][0]
+        last = "\n".join(f"{'👤' if m.get('role') == 'user' else '🤖'} {m.get('text', '')[:300]}" for m in messages_of(db, tid)[-6:])
+        text = (f"{icon} تصعيد تذكرة #{tid} · الأولوية: {pr_ar}\nالمستخدم: {ticket['uid']} · اللغة: {ticket.get('lang')}\n"
+                f"سبب التصعيد: {'تلقائي بعد محاولات فاشلة' if reason == 'threshold' else 'طلب المساعد/المستخدم'}\n\n"
+                f"الملخص:\n{summary[:1500]}\n\nآخر الرسائل:\n{last}\n\nالرد من لوحة التحكم ← الدعم الفني (يصل للمستخدم داخل التطبيق).")
+    try:
+        send(cfg, chat, text)
+    except Exception:  # noqa: BLE001
+        log.exception("staff alert")
 
 
 # ═════════════════════════ التأكيد قبل الإجراءات الحساسة ═════════════════════════
@@ -827,11 +890,11 @@ def resolve_confirmation(db, cfg, ticket: dict, yes: bool, lang: str) -> bool:
         set_status(db, cfg, tid, "resolved", by="user_confirmed", note=msg)
     else:  # relink_account
         link = ACTIONS["app_link"]() if ACTIONS["app_link"] else ""
-        msg = _t(lang, f"✅ تم إلغاء ربط الحساب السابق ({acc}).\nافتح التطبيق الآن وأدخل بيانات حسابك الجديد بأمان:\n{link}\nسأؤكد لك هنا فور نجاح الربط.",
-                 f"✅ Your previous account ({acc}) was unlinked.\nOpen the app now and enter your new account securely:\n{link}\nI'll confirm here as soon as it's linked.")
+        msg = _t(lang, f"✅ تم إلغاء ربط الحساب السابق ({acc}).\nاضغط «ربط الحساب الجديد» وأدخل بياناته بأمان في شاشة الربط، وسأؤكد لك هنا فور نجاح الربط.",
+                 f"✅ Your previous account ({acc}) was unlinked.\nTap \"Link new account\" and enter it securely on the linking screen. I'll confirm here as soon as it's linked.")
         _ticket_ref(db, tid).set({"awaiting_link": True}, merge=True)
         add_message(db, tid, "ai", msg)
-        markup = {"inline_keyboard": [[{"text": _t(lang, "📲 فتح التطبيق", "📲 Open the app"), "url": link}]]} if link else None
+        markup = {"inline_keyboard": [[{"text": _t(lang, "🔗 ربط الحساب الجديد", "🔗 Link new account"), "url": link}]]} if link else None
         deliver(cfg, ch, uid, msg, markup)
     return True
 
@@ -867,7 +930,7 @@ def _run(fn, *a):
 ERR_IN_TEXT = re.compile(r"ERR-[A-Z0-9]{6}")
 
 
-def handle_user_text(db, uid, text: str, lang_hint: str = "ar", channel: str = "bot", error_ref: str | None = None):
+def handle_user_text(db, uid, text: str, lang_hint: str = "ar", channel: str = "app", error_ref: str | None = None, image: dict | None = None):
     cfg = get_config(db)
     if not cfg.get("enabled"):
         return
@@ -880,10 +943,10 @@ def handle_user_text(db, uid, text: str, lang_hint: str = "ar", channel: str = "
     if not error_ref and text:
         m = ERR_IN_TEXT.search(text.upper())
         error_ref = m.group(0) if m else None
-    _run(_process, db, cfg, uid, text, lang_hint, channel, error_ref)
+    _run(_process, db, cfg, uid, text, lang_hint, channel, error_ref, image)
 
 
-def _process(db, cfg, uid, text, lang_hint, channel, error_ref):
+def _process(db, cfg, uid, text, lang_hint, channel, error_ref, image=None):
     try:
         err = get_error(db, error_ref) if error_ref else None
         if not text and err:
@@ -902,15 +965,11 @@ def _process(db, cfg, uid, text, lang_hint, channel, error_ref):
                 patch["channel"] = ticket["channel"] = channel
             if patch:
                 _ticket_ref(db, ticket["id"]).set(patch, merge=True)
-        add_message(db, ticket["id"], "user", text)
+        add_message(db, ticket["id"], "user", text, {"image": image["url"], "image_file": image["file"]} if image else None)
         if is_new:
             deliver(cfg, channel, uid, ack_text(cfg, ticket, lang))
-        if ticket.get("status") == "escalated":  # موظف بشري يتابعها: نمرر الرسالة له فقط
-            if cfg.get("support_chat_id"):
-                res = send(cfg, cfg["support_chat_id"], f"💬 #{ticket['id']} من {uid}:\n{text[:1500]}\n\n↩️ رد على هذه الرسالة للرد عليه.")
-                mid = ((res or {}).get("result") or {}).get("message_id")
-                if mid:
-                    db.collection(RELAY).document(f"{cfg['support_chat_id']}_{mid}").set({"ticket": ticket["id"], "at": time.time()})
+        if ticket.get("status") == "escalated":  # موظف بشري يتابعها: ننبّهه فقط، والرد من اللوحة
+            alert_staff(db, cfg, ticket, new_message=text)
             return
         if int(ticket.get("ai_attempts") or 0) >= int(cfg.get("escalation_threshold") or 3):
             summary = f"تجاوز حد المحاولات ({ticket.get('ai_attempts')}). آخر رسالة: {text[:500]}"
@@ -918,11 +977,13 @@ def _process(db, cfg, uid, text, lang_hint, channel, error_ref):
                                           "We've handed your request to our human support team with a full summary. They'll reply shortly."))
             escalate(db, cfg, get_ticket(db, ticket["id"]) or ticket, summary, reason="threshold")
             return
-        if channel == "bot":
-            bot_call(bot_token(cfg), "sendChatAction", chat_id=uid, action="typing")
         reply, state = ("", {"failed": True})
         if cfg.get("ai_enabled") and ai_available(cfg):
-            reply, state = ai_reply(db, cfg, uid, get_ticket(db, ticket["id"]) or ticket, lang)
+            _ticket_ref(db, ticket["id"]).set({"typing": True, "typing_at": time.time()}, merge=True)  # «المساعد يكتب…» في التطبيق
+            try:
+                reply, state = ai_reply(db, cfg, uid, get_ticket(db, ticket["id"]) or ticket, lang)
+            finally:
+                _ticket_ref(db, ticket["id"]).set({"typing": False}, merge=True)
         if (state.get("failed") or not reply) and not state.get("confirm"):
             kb = [] if (err or (get_ticket(db, ticket["id"]) or ticket).get("priority") == "critical") else search_kb(db, text, 1)
             if kb and kb[0]["score"] >= KB_MIN_SCORE:  # سؤال عام: إجابة قاعدة المعرفة؛ الخطأ والحالات الحرجة: موظف بشري
@@ -971,6 +1032,7 @@ def text_command(db, cfg, uid, text: str, lang: str, channel: str) -> bool:
         c = _latest_csat_pending(db, uid)
         if c:
             _ticket_ref(db, c["id"]).set({"csat": {"score": int(low), "at": time.time()}}, merge=True)
+            _score_suggestion(db, c["id"], int(low))
             deliver(cfg, channel, uid, _t(c.get("lang") or lang, "🙏 شكرًا لتقييمك — يساعدنا على التحسين.", "🙏 Thank you — your rating helps us improve."))
             return True
     if re.fullmatch(r"(موظف|بشري|human|agent)", low) and t:
@@ -981,67 +1043,69 @@ def text_command(db, cfg, uid, text: str, lang: str, channel: str) -> bool:
     return False
 
 
-def handle_account_message(db, uid, text: str, lang: str = "ar"):
-    """رسالة واردة إلى حساب الدعم الحقيقي (من support_accounts)."""
+def app_action(db, uid, kind: str, tid: str, arg: str | None) -> dict:
+    """أزرار مركز الدعم داخل التطبيق: csat (1-5) · human · act (yes/no). المستخدم لا يلمس إلا تذاكره."""
     cfg = get_config(db)
-    text = (text or "").strip()
-    if not text:
-        return deliver(cfg, "account", uid, _t(lang, "أرسل وصف المشكلة نصًا من فضلك.", "Please describe the issue in text."))
-    if text_command(db, cfg, uid, text, lang, "account"):
-        return True
-    handle_user_text(db, uid, text, lang, "account")
-    return True
-
-
-def handle_callback(db, cq: dict) -> bool:
-    """أزرار: csat:<tid>:<n> · human:<tid> · act:<tid>:yes|no · sup:<tid>:<status> (للموظف). يرجع True إن عالجها."""
-    data = cq.get("data") or ""
-    cfg = get_config(db)
-    who = (cq.get("from") or {}).get("id")
-    m = re.fullmatch(r"(csat|human|sup|act):(T[A-Z0-9]{5})(?::(\w+))?", data)
-    if not m:
-        return False
-    kind, tid, arg = m.groups()
     t = get_ticket(db, tid)
-    answer = lambda txt: bot_call(bot_token(cfg), "answerCallbackQuery", callback_query_id=cq.get("id"), text=txt)  # noqa: E731
-    if not t:
-        answer("—")
-        return True
+    if not t or str(t.get("uid")) != str(uid):
+        return {"ok": False, "reason": "not_found"}
     lang = t.get("lang") or "ar"
-    if kind == "csat" and str(who) == t["uid"] and arg and arg.isdigit():
-        _ticket_ref(db, tid).set({"csat": {"score": max(1, min(5, int(arg))), "at": time.time()}}, merge=True)
-        answer(_t(lang, "شكرًا لتقييمك!", "Thanks for your feedback!"))
-        send(cfg, who, _t(lang, "🙏 شكرًا لتقييمك — يساعدنا على التحسين.", "🙏 Thank you — your rating helps us improve."))
-    elif kind == "act" and str(who) == t["uid"] and arg in ("yes", "no"):
-        answer("✓")
+    if kind == "csat" and arg and arg.isdigit():
+        score = max(1, min(5, int(arg)))
+        _ticket_ref(db, tid).set({"csat": {"score": score, "at": time.time()}}, merge=True)
+        _score_suggestion(db, tid, score)
+        add_message(db, tid, "notice", _t(lang, "🙏 شكرًا لتقييمك — يساعدنا على التحسين.", "🙏 Thank you — your rating helps us improve."))
+        return {"ok": True}
+    if kind == "act" and arg in ("yes", "no"):
         if not resolve_confirmation(db, cfg, t, arg == "yes", lang):
-            send(cfg, who, _t(lang, "انتهت صلاحية هذا الطلب. اكتب طلبك من جديد.", "This request has expired. Please ask again."))
-    elif kind == "human" and str(who) == t["uid"]:
-        answer(_t(lang, "جارٍ التحويل…", "Connecting…"))
-        send(cfg, who, _t(lang, "👤 حوّلنا طلبك لموظف دعم وسيرد عليك هنا قريبًا.", "👤 A support agent will reply here shortly."))
+            add_message(db, tid, "notice", _t(lang, "انتهت صلاحية هذا الطلب. اكتب طلبك من جديد.", "This request has expired. Please ask again."))
+        return {"ok": True}
+    if kind == "human":
+        if t.get("status") not in ("open", "in_progress"):
+            return {"ok": True}
+        add_message(db, tid, "notice", _t(lang, "👤 حوّلنا طلبك لموظف دعم وسيرد عليك هنا قريبًا.", "👤 A support agent will reply here shortly."))
         escalate(db, cfg, t, "طلب المستخدم التحدث مع موظف.\n" + "\n".join(m_.get("text", "")[:200] for m_ in messages_of(db, tid)[-4:]), reason="user")
-    elif kind == "sup" and str(who) == str(cfg.get("support_chat_id")) and arg in STATUSES:
-        set_status(db, cfg, tid, arg, by=f"agent:{who}")
-        answer("✓")
-    else:
-        answer("—")
-    return True
+        return {"ok": True}
+    return {"ok": False, "reason": "invalid"}
 
 
-def handle_agent_reply(db, msg: dict) -> bool:
-    """رد الموظف (Reply) على رسالة تصعيد → يصل للمستخدم ويُحفظ في التذكرة."""
-    cfg = get_config(db)
-    chat = msg.get("chat", {}).get("id")
-    rep = msg.get("reply_to_message") or {}
-    if not rep or str(chat) != str(cfg.get("support_chat_id")) or not msg.get("text"):
-        return False
-    link = db.collection(RELAY).document(f"{chat}_{rep.get('message_id')}").get()
-    if not link.exists:
-        return False
-    tid = link.to_dict()["ticket"]
-    agent_reply(db, cfg, tid, msg["text"], by=f"agent:{chat}")
-    send(cfg, chat, f"✓ أُرسل ردك للمستخدم (#{tid}).")
-    return True
+def app_thread(db, uid) -> dict:
+    """المحادثة الحالية للمستخدم (المفتوحة، أو آخر تذكرة خلال 3 أيام) كما تظهر في التطبيق."""
+    t = open_ticket_for(db, uid) or latest_ticket_for(db, uid)
+    if t and t.get("status") in ("resolved", "closed") and time.time() - float(t.get("updated_at") or 0) > 3 * 86400:
+        t = None
+    if not t:
+        return {"ticket": None, "messages": []}
+    rows = [{k: m.get(k) for k in ("id", "role", "text", "at", "buttons", "image")} for m in messages_of(db, t["id"])
+            if m.get("role") in ("user", "ai", "agent", "notice")]
+    typing = bool(t.get("typing")) and time.time() - float(t.get("typing_at") or 0) < 90
+    return {"ticket": {k: t.get(k) for k in ("id", "status", "priority", "created_at", "updated_at", "csat", "lang")} | {"typing": typing},
+            "messages": rows[-200:]}
+
+
+# ═════════════════════════ التعلّم من التذاكر المحلولة ═════════════════════════
+SUGGESTIONS = "support_kb_suggestions"
+
+
+def suggest_kb(db, tid: str):
+    """سؤال المستخدم + الجواب الذي حلّ المشكلة → اقتراح لقاعدة المعرفة (ينتظر اعتماد الأدمن)."""
+    try:
+        msgs = messages_of(db, tid)
+        q = " ".join(m.get("text", "") for m in msgs if m.get("role") == "user")[:400].strip()
+        answers = [m for m in msgs if m.get("role") in ("agent", "ai") and len(m.get("text") or "") > 30]
+        if not q or not answers:
+            return
+        a = answers[-1]
+        db.collection(SUGGESTIONS).document(tid).set({"q": q, "a": a["text"][:1500], "source": a.get("role"), "ticket": tid,
+                                                      "status": "pending", "score": None, "at": time.time()}, merge=True)
+    except Exception:  # noqa: BLE001
+        log.exception("kb suggestion")
+
+
+def _score_suggestion(db, tid: str, score: int):
+    ref = db.collection(SUGGESTIONS).document(tid)
+    if ref.get().exists:
+        ref.set({"score": score}, merge=True)
 
 
 def agent_reply(db, cfg, tid: str, text: str, by: str) -> dict | None:
@@ -1050,48 +1114,7 @@ def agent_reply(db, cfg, tid: str, text: str, by: str) -> dict | None:
         return None
     add_message(db, tid, "agent", text, {"by": by})
     lang = t.get("lang") or "ar"
-    deliver(cfg, t.get("channel") or "bot", t["uid"], _t(lang, "👤 فريق الدعم:\n", "👤 Support team:\n") + text)
+    push_user(cfg, t["uid"], lang, tid, text)
     if t.get("status") in ("open", "escalated"):
         set_status(db, cfg, tid, "in_progress", by=by)
     return get_ticket(db, tid)
-
-
-def handle_message(db, msg: dict, main_bot_username: str | None = None) -> bool:
-    """أي رسالة خاصة لبوت الدعم. يرجع True إن عالجها."""
-    if msg.get("chat", {}).get("type") != "private":
-        return False
-    if handle_agent_reply(db, msg):
-        return True
-    uid = msg["from"]["id"]
-    text = (msg.get("text") or "").strip()
-    lang = "ar" if (msg["from"].get("language_code") or "ar").startswith("ar") else "en"
-    cfg = get_config(db)
-    if text.startswith("/start"):
-        payload = text.split(maxsplit=1)[1].strip() if len(text.split()) > 1 else ""
-        m = re.fullmatch(r"err_(ERR-[A-Z0-9]{6}|[A-Z0-9]{6})", payload, re.I)
-        if m:
-            ref = m.group(1).upper()
-            ref = ref if ref.startswith("ERR-") else "ERR-" + ref
-            handle_user_text(db, uid, "", lang, "bot", ref)
-            return True
-        send(cfg, uid, _t(lang, "🎧 أهلًا بك في دعم AW ROBOT.\nاكتب مشكلتك أو سؤالك وسيرد عليك المساعد الذكي فورًا، ويمكنك طلب موظف في أي وقت.",
-                           "🎧 Welcome to AW ROBOT support.\nDescribe your issue or question and our smart assistant will reply instantly. You can ask for a human at any time."))
-        return True
-    if not text:
-        send(cfg, uid, _t(lang, "أرسل وصف المشكلة نصًا من فضلك.", "Please describe the issue in text."))
-        return True
-    if text_command(db, cfg, uid, text, lang, "bot"):
-        return True
-    handle_user_text(db, uid, text, lang, "bot")
-    return True
-
-
-def setup_webhook(cfg: dict, url: str, secret: str) -> dict:
-    """يضبط webhook بوت الدعم المستقل ويجلب اسمه."""
-    tok = secretbox.open_(cfg.get("support_bot_token") or "")
-    if not tok:
-        return {"ok": False, "description": "no token"}
-    me = bot_call(tok, "getMe")
-    res = bot_call(tok, "setWebhook", url=url, secret_token=secret, allowed_updates=["message", "callback_query"])
-    return {"ok": bool(me.get("ok") and res.get("ok")), "username": (me.get("result") or {}).get("username"),
-            "description": res.get("description") or me.get("description")}
