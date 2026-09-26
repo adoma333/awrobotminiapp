@@ -10,8 +10,11 @@ export const PRIZE_LABEL = {
 };
 const TRIGGER_LABEL = {
   welcome: "بطاقة الترحيب (إكمال التعريف أو ربط حساب تجريبي)",
+  link_real: "ربط حساب حقيقي",
   referral: "إحالة صديق يربط حسابه",
-  streak7: "التداول 7 أيام عمل متتالية",
+  streak7: "سلسلة تداول متتالية (الطول قابل للتعديل أدناه)",
+  first_payment: "أول اشتراك مدفوع",
+  renewal: "كل تجديد اشتراك",
 };
 const STATE_LABEL = { new: "لم تُكشف", active: "صالحة", used: "مستخدمة", expired: "منتهية" };
 const STATE_BADGE = { new: "pending", active: "approved", used: "neutral", expired: "rejected" };
@@ -52,6 +55,9 @@ export default function Rewards() {
       const c = await api.saveRewardsConfig({
         ...cfg,
         prizes: cfg.prizes.map((p) => ({ ...p, value: Number(p.value), weight: Number(p.weight) })),
+        trigger_prizes: Object.fromEntries(Object.entries(cfg.trigger_prizes || {}).map(([k, rows]) => [k, rows.map((p) => ({ ...p, value: Number(p.value), weight: Number(p.weight) }))])),
+        streak_days: Number(cfg.streak_days) || 7,
+        max_pending: Number(cfg.max_pending) || 5,
       });
       setCfg(c);
       setSaved(JSON.stringify(c));
@@ -111,12 +117,55 @@ export default function Rewards() {
           <label>صلاحية الجائزة بعد الكشف (ساعات، 1–72)</label>
           <input className="mono narrow" type="number" min="1" max="72" value={cfg.ttl_hours} onChange={(e) => setCfg({ ...cfg, ttl_hours: Number(e.target.value) })} />
         </div>
+        <div className="field-row">
+          <label>طول سلسلة التداول (أيام عمل، 3–30)</label>
+          <input className="mono narrow" type="number" min="3" max="30" value={cfg.streak_days ?? 7} onChange={(e) => setCfg({ ...cfg, streak_days: e.target.value })} />
+        </div>
+        <div className="field-row">
+          <label>أقصى بطاقات غير مكشوفة للمستخدم (1–20)</label>
+          <input className="mono narrow" type="number" min="1" max="20" value={cfg.max_pending ?? 5} onChange={(e) => setCfg({ ...cfg, max_pending: e.target.value })} />
+        </div>
         <h3>محفزات منح البطاقات</h3>
-        {Object.keys(TRIGGER_LABEL).map((k) => (
-          <label key={k} className="check">
-            <input type="checkbox" checked={cfg.triggers[k]} onChange={(e) => setCfg({ ...cfg, triggers: { ...cfg.triggers, [k]: e.target.checked } })} /> {TRIGGER_LABEL[k]}
-          </label>
-        ))}
+        {Object.keys(TRIGGER_LABEL).map((k) => {
+          const own = (cfg.trigger_prizes || {})[k];
+          const setOwn = (rows) => {
+            const tp = { ...(cfg.trigger_prizes || {}) };
+            if (rows) tp[k] = rows; else delete tp[k];
+            setCfg({ ...cfg, trigger_prizes: tp });
+          };
+          return (
+            <div key={k} className="trigger-row">
+              <label className="check">
+                <input type="checkbox" checked={!!cfg.triggers[k]} onChange={(e) => setCfg({ ...cfg, triggers: { ...cfg.triggers, [k]: e.target.checked } })} /> {TRIGGER_LABEL[k]}
+              </label>
+              <label className="check small">
+                <input type="checkbox" checked={!!own} disabled={!cfg.triggers[k]} onChange={(e) => setOwn(e.target.checked ? cfg.prizes.map((p) => ({ ...p })) : null)} /> جدول جوائز خاص بهذا المحفّز
+              </label>
+              {own && (
+                <div className="scrollx">
+                  <table className="list keep">
+                    <thead><tr><th>مفعّلة</th><th>النوع</th><th>القيمة</th><th>الوزن</th><th /></tr></thead>
+                    <tbody>
+                      {own.map((p, i) => {
+                        const upd = (patch) => setOwn(own.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+                        return (
+                          <tr key={i}>
+                            <td><input type="checkbox" checked={p.enabled} onChange={(e) => upd({ enabled: e.target.checked })} /></td>
+                            <td><select value={p.type} onChange={(e) => upd({ type: e.target.value })}>{Object.entries(PRIZE_LABEL).map(([t, v]) => <option key={t} value={t}>{v}</option>)}</select></td>
+                            <td><input className="mono narrow" type="number" min="0" step="any" value={p.value} onChange={(e) => upd({ value: e.target.value })} /></td>
+                            <td><input className="mono narrow" type="number" min="0" step="any" value={p.weight} onChange={(e) => upd({ weight: e.target.value })} /></td>
+                            <td><button className="danger-ghost" onClick={() => setOwn(own.filter((_, j) => j !== i))}>حذف</button></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <button onClick={() => setOwn([...own, { type: "discount", value: 10, weight: 1, enabled: true }])}>+ جائزة</button>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <div className="panel">

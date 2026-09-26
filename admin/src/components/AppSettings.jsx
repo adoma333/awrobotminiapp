@@ -93,7 +93,7 @@ export default function AppSettings() {
 
       <div className="panel">
         <h2>الإحالة</h2>
-        <label className="check"><input type="checkbox" checked={s.referral_enabled} onChange={(e) => set({ referral_enabled: e.target.checked })} /> مكافأة الإحالة مفعّلة (أيام للطرفين عند أول دفعة)</label>
+        <label className="check"><input type="checkbox" checked={s.referral_enabled} onChange={(e) => set({ referral_enabled: e.target.checked })} /> نظام الإحالة مفعّل</label>
         <div className="grid-form">
           <label>أيام مكافأة الصديق المدعو<input className="mono" type="number" min="0" value={s.referral_days} onChange={(e) => set({ referral_days: num(e.target.value) })} /></label>
         </div>
@@ -114,6 +114,60 @@ export default function AppSettings() {
           <button onClick={() => { const r = s.referral_tiers || []; set({ referral_tiers: [...r, { min: (r[r.length - 1]?.min || 0) + 10, days: (r[r.length - 1]?.days || 7) + 3 }] }); }}>+ شريحة</button>
         )}
         <p className="muted">المستخدم يرى أرباحه وشريحته والتقدم للشريحة التالية في صفحة الإحالة بالتطبيق.</p>
+
+        <h3>التحكم المتقدم</h3>
+        <div className="grid-form">
+          <label>متى يُكافأ المُحيل
+            <select value={s.referral_mode || "first"} onChange={(e) => set({ referral_mode: e.target.value })}>
+              <option value="first">عند أول دفعة للصديق فقط</option>
+              <option value="every">مع كل دفعة يدفعها الصديق (تجديد)</option>
+            </select>
+          </label>
+          {s.referral_mode === "every" && (
+            <label>أيام المُحيل عن كل تجديد<input className="mono" type="number" min="0" max="90" value={s.referral_recurring_days ?? 3} onChange={(e) => set({ referral_recurring_days: num(e.target.value) })} /></label>
+          )}
+          <label>أقل مبلغ دفعة يُحتسب ($ · 0 = أي مبلغ)<input className="mono" type="number" min="0" step="1" value={s.referral_min_usd ?? 0} onChange={(e) => set({ referral_min_usd: num(e.target.value) })} /></label>
+          <label>أقصى مكافآت للمُحيل خلال 30 يومًا (0 = بلا حد)<input className="mono" type="number" min="0" value={s.referral_monthly_cap ?? 0} onChange={(e) => set({ referral_monthly_cap: num(e.target.value) })} /></label>
+          <label>هدية الصديق فور ربط حسابه: خصم % (0 = معطّل)<input className="mono" type="number" min="0" max="90" value={s.referral_friend_discount ?? 0} onChange={(e) => set({ referral_friend_discount: num(e.target.value) })} /></label>
+          <label>صلاحية خصم الصديق (ساعة)<input className="mono" type="number" min="1" max="720" value={s.referral_friend_discount_hours ?? 72} onChange={(e) => set({ referral_friend_discount_hours: num(e.target.value) })} /></label>
+        </div>
+
+        <h3>جوائز الإنجاز (مرة واحدة عند بلوغ عدد إحالات مدفوعة)</h3>
+        <table className="list keep">
+          <thead><tr><th>عند عدد</th><th>الجائزة</th><th>القيمة</th><th>الصلاحية (ساعة)</th><th /></tr></thead>
+          <tbody>
+            {(s.referral_milestones || []).map((m, i) => {
+              const upd = (patch) => set({ referral_milestones: s.referral_milestones.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
+              return (
+                <tr key={i}>
+                  <td><input className="mono" type="number" min="1" value={m.count} onChange={(e) => upd({ count: num(e.target.value) })} /></td>
+                  <td>
+                    <select value={m.type} onChange={(e) => upd({ type: e.target.value })}>
+                      <option value="free_month">شهر مجاني</option>
+                      <option value="free_days">أيام مجانية</option>
+                      <option value="discount">خصم %</option>
+                      <option value="slippage_insurance">رصيد تداول $</option>
+                      <option value="funded_challenge">تحدي حساب ممول $</option>
+                    </select>
+                  </td>
+                  <td><input className="mono" type="number" min="1" value={m.value} onChange={(e) => upd({ value: num(e.target.value) })} /></td>
+                  <td><input className="mono" type="number" min="1" max="720" value={m.hours ?? 72} onChange={(e) => upd({ hours: num(e.target.value) })} /></td>
+                  <td><button className="danger-ghost" onClick={() => set({ referral_milestones: s.referral_milestones.filter((_, j) => j !== i) })}>حذف</button></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {(s.referral_milestones || []).length < 10 && (
+          <button onClick={() => { const r = s.referral_milestones || []; set({ referral_milestones: [...r, { count: (r[r.length - 1]?.count || 0) + 5, type: "free_month", value: 30, hours: 72 }] }); }}>+ جائزة إنجاز</button>
+        )}
+
+        <h3>نص المشاركة (زر «شارك الرابط»)</h3>
+        <p className="muted">اتركه فارغًا للنص الافتراضي. يمكنك استخدام {"{days}"} لعدد أيام الهدية — الرابط يُضاف تلقائيًا.</p>
+        <div className="grid-form">
+          <label>عربي<textarea rows={3} value={s.referral_share_ar || ""} onChange={(e) => set({ referral_share_ar: e.target.value })} /></label>
+          <label>English<textarea rows={3} dir="ltr" value={s.referral_share_en || ""} onChange={(e) => set({ referral_share_en: e.target.value })} /></label>
+        </div>
       </div>
 
       <div className="panel">

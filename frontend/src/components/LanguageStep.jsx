@@ -8,7 +8,8 @@ const LANGS = [
 
 export default function LanguageStep({ t, lang, setLang, onNext }) {
   return (
-    <section className="step">
+    <section className="step lang-step">
+      <div className="lang-body">
       <h1>{t.langTitle}</h1>
 
       <div className="options" role="radiogroup" aria-label={t.langTitle}>
@@ -30,6 +31,13 @@ export default function LanguageStep({ t, lang, setLang, onNext }) {
             <span className="ring" />
           </button>
         ))}
+      </div>
+
+      <ul className="lang-perks" aria-label="AW">
+        {[['⚡', t.perk1], ['📊', t.perk2], ['🔒', t.perk3]].map(([ic, label]) => (
+          <li key={label}><span aria-hidden="true">{ic}</span>{label}</li>
+        ))}
+      </ul>
       </div>
 
       <div className="actions">

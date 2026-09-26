@@ -5,7 +5,10 @@ const FREQ = { once: "مرة واحدة فقط", every_open: "عند كل دخو
 const AUD = { all: "كل المستخدمين", active: "الاشتراك فعّال", expired: "الاشتراك منتهٍ", no_sub: "بلا اشتراك", unlinked: "غير مربوطين", linked: "مربوطون" };
 const CTA = { close: "إغلاق النافذة", plans: "فتح الباقات", support: "فتح الدعم", url: "رابط خارجي" };
 const ICON_LABEL = { bolt: "⚡ تنفيذ", chart: "📈 أداء", shield: "🛡 أمان", cloud: "☁ سحابة", headset: "🎧 دعم", bell: "🔔 إشعارات", trophy: "🏆 ترتيب", gift: "🎁 مكافأة", star: "⭐ نجمة", wallet: "👛 محفظة", globe: "🌐 لغات", check: "✓ عام" };
-const DEFAULT_STYLE = { accent: "#ff8a00", accent2: "#ff5a00", bg: "#0e0b09", text: "#f5efe8", width: 460, position: "bottom", radius: 26, blur: 4 };
+const DEFAULT_STYLE = { accent: "#ff8a00", accent2: "#ff5a00", bg: "#0e0b09", text: "#f5efe8", width: 460, position: "bottom", radius: 26, blur: 4,
+  theme: "custom", image_mode: "top", image_fit: "cover", image_height: 180, image_radius: 18, image_focus: "center", overlay: 55,
+  cta_place: "inline", cta_width: "full", align: "center", title_size: 24, animation: "slide", show_close: true };
+const APP_THEME = { dark: { bg: "#151210", text: "#f5efe8" }, light: { bg: "#ffffff", text: "#1b1612" } };
 const DEVICES = { phone_s: ["هاتف صغير", 360, 640], phone: ["هاتف", 390, 780], phone_l: ["هاتف كبير", 430, 860], tablet: ["تابلت", 768, 900] };
 const EMOJI = { bolt: "⚡", chart: "📈", shield: "🛡", cloud: "☁", headset: "🎧", bell: "🔔", trophy: "🏆", gift: "🎁", star: "⭐", wallet: "👛", globe: "🌐", check: "✓" };
 const toLocal = (ts) => (ts ? new Date(ts * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "");
@@ -183,7 +186,23 @@ function Preview({ a, setStyle, canWrite }) {
       <input type="range" min={min} max={max} value={st[k]} onChange={(e) => setStyle({ [k]: Number(e.target.value) })} disabled={!canWrite} />
     </label>
   );
+  const [appMode, setAppMode] = useState("dark");
   const center = st.position === "center";
+  const full = st.position === "fullscreen";
+  const app = st.theme === "app";
+  const bg = app ? APP_THEME[appMode].bg : st.bg;
+  const fg = app ? APP_THEME[appMode].text : st.text;
+  const accent = app ? "#ff8a00" : st.accent;
+  const accent2 = app ? "#ff5a00" : st.accent2;
+  const imgMode = a.image ? st.image_mode : "none";
+  const S = (k, label, opts) => (
+    <label>{label}
+      <select value={st[k]} onChange={(e) => setStyle({ [k]: e.target.value })} disabled={!canWrite}>
+        {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+    </label>
+  );
+  const scale = 0.72; // المعاينة تصغّر المقاسات الحقيقية لتتسع للإطار
   return (
     <div className="ann-preview">
       <div className="row-gap">
@@ -199,51 +218,82 @@ function Preview({ a, setStyle, canWrite }) {
       <div className="ann-device" style={{ width: dw, height: Math.min(dh, 720) }}>
         <div className="ann-screen" dir={lang === "ar" ? "rtl" : "ltr"}>
           <div className="ann-app-mock"><span /><span /><span /><span /></div>
-          <div className="ann-backdrop" style={{ alignItems: center ? "center" : "flex-end", padding: center ? 12 : 0, backdropFilter: `blur(${st.blur}px)`, WebkitBackdropFilter: `blur(${st.blur}px)` }}>
-            <div className="ann-sheet" style={{
-              maxWidth: st.width, color: st.text, borderColor: `${st.accent}38`,
-              borderRadius: center ? st.radius : `${st.radius}px ${st.radius}px 0 0`,
-              background: `radial-gradient(120% 60% at 50% 0%, ${st.accent}29, transparent 60%), ${st.bg}`,
+          <div className="ann-backdrop" style={{ alignItems: full ? "stretch" : center ? "center" : "flex-end", padding: center ? 12 : 0, backdropFilter: `blur(${st.blur}px)`, WebkitBackdropFilter: `blur(${st.blur}px)` }}>
+            <div className={`ann-sheet anim-${st.animation} ${st.align === "start" ? "is-start" : ""} ${full ? "is-full" : ""}`} key={`${st.animation}-${st.position}`} style={{
+              maxWidth: full ? "none" : st.width, color: imgMode === "background" && !app ? st.text || "#fff" : fg, borderColor: `${accent}38`,
+              borderRadius: full ? 0 : center ? st.radius : `${st.radius}px ${st.radius}px 0 0`,
+              background: imgMode === "background"
+                ? `linear-gradient(rgba(0,0,0,${st.overlay / 100}), rgba(0,0,0,${Math.min(0.95, st.overlay / 100 + 0.2)})), url("${a.image}") ${st.image_focus} / cover`
+                : `radial-gradient(120% 60% at 50% 0%, ${accent}29, transparent 60%), ${bg}`,
             }}>
-              <span className="ann-x">✕</span>
-              {a.image ? <img className="ann-hero-img" src={a.image} alt="" /> : (
-                <div className="ann-hero" style={{ background: `linear-gradient(135deg, ${st.accent}, ${st.accent2})`, boxShadow: `0 12px 40px ${st.accent}59` }}>⚡</div>
-              )}
-              {L("badge") && <span className="ann-badge" style={{ color: st.accent, borderColor: `${st.accent}47` }}>{L("badge")}</span>}
-              <h2>{L("title") || (lang === "ar" ? "عنوان النافذة" : "Window title")}</h2>
+              {st.show_close && <span className="ann-x">✕</span>}
+              {imgMode === "top" || imgMode === "full" ? (
+                <img className={`ann-hero-img ${imgMode === "full" ? "is-bleed" : ""}`} src={a.image} alt=""
+                  style={{ height: st.image_height * scale, maxHeight: "none", objectFit: st.image_fit, objectPosition: `center ${st.image_focus}`, borderRadius: imgMode === "full" ? 0 : st.image_radius * scale }} />
+              ) : imgMode === "none" ? (
+                <div className="ann-hero" style={{ background: `linear-gradient(135deg, ${accent}, ${accent2})`, boxShadow: `0 12px 40px ${accent}59` }}>⚡</div>
+              ) : null}
+              {L("badge") && <span className="ann-badge" style={{ color: accent, borderColor: `${accent}47` }}>{L("badge")}</span>}
+              <h2 style={{ fontSize: st.title_size * scale }}>{L("title") || (lang === "ar" ? "عنوان النافذة" : "Window title")}</h2>
               {L("subtitle") && <p className="ann-sub">{L("subtitle")}</p>}
               {(a.features || []).length > 0 && (
                 <ul className="ann-feats">
                   {a.features.map((f, i) => (
                     <li key={i}>
-                      <span className="ann-ic" style={{ color: st.accent, background: `${st.accent}1f` }}>{EMOJI[f.icon] || "✓"}</span>
+                      <span className="ann-ic" style={{ color: accent, background: `${accent}1f` }}>{EMOJI[f.icon] || "✓"}</span>
                       <div><b>{f[`title_${lang}`] || f.title_en || f.title_ar}</b>{(f[`text_${lang}`] || f.text_en) && <p>{f[`text_${lang}`] || f.text_en}</p>}</div>
                     </li>
                   ))}
                 </ul>
               )}
               {L("body") && <p className="ann-body">{L("body")}</p>}
-              <div className="ann-cta" style={{ background: `linear-gradient(135deg, ${st.accent}, ${st.accent2})` }}>{L("cta_label") || (lang === "ar" ? "إغلاق" : "Close")}</div>
+              <div className={`ann-cta-wrap ${st.cta_place === "sticky" ? "is-sticky" : ""}`} style={st.cta_place === "sticky" ? { background: `linear-gradient(transparent, ${imgMode === "background" ? "rgba(0,0,0,.85)" : bg} 35%)` } : undefined}>
+                <div className="ann-cta" style={{ background: `linear-gradient(135deg, ${accent}, ${accent2})`, width: st.cta_width === "auto" ? "auto" : "100%", padding: st.cta_width === "auto" ? "10px 26px" : undefined }}>{L("cta_label") || (lang === "ar" ? "إغلاق" : "Close")}</div>
+              </div>
               {a.allow_dismiss && <div className="ann-never">☐ {lang === "ar" ? "لا تظهر مرة أخرى" : "Don't show again"}</div>}
               {L("footnote") && <p className="ann-foot">{L("footnote")}</p>}
             </div>
           </div>
         </div>
       </div>
-      <h3>الشكل</h3>
+      {app && (
+        <div className="tabs">
+          <button className={`tab ${appMode === "dark" ? "active" : ""}`} onClick={() => setAppMode("dark")}>معاينة ليلي</button>
+          <button className={`tab ${appMode === "light" ? "active" : ""}`} onClick={() => setAppMode("light")}>معاينة نهاري</button>
+        </div>
+      )}
+      <h3>المظهر</h3>
       <div className="grid-form">
-        {C("accent", "اللون الرئيسي")}{C("accent2", "اللون الثانوي (التدرج)")}{C("bg", "الخلفية")}{C("text", "النص")}
+        {S("theme", "الألوان", [["custom", "ألوان مخصصة (أدناه)"], ["app", "مثل التطبيق — ليلي/نهاري تلقائيًا"]])}
+        {S("position", "طريقة الظهور", [["bottom", "من الأسفل (Bottom sheet)"], ["center", "في المنتصف (Modal)"], ["fullscreen", "ملء الشاشة بالكامل"]])}
+        {S("animation", "حركة الظهور", [["slide", "انزلاق"], ["fade", "تلاشي"], ["zoom", "تكبير"]])}
+        {S("align", "محاذاة النص", [["center", "في المنتصف"], ["start", "من البداية"]])}
+      </div>
+      {!app && (
+        <div className="grid-form">
+          {C("accent", "اللون الرئيسي")}{C("accent2", "اللون الثانوي (التدرج)")}{C("bg", "الخلفية")}{C("text", "النص")}
+        </div>
+      )}
+      <h3>الصورة {a.image ? "" : <small className="muted">(ارفع صورة من الحقول لتفعيل خياراتها)</small>}</h3>
+      <div className="grid-form">
+        {S("image_mode", "مكان الصورة", [["top", "أعلى النافذة"], ["full", "بعرض النافذة كاملًا"], ["background", "خلفية النافذة"]])}
+        {S("image_fit", "ملاءمة الصورة", [["cover", "ملء (قص تلقائي)"], ["contain", "كاملة بلا قص"]])}
+        {S("image_focus", "نقطة التركيز", [["top", "الأعلى"], ["center", "المنتصف"], ["bottom", "الأسفل"]])}
+        {R("image_height", "ارتفاع الصورة (px)", 80, 420)}
+        {R("image_radius", "استدارة الصورة", 0, 40)}
+        {R("overlay", "تعتيم فوق صورة الخلفية %", 0, 90)}
+      </div>
+      <h3>الزر والنص</h3>
+      <div className="grid-form">
+        {S("cta_place", "مكان الزر", [["inline", "بعد المحتوى"], ["sticky", "مثبّت أسفل النافذة دائمًا"]])}
+        {S("cta_width", "عرض الزر", [["full", "بعرض كامل"], ["auto", "على قدر النص"]])}
+        {R("title_size", "حجم العنوان", 16, 40)}
+        <label className="check"><input type="checkbox" checked={st.show_close !== false} onChange={(e) => setStyle({ show_close: e.target.checked })} disabled={!canWrite} />إظهار زر الإغلاق ✕</label>
       </div>
       <div className="grid-form">
         {R("width", "أقصى عرض (px)", 300, 760)}
         {R("radius", "استدارة الزوايا", 0, 40)}
         {R("blur", "تمويه الخلفية", 0, 12)}
-        <label>الموضع
-          <select value={st.position} onChange={(e) => setStyle({ position: e.target.value })} disabled={!canWrite}>
-            <option value="bottom">من الأسفل (Bottom sheet)</option>
-            <option value="center">في المنتصف (Modal)</option>
-          </select>
-        </label>
       </div>
       {canWrite && <div><button onClick={() => setStyle({ ...DEFAULT_STYLE })}>استعادة الشكل الافتراضي</button></div>}
     </div>
