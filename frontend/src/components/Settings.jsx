@@ -42,7 +42,9 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
 
   function doShare() {
     if (!link) return;
-    openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(t.shareText)}`);
+    const custom = (lang === 'ar' ? cfg.referral_share_ar : cfg.referral_share_en) || '';
+    const text = custom ? custom.replaceAll('{link}', '').replaceAll('{days}', String(cfg.referral_days ?? 7)).trim() : t.shareText;
+    openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`);
   }
 
   async function doUnlink() {
@@ -153,7 +155,7 @@ export default function Settings({ t, lang, setLang, data, onBack, onRenew, onUn
             <span className="row-label">{t.billLink}</span>
             <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
           </button>
-          <FeedbackButton t={t} />
+          <FeedbackButton t={t} lang={lang} />
           <button type="button" className="row row-link" onClick={() => openSupport()}>
             <span className="row-label">{t.supportLink}</span>
             <svg className="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>

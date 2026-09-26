@@ -425,6 +425,11 @@ class Store:
 
         return rewards.grant_card(self.db, uid, event)
 
+    def streak_days(self) -> int:
+        import rewards
+
+        return int(rewards.get_config(self.db).get("streak_days") or rewards.STREAK_DAYS)
+
     def notify(self, uid, kind, title_ar, title_en, body_ar="", body_en=""):
         import notifications
 
@@ -710,7 +715,12 @@ class Worker:
             return
         from rewards import streak_start
 
-        start = streak_start(stats.get("trade_days"))
+        days_fn = getattr(self.store, "streak_days", None)
+        try:
+            min_len = int(days_fn()) if days_fn else 7
+        except Exception:  # noqa: BLE001
+            min_len = 7
+        start = streak_start(stats.get("trade_days"), min_len)
         if start:
             try:
                 grant(uid, f"streak7_{start}")

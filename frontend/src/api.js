@@ -242,12 +242,14 @@ export async function getBillingHistory() {
   return request('GET', `/api/billing/history?init_data=${encodeURIComponent(initData)}`);
 }
 
-export async function sendFeedback(rating, message) {
+export async function sendFeedback(rating, message, lang = '') {
   if (DEV_MOCK) {
-    await sleep(400);
-    return { ok: true };
+    await sleep(700);
+    return rating >= 4
+      ? { ok: true, reply: 'شكرًا يا أحمد على تقييمك الرائع 🌟 سعيدون أن AW يعمل لك بهذا الشكل، وسنواصل التطوير لنبقى عند حسن ظنك.', suggest_support: false }
+      : { ok: true, reply: 'نعتذر أن تجربتك لم تكن كما تستحق 🙏 وصلت ملاحظتك للفريق، وافتح مركز الدعم ليُحل أمرك فورًا.', suggest_support: true };
   }
-  return request('POST', '/api/feedback', { init_data: initData, rating, message });
+  return request('POST', '/api/feedback', { init_data: initData, rating, message, lang });
 }
 
 // ───────── بطاقات الخدش والمكافآت ─────────

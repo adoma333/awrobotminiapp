@@ -12,6 +12,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const STATUS = { active: 'rwActive', used: 'rwUsed', expired: 'rwExpired' };
 
 /** محفظة المكافآت: بطاقات تنتظر الكشف + الجوائز المكتسبة (النوع، القيمة، الانتهاء، الاستخدام). */
+// اسم المحفّز من اسم الحدث (first_payment · renewal_<order> · streak7_<day> …)
+const EV = ['first_payment', 'link_real', 'renewal', 'referral', 'streak7', 'welcome', 'admin'];
+const evKey = (e = '') => EV.find((k) => e === k || e.startsWith(`${k}_`)) || e.split('_')[0];
+
 export default function RewardsHub({ t, onBack, onUse, onRedeemed }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(false);
@@ -128,7 +132,7 @@ export default function RewardsHub({ t, onBack, onUse, onRedeemed }) {
           <div className="rows">
             {cards.map((c) => (
               <button type="button" key={c.id} className="row row-link scratch-row" onClick={() => setActive(c.id)}>
-                <span className="row-label row-icon"><Icon name="rewards" size={18} /> {t[`rwEvent_${c.event.split('_')[0]}`] || t.rwEvent_welcome}</span>
+                <span className="row-label row-icon"><Icon name="rewards" size={18} /> {t[`rwEvent_${evKey(c.event)}`] || t.rwEvent_welcome}</span>
                 <span className="btn soft small"><span>{t.rwScratchCta}</span></span>
               </button>
             ))}

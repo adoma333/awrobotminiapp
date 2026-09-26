@@ -27,6 +27,16 @@ DEFAULT_SETTINGS = {
     "alert_large_payment_usd": 400,  # تنبيه فوري في اللوحة لأي دفعة بهذا المبلغ أو أكثر
     # الإحالة المتدرّجة: أيام مكافأة المُحيل حسب عدد إحالاته المدفوعة (المُحال يحصل على referral_days)
     "referral_tiers": [{"min": 0, "days": 7}, {"min": 5, "days": 10}, {"min": 15, "days": 14}, {"min": 40, "days": 21}],
+    # تحكم متقدم بالإحالة
+    "referral_mode": "first",          # first = مكافأة عند أول دفعة للصديق فقط · every = مع كل دفعة يدفعها
+    "referral_recurring_days": 3,      # أيام المُحيل عن كل دفعة لاحقة (وضع every)
+    "referral_min_usd": 0,             # أقل مبلغ دفعة يُحتسب للإحالة (0 = أي مبلغ)
+    "referral_monthly_cap": 0,         # أقصى مكافآت للمُحيل خلال 30 يومًا (0 = بلا حد)
+    "referral_friend_discount": 0,     # خصم % يُمنح للصديق المدعو فور ربط حسابه (0 = معطّل)
+    "referral_friend_discount_hours": 72,
+    "referral_milestones": [],         # [{count, type, value, hours}] جائزة لمرة واحدة عند بلوغ عدد إحالات مدفوعة
+    "referral_share_ar": "",           # نص المشاركة المخصص ({link} {days}) — فارغ = النص الافتراضي
+    "referral_share_en": "",
     # وضع الصيانة: يوقف التسجيل والدفع مؤقتًا ويعرض رسالة للمستخدمين
     "maintenance": False,
     "maintenance_ar": "نجري تحديثًا سريعًا لتحسين الخدمة. سنعود خلال دقائق.",
@@ -45,6 +55,89 @@ def get_settings(db) -> dict:
     snap = ref.get()
     data = snap.to_dict() if snap.exists else {}
     return {**DEFAULT_SETTINGS, **data}
+
+
+MILESTONE_TYPES = ("discount", "free_days", "free_month", "slippage_insurance", "funded_challenge")
+
+
+def clean_referral(patch: dict) -> dict:
+    """يتحقق من إعدادات الإحالة المتقدمة. يرفع ValueError برسالة واضحة."""
+    out = {}
+    if "referral_mode" in patch:
+        if patch["referral_mode"] not in ("first", "every"):
+            raise ValueError("referral_mode must be first|every")
+        out["referral_mode"] = patch["referral_mode"]
+    for k, lo, hi in (("referral_recurring_days", 0, 90), ("referral_monthly_cap", 0, 1000), ("referral_friend_discount", 0, 90),
+                      ("referral_friend_discount_hours", 1, 720), ("referral_days", 0, 365)):
+        if k in patch:
+            out[k] = max(lo, min(hi, int(patch[k] or 0)))
+    if "referral_min_usd" in patch:
+        out["referral_min_usd"] = max(0.0, min(10000.0, float(patch["referral_min_usd"] or 0)))
+    for k in ("referral_share_ar", "referral_share_en"):
+        if k in patch:
+            out[k] = str(patch[k] or "")[:500]
+    if "referral_milestones" in patch:
+        rows, seen = [], set()
+        for m in (patch["referral_milestones"] or [])[:10]:
+            count, typ = int(m.get("count") or 0), m.get("type")
+            value, hours = float(m.get("value") or 0), int(m.get("hours") or 72)
+            if count < 1 or count in seen or typ not in MILESTONE_TYPES or value <= 0 or (typ == "discount" and value > 100):
+                raise ValueError("invalid milestone")
+            seen.add(count)
+            rows.append({"count": count, "type": typ, "value": int(value) if value.is_integer() else value, "hours": max(1, min(720, hours))})
+        out["referral_milestones"] = sorted(rows, key=lambda r: r["count"])
+    return out
+
+
+def referral_on_payment(db, uid, settings: dict, usd: float, now: float | None = None) -> dict | None:
+    """مكافأة الإحالة عند دفعة ناجحة للصديق. يطبّق: الوضع (أول دفعة/كل دفعة)، أقل مبلغ، الحد الشهري للمُحيل،
+    المستويات المتدرّجة، وجوائز الإنجاز. يرجع {referrer, days, first, milestone} أو None."""
+    now = time.time() if now is None else now
+    ref = db.collection("users").document(str(uid))
+    data = ref.get().to_dict() or {}
+    referrer_id = data.get("referred_by")
+    if not referrer_id or str(referrer_id) == str(uid):
+        return None
+    if usd < float(settings.get("referral_min_usd") or 0):
+        return None
+    first = not data.get("referral_reward_granted")
+    if not first and settings.get("referral_mode") != "every":
+        return None
+    if first:
+        ref.set({"referral_reward_granted": True}, merge=True)
+        if int(settings.get("referral_days") or 0) > 0:
+            _add_days(db, uid, int(settings["referral_days"]))
+    rref = db.collection("users").document(str(referrer_id))
+    rdata = rref.get().to_dict() or {}
+    paid_before = int(rdata.get("referral_paid_count") or 0)
+    if first:
+        days = int(settings.get("referral_days") or 0)
+        for t in sorted(settings.get("referral_tiers") or [], key=lambda t: t["min"]):
+            if paid_before >= t["min"]:
+                days = int(t["days"])
+    else:
+        days = int(settings.get("referral_recurring_days") or 0)
+    log_ = [t for t in (rdata.get("referral_reward_log") or []) if now - float(t) < 30 * 86400]
+    cap = int(settings.get("referral_monthly_cap") or 0)
+    capped = bool(cap and len(log_) >= cap)
+    patch = {}
+    if days > 0 and not capped:
+        _add_days(db, referrer_id, days)
+        patch["referral_earned_days"] = int(rdata.get("referral_earned_days") or 0) + days
+        patch["referral_reward_log"] = (log_ + [now])[-1000:]
+    milestone = None
+    if first:
+        patch["referral_paid_count"] = paid_before + 1
+        done = set(rdata.get("referral_milestones_done") or [])
+        for m in settings.get("referral_milestones") or []:
+            if paid_before + 1 >= m["count"] and m["count"] not in done:
+                milestone = m
+                done.add(m["count"])
+                patch["referral_milestones_done"] = sorted(done)
+                break
+    if patch:
+        rref.set(patch, merge=True)
+    return {"referrer": str(referrer_id), "days": 0 if capped else days, "first": first, "capped": capped, "milestone": milestone}
 
 
 def update_settings(db, patch: dict) -> dict:

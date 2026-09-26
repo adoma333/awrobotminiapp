@@ -657,6 +657,62 @@ def _models(cfg: dict) -> list:
     return ms
 
 
+def llm_text(cfg: dict, system: str, prompt: str, max_tokens: int = 400) -> str:
+    """رد نصي قصير بلا أدوات (رد على تقييمات المستخدمين). نفس سلسلة النماذج الاحتياطية."""
+    key = api_key(cfg)
+    if not key:
+        raise AiError("no api key")
+    body = {"systemInstruction": {"parts": [{"text": system}]}, "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.6, "maxOutputTokens": max_tokens}}
+    errors = []
+    for m in _models(cfg):
+        try:
+            data = _gemini_post(f"{GEMINI_API}/models/{m}:generateContent", key, body)
+        except (httpx.HTTPError, RetryableError, ValueError, ModelUnavailable) as e:
+            errors.append(f"{m}: {str(e)[:120]}")
+            continue
+        parts = ((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+        text = "\n".join(p["text"] for p in parts if p.get("text") and not p.get("thought")).strip()
+        if text:
+            return text
+        errors.append(f"{m}: empty")
+    raise AiError(" | ".join(errors)[:400])
+
+
+FEEDBACK_PROMPT = """أنت فريق AW ROBOT ترد على تقييم تركه مستخدم داخل التطبيق (نظام تداول آلي يربط حسابات MetaTrader 5).
+اكتب ردًا قصيرًا (جملتان إلى أربع جمل، بلا Markdown) بلغة المستخدم ({lang_name})، دافئًا ومحترفًا وشخصيًا:
+- تقييم 4-5 بلا مشكلة: اشكره بحرارة وامدح ذوقه/ثقته بأسلوب لطيف غير مبالغ، واذكر نقطة مما كتبه إن وُجدت.
+- سؤال أو اقتراح: أجب باختصار إن كانت الإجابة عامة وواضحة، أو أخبره أن الفريق سجّل اقتراحه لدراسته.
+- تقييم 1-3 أو شكوى: اعتذر بصدق، وضّح أنك تفهم المشكلة، وادعه لفتح «مركز الدعم» ليُحل أمره فورًا.
+لا تعد بأرباح أو نسب، ولا تطلب بيانات دخول، ولا تخترع ميزات غير موجودة.
+في آخر سطر منفصل اكتب فقط: SUPPORT=yes إن كان يحتاج مساعدة الدعم، أو SUPPORT=no."""
+
+
+def feedback_reply(cfg: dict, lang: str, rating: int, message: str, name: str = "") -> dict:
+    """رد ذكي على تقييم المستخدم. عند تعذّر الذكاء الاصطناعي: رد جاهز حسب التقييم."""
+    need = rating <= 3 or bool(re.search(_MEDIUM + "|" + _CRITICAL, message or "", re.I))
+    if cfg.get("ai_enabled") and ai_available(cfg):
+        try:
+            prompt = f"الاسم: {name or '-'}\nالتقييم: {rating}/5\nالرسالة: {(message or '(بلا نص)')[:1000]}"
+            raw = llm_text(cfg, FEEDBACK_PROMPT.replace("{lang_name}", "العربية" if lang == "ar" else "English"), prompt)
+            m = re.search(r"SUPPORT\s*=\s*(yes|no)", raw, re.I)
+            text = re.sub(r"\s*SUPPORT\s*=\s*(yes|no)\s*$", "", raw, flags=re.I).strip()
+            if text:
+                return {"reply": text[:800], "suggest_support": (m.group(1).lower() == "yes") if m else need, "ai": True}
+        except AiError as e:
+            log.warning("feedback ai failed: %s", e)
+    if rating >= 4 and not need:
+        text = _t(lang, f"شكرًا{(' ' + name) if name else ''} على تقييمك الرائع 🌟 ثقتك تعني لنا الكثير، وسنواصل العمل لنكون عند حسن ظنك دائمًا.",
+                  f"Thank you{(' ' + name) if name else ''} for the great rating 🌟 Your trust means a lot — we'll keep raising the bar for you.")
+    elif rating >= 4:
+        text = _t(lang, "شكرًا على تقييمك وملاحظتك 🙏 سجّلها الفريق، وإن احتجت مساعدة الآن فمركز الدعم جاهز لك فورًا.",
+                  "Thanks for your rating and note 🙏 The team has logged it — if you need help now, the Support Center is ready.")
+    else:
+        text = _t(lang, "نعتذر أن تجربتك لم تكن كما تستحق 🙏 وصلت ملاحظتك للفريق، وافتح مركز الدعم ليُحل أمرك فورًا.",
+                  "We're sorry your experience fell short 🙏 Your feedback reached the team — open the Support Center and we'll sort it out right away.")
+    return {"reply": text, "suggest_support": need or rating <= 3, "ai": False}
+
+
 def llm(cfg: dict, system: str, contents: list) -> dict:
     """استدعاء واحد لـ Gemini generateContent مع الأدوات. يرجع محتوى أول مرشّح. يُستبدل في الاختبارات."""
     key = api_key(cfg)

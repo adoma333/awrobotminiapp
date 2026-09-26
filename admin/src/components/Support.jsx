@@ -9,7 +9,7 @@ const ROLE = { user: "المستخدم", ai: "المساعد الذكي", agent:
 const FIX = { resync_account: "إعادة مزامنة الحساب", recheck_payment: "إعادة فحص الدفع", reset_stuck_link: "فك تعليق الربط", set_language: "تغيير اللغة" };
 const KIND = { network: "اتصال", server: "خادم", operation: "عملية", ui: "واجهة" };
 const when = (ts) => (ts ? new Date(ts * 1000).toLocaleString("ar-u-nu-latn", { dateStyle: "short", timeStyle: "short" }) : "—");
-const TABS = [["tickets", "التذاكر"], ["settings", "مركز الدعم والإعدادات"], ["learning", "التعلّم الذاتي"], ["prompt", "System Prompt"], ["kb", "قاعدة المعرفة"], ["fixes", "الإصلاحات الآلية"], ["errors", "سجل الأخطاء"]];
+const TABS = [["tickets", "التذاكر"], ["settings", "مركز الدعم والإعدادات"], ["learning", "التعلّم الذاتي"], ["feedback", "التقييمات"], ["prompt", "System Prompt"], ["kb", "قاعدة المعرفة"], ["fixes", "الإصلاحات الآلية"], ["errors", "سجل الأخطاء"]];
 
 export default function Support({ canWrite }) {
   const [tab, setTab] = useState("tickets");
@@ -22,6 +22,7 @@ export default function Support({ canWrite }) {
       {tab === "tickets" && <Tickets canWrite={canWrite} />}
       {tab === "settings" && <Settings canWrite={canWrite} />}
       {tab === "learning" && <Learning canWrite={canWrite} />}
+      {tab === "feedback" && <Feedback />}
       {tab === "prompt" && <Prompt canWrite={canWrite} />}
       {tab === "kb" && <Kb canWrite={canWrite} />}
       {tab === "fixes" && <Fixes />}
@@ -256,6 +257,53 @@ function Settings({ canWrite }) {
         </div>
       )}
       {msg && <p className={msg.startsWith("✗") ? "error-text" : "muted"}>{msg}</p>}
+    </>
+  );
+}
+
+// ───────────── تقييمات المستخدمين + رد المساعد عليها ─────────────
+function Feedback() {
+  const [d, setD] = useState(null);
+  const [min, setMin] = useState(0);
+  useEffect(() => { api.feedbackList().then(setD).catch(() => setD({ rows: [], stats: {} })); }, []);
+  if (!d) return <p className="muted">جارٍ التحميل…</p>;
+  const st = d.stats || {};
+  const rows = d.rows.filter((r) => !min || (min < 0 ? r.rating <= 3 : r.rating >= min));
+  const max = Math.max(1, ...Object.values(st.dist || {}));
+  return (
+    <>
+      <div className="panel">
+        <h2>رضا المستخدمين</h2>
+        <div className="kpi-grid">
+          <div className="kpi accent"><span className="kpi-label">متوسط التقييم</span><b className="kpi-value mono">{st.avg ?? "—"} ★</b><span className="kpi-hint">{st.count || 0} تقييم</span></div>
+        </div>
+        {[5, 4, 3, 2, 1].map((n) => (
+          <div key={n} className="an-row"><span>{"★".repeat(n)}</span><b className="mono">{(st.dist || {})[n] || 0}</b><i style={{ width: `${(((st.dist || {})[n] || 0) / max) * 100}%` }} /></div>
+        ))}
+      </div>
+      <div className="filters">
+        <select value={min} onChange={(e) => setMin(Number(e.target.value))}>
+          <option value={0}>كل التقييمات</option>
+          <option value={-1}>السلبية فقط (1–3)</option>
+          <option value={4}>الإيجابية (4–5)</option>
+        </select>
+      </div>
+      {rows.length === 0 ? <div className="empty">لا تقييمات بعد.</div> : (
+        <div className="audit-list">
+          {rows.map((r) => (
+            <div key={r.id} className="audit">
+              <div className="audit-top">
+                <span className={`badge ${r.rating >= 4 ? "approved" : r.rating <= 2 ? "rejected" : "pending"}`}>{"★".repeat(r.rating)}</span>
+                <span className="mono">{r.uid}</span>
+                <span className="muted">{when(r.at)}</span>
+                {r.suggest_support && <span className="badge rejected">يحتاج متابعة</span>}
+              </div>
+              {r.message && <b dir="auto">{r.message}</b>}
+              <span className="muted" dir="auto">🤖 {r.reply}{r.ai ? "" : " (رد جاهز)"}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </>
   );
 }

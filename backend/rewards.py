@@ -50,9 +50,18 @@ REDEEM_TYPES = {"free_month"}                # تُفعَّل مباشرة بل�
 MANUAL_TYPES = {"slippage_insurance", "funded_challenge"}  # يسلّمها الأدمن يدويًا
 
 PRIZE_TYPES = {"discount", "free_days", "slippage_insurance", "free_month", "funded_challenge"}
-TRIGGERS = ("welcome", "referral", "streak7")
+TRIGGERS = ("welcome", "link_real", "referral", "streak7", "first_payment", "renewal")
 
 _rng = random.SystemRandom()
+
+
+def trigger_of(event: str) -> str:
+    """اسم المحفّز من اسم الحدث (first_payment · renewal_<order> · streak7_<day> · referral_<uid> …)."""
+    event = str(event or "")
+    for t in sorted(TRIGGERS, key=len, reverse=True):
+        if event == t or event.startswith(t + "_"):
+            return t
+    return event.split("_")[0]
 
 
 # ───────────────────────── الإعدادات القابلة للتحكم من لوحة الأدمن (config/rewards) ─────────────────────────
@@ -61,8 +70,11 @@ def default_config() -> dict:
         "enabled": True,
         "ttl_hours": REWARD_TTL_HOURS,
         "require_phone": True,  # false = لا يُشترط توثيق الهاتف/Premium لكشف البطاقات
-        "triggers": {k: True for k in TRIGGERS},
+        "triggers": {k: k not in ("link_real", "renewal") for k in TRIGGERS},  # الجديدة معطّلة افتراضيًا
         "prizes": [{"type": t, "value": v, "weight": w, "enabled": True} for w, t, v in PRIZE_TABLE],
+        "trigger_prizes": {},   # جدول جوائز خاص لكل محفّز (فارغ = الجدول العام)
+        "streak_days": STREAK_DAYS,  # أيام العمل المتتالية لبطاقة السلسلة
+        "max_pending": 5,       # أقصى بطاقات غير مكشوفة للمستخدم في نفس الوقت
     }
 
 
@@ -90,21 +102,37 @@ def clean_config(patch: dict) -> dict:
         out["ttl_hours"] = ttl
     if "triggers" in patch:
         out["triggers"] = {k: bool((patch["triggers"] or {}).get(k, cfg["triggers"][k])) for k in TRIGGERS}
+    if "streak_days" in patch:
+        out["streak_days"] = max(3, min(30, int(patch["streak_days"])))
+    if "max_pending" in patch:
+        out["max_pending"] = max(1, min(20, int(patch["max_pending"])))
+    if "trigger_prizes" in patch:
+        tp = {}
+        for trig, rows in (patch["trigger_prizes"] or {}).items():
+            if trig not in TRIGGERS:
+                raise ValueError(f"unknown trigger: {trig}")
+            if rows:
+                tp[trig] = _clean_prizes(rows)
+        out["trigger_prizes"] = tp
     if "prizes" in patch:
-        rows = []
-        for row in patch["prizes"] or []:
-            typ = row.get("type")
-            if typ not in PRIZE_TYPES:
-                raise ValueError(f"unknown prize type: {typ}")
-            value, weight = float(row.get("value") or 0), float(row.get("weight") or 0)
-            if value <= 0 or weight < 0 or (typ == "discount" and value > 100):
-                raise ValueError(f"bad value/weight for {typ}")
-            rows.append({"type": typ, "value": int(value) if value.is_integer() else value,
-                         "weight": weight, "enabled": bool(row.get("enabled", True))})
-        if not any(r["enabled"] and r["weight"] > 0 for r in rows):
-            raise ValueError("at least one enabled prize with weight > 0 is required")
-        out["prizes"] = rows
+        out["prizes"] = _clean_prizes(patch["prizes"])
     return out
+
+
+def _clean_prizes(prizes) -> list:
+    rows = []
+    for row in prizes or []:
+        typ = row.get("type")
+        if typ not in PRIZE_TYPES:
+            raise ValueError(f"unknown prize type: {typ}")
+        value, weight = float(row.get("value") or 0), float(row.get("weight") or 0)
+        if value <= 0 or weight < 0 or (typ == "discount" and value > 100):
+            raise ValueError(f"bad value/weight for {typ}")
+        rows.append({"type": typ, "value": int(value) if value.is_integer() else value,
+                     "weight": weight, "enabled": bool(row.get("enabled", True))})
+    if not any(r["enabled"] and r["weight"] > 0 for r in rows):
+        raise ValueError("at least one enabled prize with weight > 0 is required")
+    return rows
 
 
 def generate_scratch_prize(rng=_rng, prizes: list | None = None) -> dict:
@@ -127,7 +155,7 @@ def grant_card(db, uid, event: str, now: float | None = None, force: bool = Fals
     now = time.time() if now is None else now
     if not force:
         cfg = get_config(db)
-        if not cfg["enabled"] or not cfg["triggers"].get(event.split("_")[0], True):
+        if not cfg["enabled"] or not cfg["triggers"].get(trigger_of(event), True):
             return None
     card_id = f"{uid}_{event}"
     try:
@@ -139,6 +167,9 @@ def grant_card(db, uid, event: str, now: float | None = None, force: bool = Fals
     user = db.collection("users").document(str(uid))
     snap = user.get()
     pending = list(((snap.to_dict() or {}).get("scratch_pending") or []) if snap.exists else [])
+    if not force and len(pending) >= int(get_config(db).get("max_pending") or 5):  # لا تكديس بطاقات بلا حد
+        db.collection(CARDS).document(card_id).delete()
+        return None
     if card_id not in pending:
         pending.append(card_id)
     user.set({"achievements": {event: now}, "scratch_pending": pending}, merge=True)
@@ -257,7 +288,8 @@ def claim(db, tg_user: dict, card_id: str | None, secret: str):
     check_eligibility(db, tg_user, card, card_id, cfg["require_phone"])
     prize = card.get("prize")
     if not prize:
-        prize = generate_scratch_prize(prizes=cfg["prizes"])
+        trig = trigger_of(card.get("event"))
+        prize = generate_scratch_prize(prizes=(cfg.get("trigger_prizes") or {}).get(trig) or cfg["prizes"])
         db.collection(CARDS).document(card_id).set({"prize": prize, "claimed_at": time.time()}, merge=True)
     return {"card_id": card_id, "status": card.get("status"), **sealed(prize, card_id, secret)}
 

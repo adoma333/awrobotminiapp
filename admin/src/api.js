@@ -104,6 +104,7 @@ export const api = {
   tonExecute: (otp_id, code) => request("/ton/execute", { method: "POST", body: JSON.stringify({ otp_id, code }) }),
   tonTransferResult: (data) => request("/ton/transfer-result", { method: "POST", body: JSON.stringify(data) }),
   tonLog: () => request("/ton/log"),
+  feedbackList: () => request("/support/feedback"),
   // التعلّم الذاتي للدعم
   kbSuggestions: () => request("/support/suggestions"),
   approveSuggestion: (id, q, a) => request(`/support/suggestions/${encodeURIComponent(id)}/approve`, { method: "POST", body: JSON.stringify({ q, a }) }),

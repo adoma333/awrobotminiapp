@@ -480,7 +480,7 @@ export default function App() {
               onBack={() => setView('main')}
             />
           ) : (
-            <Dashboard t={t} lang={lang} data={info} onRenew={() => setView('plans')} onRewards={() => setView('rewards')} />
+            <Dashboard t={t} lang={lang} data={info} onRenew={() => setView('plans')} onRewards={() => setView('rewards')} onReferral={() => setView('referral')} />
           )}
         </div>
       )}
